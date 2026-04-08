@@ -32,6 +32,8 @@ pub struct App {
     pub viewer: MarkdownViewState,
     /// Search overlay state.
     pub search: SearchState,
+    /// Width of the file-tree panel as a percentage (10–80).
+    pub tree_width_pct: u16,
     /// Root directory being browsed.
     pub root: PathBuf,
     /// Sender injected into components that need to produce actions.
@@ -51,6 +53,7 @@ impl App {
             tree,
             viewer: MarkdownViewState::default(),
             search: SearchState::default(),
+            tree_width_pct: 25,
             root,
             action_tx: None,
         }
@@ -180,6 +183,8 @@ impl App {
             }
             KeyCode::Char('g') => self.tree.go_first(),
             KeyCode::Char('G') => self.tree.go_last(),
+            KeyCode::Char('[') => self.shrink_tree(),
+            KeyCode::Char(']') => self.grow_tree(),
             _ => {}
         }
     }
@@ -196,6 +201,8 @@ impl App {
             KeyCode::Char('g') => self.viewer.scroll_to_top(),
             KeyCode::Char('G') => self.viewer.scroll_to_bottom(),
             KeyCode::Tab => self.focus = Focus::Tree,
+            KeyCode::Char('[') => self.shrink_tree(),
+            KeyCode::Char(']') => self.grow_tree(),
             KeyCode::Char('/') => {
                 // Inline EnterSearch to avoid a recursive handle_action call.
                 self.search.activate();
@@ -344,5 +351,15 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Shrink the tree panel by 5%.
+    fn shrink_tree(&mut self) {
+        self.tree_width_pct = self.tree_width_pct.saturating_sub(5).max(10);
+    }
+
+    /// Grow the tree panel by 5%.
+    fn grow_tree(&mut self) {
+        self.tree_width_pct = (self.tree_width_pct + 5).min(80);
     }
 }

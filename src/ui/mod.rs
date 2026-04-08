@@ -21,7 +21,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     let main_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+        .constraints([
+            Constraint::Percentage(app.tree_width_pct),
+            Constraint::Percentage(100 - app.tree_width_pct),
+        ])
         .split(chunks[0]);
 
     file_tree::draw(f, app, main_chunks[0], app.focus == Focus::Tree);
