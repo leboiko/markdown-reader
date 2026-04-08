@@ -16,8 +16,23 @@ pub enum Focus {
     Tree,
     /// The markdown preview panel on the right.
     Viewer,
-    /// The search overlay.
+    /// The file/content search overlay.
     Search,
+    /// In-document text search (typing the query).
+    DocSearch,
+}
+
+/// State for in-document text search.
+#[derive(Debug, Default)]
+pub struct DocSearchState {
+    /// Whether the search bar is active.
+    pub active: bool,
+    /// Current query string.
+    pub query: String,
+    /// Line indices (in rendered text) that contain a match.
+    pub match_lines: Vec<u32>,
+    /// Index into `match_lines` for the current match.
+    pub current_match: usize,
 }
 
 /// Top-level application state.
@@ -32,6 +47,8 @@ pub struct App {
     pub viewer: MarkdownViewState,
     /// Search overlay state.
     pub search: SearchState,
+    /// In-document search state.
+    pub doc_search: DocSearchState,
     /// Whether the help overlay is visible.
     pub show_help: bool,
     /// Whether the file tree panel is hidden.
@@ -57,6 +74,7 @@ impl App {
             tree,
             viewer: MarkdownViewState::default(),
             search: SearchState::default(),
+            doc_search: DocSearchState::default(),
             show_help: false,
             tree_hidden: false,
             tree_width_pct: 25,
@@ -174,6 +192,7 @@ impl App {
             Focus::Search => self.handle_search_key(code, modifiers),
             Focus::Tree => self.handle_tree_key(code, modifiers),
             Focus::Viewer => self.handle_viewer_key(code, modifiers),
+            Focus::DocSearch => self.handle_doc_search_key(code, modifiers),
         }
     }
 
@@ -213,7 +232,7 @@ impl App {
         }
     }
 
-    fn handle_viewer_key(&mut self, code: KeyCode, _modifiers: KeyModifiers) {
+    fn handle_viewer_key(&mut self, code: KeyCode, modifiers: KeyModifiers) {
         match code {
             KeyCode::Char('q') => self.running = false,
             KeyCode::Char('j') | KeyCode::Down => self.viewer.scroll_down(1),
@@ -228,10 +247,42 @@ impl App {
             KeyCode::Char('[') => self.shrink_tree(),
             KeyCode::Char(']') => self.grow_tree(),
             KeyCode::Char('/') => {
-                // Inline EnterSearch to avoid a recursive handle_action call.
                 self.search.activate();
                 self.focus = Focus::Search;
             }
+            KeyCode::Char('f') if modifiers.contains(KeyModifiers::CONTROL) => {
+                self.doc_search.active = true;
+                self.doc_search.query.clear();
+                self.doc_search.match_lines.clear();
+                self.doc_search.current_match = 0;
+                self.focus = Focus::DocSearch;
+            }
+            KeyCode::Char('n') => self.doc_search_next(),
+            KeyCode::Char('N') => self.doc_search_prev(),
+            _ => {}
+        }
+    }
+
+    fn handle_doc_search_key(&mut self, code: KeyCode, _modifiers: KeyModifiers) {
+        match code {
+            KeyCode::Esc => {
+                self.doc_search.active = false;
+                self.focus = Focus::Viewer;
+            }
+            KeyCode::Enter => {
+                // Confirm search and go back to viewer for n/N navigation.
+                self.focus = Focus::Viewer;
+            }
+            KeyCode::Backspace => {
+                self.doc_search.query.pop();
+                self.perform_doc_search();
+            }
+            KeyCode::Char(c) => {
+                self.doc_search.query.push(c);
+                self.perform_doc_search();
+            }
+            KeyCode::Down => self.doc_search_next(),
+            KeyCode::Up => self.doc_search_prev(),
             _ => {}
         }
     }
@@ -385,5 +436,54 @@ impl App {
     /// Grow the tree panel by 5%.
     fn grow_tree(&mut self) {
         self.tree_width_pct = (self.tree_width_pct + 5).min(80);
+    }
+
+    /// Search the rendered document lines for the current query.
+    fn perform_doc_search(&mut self) {
+        self.doc_search.match_lines.clear();
+        self.doc_search.current_match = 0;
+
+        if self.doc_search.query.is_empty() {
+            return;
+        }
+
+        let query_lower = self.doc_search.query.to_lowercase();
+
+        for (i, line) in self.viewer.rendered.lines.iter().enumerate() {
+            let line_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+            if line_text.to_lowercase().contains(&query_lower) {
+                self.doc_search.match_lines.push(i as u32);
+            }
+        }
+
+        // Jump to the first match.
+        if let Some(&line) = self.doc_search.match_lines.first() {
+            self.viewer.scroll_offset = line;
+        }
+    }
+
+    /// Jump to the next match in the document.
+    fn doc_search_next(&mut self) {
+        if self.doc_search.match_lines.is_empty() {
+            return;
+        }
+        self.doc_search.current_match =
+            (self.doc_search.current_match + 1) % self.doc_search.match_lines.len();
+        let line = self.doc_search.match_lines[self.doc_search.current_match];
+        self.viewer.scroll_offset = line;
+    }
+
+    /// Jump to the previous match in the document.
+    fn doc_search_prev(&mut self) {
+        if self.doc_search.match_lines.is_empty() {
+            return;
+        }
+        self.doc_search.current_match = if self.doc_search.current_match == 0 {
+            self.doc_search.match_lines.len() - 1
+        } else {
+            self.doc_search.current_match - 1
+        };
+        let line = self.doc_search.match_lines[self.doc_search.current_match];
+        self.viewer.scroll_offset = line;
     }
 }

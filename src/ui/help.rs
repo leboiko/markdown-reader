@@ -34,6 +34,8 @@ pub fn draw(f: &mut Frame) {
         shortcut_line("d / u", "Half-page scroll", key_style, desc_style),
         shortcut_line("PageDn / PageUp", "Full-page scroll", key_style, desc_style),
         shortcut_line("g / G", "Top / bottom", key_style, desc_style),
+        shortcut_line("Ctrl+f", "Find in document", key_style, desc_style),
+        shortcut_line("n / N", "Next / prev match", key_style, desc_style),
         Line::from(""),
         Line::from(Span::styled("── Panels ──", dim_style)),
         shortcut_line("[", "Shrink file tree", key_style, desc_style),

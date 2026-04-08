@@ -16,6 +16,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         Focus::Tree => "TREE",
         Focus::Viewer => "VIEWER",
         Focus::Search => "SEARCH",
+        Focus::DocSearch => "FIND",
     };
 
     let file_info = if app.viewer.file_name.is_empty() {

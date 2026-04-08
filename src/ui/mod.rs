@@ -1,3 +1,4 @@
+pub mod doc_search_bar;
 pub mod file_tree;
 pub mod help;
 pub mod markdown_view;
@@ -20,9 +21,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         ])
         .split(f.area());
 
+    let viewer_area;
+
     if app.tree_hidden {
-        // Full width for the viewer when tree is hidden.
-        markdown_view::draw(f, app, chunks[0], app.focus == Focus::Viewer);
+        viewer_area = chunks[0];
+        markdown_view::draw(f, app, chunks[0], app.focus == Focus::Viewer || app.focus == Focus::DocSearch);
     } else {
         let main_chunks = Layout::default()
             .direction(Direction::Horizontal)
@@ -32,8 +35,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             ])
             .split(chunks[0]);
 
+        viewer_area = main_chunks[1];
         file_tree::draw(f, app, main_chunks[0], app.focus == Focus::Tree);
-        markdown_view::draw(f, app, main_chunks[1], app.focus == Focus::Viewer);
+        markdown_view::draw(f, app, main_chunks[1], app.focus == Focus::Viewer || app.focus == Focus::DocSearch);
     }
 
     if app.search.active {
@@ -41,6 +45,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
 
     status_bar::draw(f, app, chunks[2]);
+
+    // Doc search bar overlays the bottom of the viewer area.
+    if app.doc_search.active {
+        doc_search_bar::draw(f, app, viewer_area);
+    }
 
     if app.show_help {
         help::draw(f);
