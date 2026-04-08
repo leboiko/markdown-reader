@@ -1,0 +1,14 @@
+[package]
+name = "markdown-reader"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ratatui = "0.30"
+crossterm = "0.29"
+pulldown-cmark = "0.13"
+ignore = "0.4"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "sync", "time"] }
+notify-debouncer-mini = "0.7"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
