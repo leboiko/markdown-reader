@@ -9,17 +9,7 @@ use ratatui::{
 /// Supported markdown features: headings, paragraphs, block-quotes, fenced
 /// code blocks, ordered/unordered lists, task lists, tables, emphasis, bold,
 /// strikethrough, inline code, links, and horizontal rules.
-///
-/// # Arguments
-///
-/// * `content` - Raw markdown text to parse and render.
-///
-/// # Returns
-///
-/// A `'static` [`Text`] whose spans carry appropriate styling for each
-/// markdown element.
 pub fn render_markdown(content: &str) -> Text<'static> {
-    // Combine all desired parser extensions with a single bitwise-OR expression.
     let opts = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
 
     let parser = Parser::new_ext(content, opts);
@@ -33,15 +23,20 @@ struct MdRenderer {
     current_spans: Vec<Span<'static>>,
     style_stack: Vec<Style>,
     list_depth: usize,
-    list_counters: Vec<Option<u64>>, // None = unordered, Some(n) = ordered
+    list_counters: Vec<Option<u64>>,
     in_code_block: bool,
-    code_block_lines: Vec<String>,
+    code_block_content: Vec<String>,
     in_heading: bool,
+    #[allow(dead_code)]
     heading_level: u8,
     in_blockquote: bool,
+    // Table state — we buffer all rows and render on TagEnd::Table
     in_table: bool,
+    #[allow(dead_code)]
     table_alignments: Vec<pulldown_cmark::Alignment>,
     table_row: Vec<String>,
+    table_rows: Vec<Vec<String>>,
+    table_header_row: Option<Vec<String>>,
     table_header: bool,
 }
 
@@ -54,13 +49,15 @@ impl MdRenderer {
             list_depth: 0,
             list_counters: Vec::new(),
             in_code_block: false,
-            code_block_lines: Vec::new(),
+            code_block_content: Vec::new(),
             in_heading: false,
             heading_level: 0,
             in_blockquote: false,
             in_table: false,
             table_alignments: Vec::new(),
             table_row: Vec::new(),
+            table_rows: Vec::new(),
+            table_header_row: None,
             table_header: false,
         }
     }
@@ -137,7 +134,6 @@ impl MdRenderer {
                 _ => {}
             }
         }
-        // Flush any remaining spans
         if !self.current_spans.is_empty() {
             self.flush_line();
         }
@@ -163,7 +159,6 @@ impl MdRenderer {
                         .add_modifier(Modifier::BOLD),
                 };
                 self.push_style(style);
-                // Add heading prefix
                 let prefix = match level {
                     pulldown_cmark::HeadingLevel::H1 => "█ ",
                     pulldown_cmark::HeadingLevel::H2 => "▌ ",
@@ -180,13 +175,8 @@ impl MdRenderer {
             }
             Tag::CodeBlock(_) => {
                 self.in_code_block = true;
-                self.code_block_lines.clear();
+                self.code_block_content.clear();
                 self.flush_line();
-                // Top border
-                self.lines.push(Line::from(Span::styled(
-                    "╭─────────────────────────────────────────────╮".to_string(),
-                    Style::default().fg(Color::DarkGray),
-                )));
             }
             Tag::List(start) => {
                 self.list_depth += 1;
@@ -232,6 +222,8 @@ impl MdRenderer {
             Tag::Table(alignments) => {
                 self.in_table = true;
                 self.table_alignments = alignments;
+                self.table_rows.clear();
+                self.table_header_row = None;
                 self.flush_line();
             }
             Tag::TableHead => {
@@ -264,12 +256,7 @@ impl MdRenderer {
                 self.push_blank_line();
             }
             TagEnd::CodeBlock => {
-                // Bottom border
-                self.lines.push(Line::from(Span::styled(
-                    "╰─────────────────────────────────────────────╯".to_string(),
-                    Style::default().fg(Color::DarkGray),
-                )));
-                self.push_blank_line();
+                self.render_code_block();
                 self.in_code_block = false;
             }
             TagEnd::List(_) => {
@@ -289,26 +276,19 @@ impl MdRenderer {
                 self.pop_style();
             }
             TagEnd::Table => {
+                self.render_table();
                 self.in_table = false;
-                self.push_blank_line();
             }
             TagEnd::TableHead => {
-                self.render_table_row(true);
+                self.table_header_row = Some(self.table_row.clone());
                 self.table_header = false;
-                // Separator line
-                let sep: Vec<String> = self.table_row.iter().map(|_| "─".repeat(14)).collect();
-                self.lines.push(Line::from(Span::styled(
-                    format!("├{}┤", sep.join("┼")),
-                    Style::default().fg(Color::DarkGray),
-                )));
             }
             TagEnd::TableRow => {
                 if !self.table_header {
-                    self.render_table_row(false);
+                    self.table_rows.push(self.table_row.clone());
                 }
             }
             TagEnd::TableCell => {
-                // Collect cell text from current spans
                 let cell_text: String = self
                     .current_spans
                     .drain(..)
@@ -322,20 +302,13 @@ impl MdRenderer {
 
     fn handle_text(&mut self, text: &str) {
         if self.in_code_block {
-            let code_style = Style::default()
-                .fg(Color::Rgb(180, 200, 180))
-                .bg(Color::Rgb(40, 40, 40));
-            // Split into lines, skip trailing empty line from pulldown-cmark
-            let lines: Vec<&str> = text.split('\n').collect();
-            let lines = if lines.last() == Some(&"") {
-                &lines[..lines.len() - 1]
-            } else {
-                &lines
-            };
-            for line in lines {
-                let padded = format!("│ {:<44}│", line);
-                self.lines
-                    .push(Line::from(Span::styled(padded, code_style)));
+            // Buffer code lines — we render the whole block at TagEnd::CodeBlock
+            for line in text.split('\n') {
+                self.code_block_content.push(line.to_string());
+            }
+            // Remove trailing empty line from pulldown-cmark
+            if self.code_block_content.last().is_some_and(|l| l.is_empty()) {
+                self.code_block_content.pop();
             }
         } else {
             self.current_spans
@@ -343,35 +316,138 @@ impl MdRenderer {
         }
     }
 
-    fn render_table_row(&mut self, is_header: bool) {
-        let style = if is_header {
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::White)
-        };
+    /// Render the buffered code block with a box that fits the content width.
+    fn render_code_block(&mut self) {
+        let code_style = Style::default()
+            .fg(Color::Rgb(180, 200, 180))
+            .bg(Color::Rgb(40, 40, 40));
+        let border_style = Style::default().fg(Color::DarkGray);
 
-        let mut spans = vec![Span::styled(
-            "│ ".to_string(),
-            Style::default().fg(Color::DarkGray),
-        )];
+        // Find the widest line to size the box
+        let max_width = self
+            .code_block_content
+            .iter()
+            .map(|l| l.len())
+            .max()
+            .unwrap_or(0)
+            .max(20); // minimum box width
+        let inner_width = max_width + 1; // 1 char padding on right
 
-        for (i, cell) in self.table_row.iter().enumerate() {
-            if i > 0 {
-                spans.push(Span::styled(
-                    " │ ".to_string(),
-                    Style::default().fg(Color::DarkGray),
-                ));
-            }
-            spans.push(Span::styled(format!("{:<12}", cell), style));
+        // Top border
+        self.lines.push(Line::from(Span::styled(
+            format!("╭{}╮", "─".repeat(inner_width + 1)),
+            border_style,
+        )));
+
+        // Code lines
+        for line in &self.code_block_content {
+            self.lines.push(Line::from(Span::styled(
+                format!("│ {:<inner_width$}│", line),
+                code_style,
+            )));
         }
 
-        spans.push(Span::styled(
-            " │".to_string(),
-            Style::default().fg(Color::DarkGray),
-        ));
+        // Bottom border
+        self.lines.push(Line::from(Span::styled(
+            format!("╰{}╯", "─".repeat(inner_width + 1)),
+            border_style,
+        )));
 
+        self.code_block_content.clear();
+        self.push_blank_line();
+    }
+
+    /// Render the fully buffered table with dynamic column widths.
+    fn render_table(&mut self) {
+        let border_style = Style::default().fg(Color::DarkGray);
+        let header_style = Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD);
+        let cell_style = Style::default().fg(Color::White);
+
+        // Collect all rows (header + body) to compute column widths
+        let header = self.table_header_row.take().unwrap_or_default();
+        let num_cols = header
+            .len()
+            .max(self.table_rows.iter().map(|r| r.len()).max().unwrap_or(0));
+
+        if num_cols == 0 {
+            return;
+        }
+
+        // Compute max width for each column
+        let mut col_widths = vec![0usize; num_cols];
+        for (i, cell) in header.iter().enumerate() {
+            col_widths[i] = col_widths[i].max(cell.len());
+        }
+        for row in &self.table_rows {
+            for (i, cell) in row.iter().enumerate() {
+                if i < num_cols {
+                    col_widths[i] = col_widths[i].max(cell.len());
+                }
+            }
+        }
+        // Ensure minimum column width of 3
+        for w in &mut col_widths {
+            *w = (*w).max(3);
+        }
+
+        // Top border: ┌───┬───┬───┐
+        let top: String = col_widths
+            .iter()
+            .map(|w| "─".repeat(w + 2))
+            .collect::<Vec<_>>()
+            .join("┬");
+        self.lines.push(Line::from(Span::styled(
+            format!("┌{top}┐"),
+            border_style,
+        )));
+
+        // Header row
+        let mut spans = Vec::new();
+        spans.push(Span::styled("│".to_string(), border_style));
+        for (i, w) in col_widths.iter().enumerate() {
+            let cell = header.get(i).map(|s| s.as_str()).unwrap_or("");
+            spans.push(Span::styled(format!(" {:<w$} ", cell), header_style));
+            spans.push(Span::styled("│".to_string(), border_style));
+        }
         self.lines.push(Line::from(spans));
+
+        // Header separator: ├───┼───┼───┤
+        let sep: String = col_widths
+            .iter()
+            .map(|w| "─".repeat(w + 2))
+            .collect::<Vec<_>>()
+            .join("┼");
+        self.lines.push(Line::from(Span::styled(
+            format!("├{sep}┤"),
+            border_style,
+        )));
+
+        // Body rows
+        for row in &self.table_rows {
+            let mut spans = Vec::new();
+            spans.push(Span::styled("│".to_string(), border_style));
+            for (i, w) in col_widths.iter().enumerate() {
+                let cell = row.get(i).map(|s| s.as_str()).unwrap_or("");
+                spans.push(Span::styled(format!(" {:<w$} ", cell), cell_style));
+                spans.push(Span::styled("│".to_string(), border_style));
+            }
+            self.lines.push(Line::from(spans));
+        }
+
+        // Bottom border: └───┴───┴───┘
+        let bottom: String = col_widths
+            .iter()
+            .map(|w| "─".repeat(w + 2))
+            .collect::<Vec<_>>()
+            .join("┴");
+        self.lines.push(Line::from(Span::styled(
+            format!("└{bottom}┘"),
+            border_style,
+        )));
+
+        self.table_rows.clear();
+        self.push_blank_line();
     }
 }
