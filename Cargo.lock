@@ -823,7 +823,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "markdown-reader"
+name = "markdown-tui-explorer"
 version = "0.1.0"
 dependencies = [
  "anyhow",

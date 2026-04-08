@@ -1,7 +1,18 @@
 [package]
-name = "markdown-reader"
+name = "markdown-tui-explorer"
 version = "0.1.0"
 edition = "2024"
+description = "A terminal-based markdown file browser and viewer with search, syntax highlighting, and live reload"
+license = "MIT"
+repository = "https://github.com/leboiko/markdown-reader"
+homepage = "https://github.com/leboiko/markdown-reader"
+keywords = ["markdown", "tui", "terminal", "viewer", "ratatui"]
+categories = ["command-line-utilities", "text-processing"]
+readme = "README.md"
+
+[[bin]]
+name = "markdown-reader"
+path = "src/main.rs"
 
 [dependencies]
 ratatui = "0.30"

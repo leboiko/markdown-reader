@@ -46,7 +46,13 @@ search bar appears between the main area and the status bar when activated.
 
 - [Rust toolchain](https://rustup.rs/) (1.85+ recommended, edition 2024)
 
-### One-line install
+### From crates.io
+
+```sh
+cargo install markdown-tui-explorer
+```
+
+### From GitHub
 
 ```sh
 cargo install --git https://github.com/leboiko/markdown-reader
