@@ -32,6 +32,8 @@ pub struct App {
     pub viewer: MarkdownViewState,
     /// Search overlay state.
     pub search: SearchState,
+    /// Whether the help overlay is visible.
+    pub show_help: bool,
     /// Width of the file-tree panel as a percentage (10–80).
     pub tree_width_pct: u16,
     /// Root directory being browsed.
@@ -53,6 +55,7 @@ impl App {
             tree,
             viewer: MarkdownViewState::default(),
             search: SearchState::default(),
+            show_help: false,
             tree_width_pct: 25,
             root,
             action_tx: None,
@@ -146,6 +149,16 @@ impl App {
     }
 
     fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) {
+        // Help overlay: any key dismisses it.
+        if self.show_help {
+            self.show_help = false;
+            return;
+        }
+        // Toggle help from any non-search panel.
+        if code == KeyCode::Char('?') && self.focus != Focus::Search {
+            self.show_help = true;
+            return;
+        }
         match self.focus {
             Focus::Search => self.handle_search_key(code, modifiers),
             Focus::Tree => self.handle_tree_key(code, modifiers),

@@ -1,4 +1,5 @@
 pub mod file_tree;
+pub mod help;
 pub mod markdown_view;
 pub mod search_bar;
 pub mod status_bar;
@@ -35,4 +36,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
 
     status_bar::draw(f, app, chunks[2]);
+
+    if app.show_help {
+        help::draw(f);
+    }
 }
