@@ -2,8 +2,8 @@ use crate::app::App;
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Style},
-    text::Text,
+    style::{Color, Modifier, Style},
+    text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 use std::borrow::Cow;
@@ -128,10 +128,98 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
     // ratatui's Paragraph::scroll takes (u16, u16); clamp to u16::MAX to be safe.
     let scroll_row = app.viewer.scroll_offset.min(u16::MAX as u32) as u16;
 
-    let paragraph = Paragraph::new(app.viewer.rendered.clone())
+    // Apply search highlighting if there's an active doc search query.
+    let text = if !app.doc_search.query.is_empty() && !app.doc_search.match_lines.is_empty() {
+        let current_line = app
+            .doc_search
+            .match_lines
+            .get(app.doc_search.current_match)
+            .copied();
+        highlight_matches(&app.viewer.rendered, &app.doc_search.query, current_line)
+    } else {
+        app.viewer.rendered.clone()
+    };
+
+    let paragraph = Paragraph::new(text)
         .block(block)
         .wrap(Wrap { trim: false })
         .scroll((scroll_row, 0));
 
     f.render_widget(paragraph, area);
+}
+
+/// Produce a new `Text` with search matches highlighted.
+///
+/// All matches get a yellow background. The match on `current_line` gets
+/// an orange/red background to distinguish the "active" match.
+fn highlight_matches(text: &Text<'static>, query: &str, current_line: Option<u32>) -> Text<'static> {
+    let query_lower = query.to_lowercase();
+    let match_style = Style::default()
+        .bg(Color::Yellow)
+        .fg(Color::Black)
+        .add_modifier(Modifier::BOLD);
+    let current_style = Style::default()
+        .bg(Color::Rgb(255, 120, 0))
+        .fg(Color::Black)
+        .add_modifier(Modifier::BOLD);
+
+    let lines: Vec<Line<'static>> = text
+        .lines
+        .iter()
+        .enumerate()
+        .map(|(line_idx, line)| {
+            let line_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+            if !line_text.to_lowercase().contains(&query_lower) {
+                return line.clone();
+            }
+
+            let is_current = current_line == Some(line_idx as u32);
+            let hl_style = if is_current { current_style } else { match_style };
+
+            // Rebuild spans with highlighting injected.
+            let mut new_spans: Vec<Span<'static>> = Vec::new();
+            for span in &line.spans {
+                split_and_highlight(&span.content, &query_lower, span.style, hl_style, &mut new_spans);
+            }
+            Line::from(new_spans)
+        })
+        .collect();
+
+    Text::from(lines)
+}
+
+/// Split `text` on case-insensitive occurrences of `query` and push spans
+/// with alternating normal/highlight styles.
+fn split_and_highlight(
+    text: &str,
+    query_lower: &str,
+    base_style: Style,
+    highlight_style: Style,
+    out: &mut Vec<Span<'static>>,
+) {
+    let text_lower = text.to_lowercase();
+    let mut start = 0;
+
+    while let Some(pos) = text_lower[start..].find(query_lower) {
+        let abs_pos = start + pos;
+
+        // Text before the match.
+        if abs_pos > start {
+            out.push(Span::styled(text[start..abs_pos].to_string(), base_style));
+        }
+
+        // The matched portion (preserve original casing).
+        let match_end = abs_pos + query_lower.len();
+        out.push(Span::styled(
+            text[abs_pos..match_end].to_string(),
+            highlight_style,
+        ));
+
+        start = match_end;
+    }
+
+    // Remaining text after the last match.
+    if start < text.len() {
+        out.push(Span::styled(text[start..].to_string(), base_style));
+    }
 }
