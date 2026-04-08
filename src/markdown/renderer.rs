@@ -247,8 +247,12 @@ impl MdRenderer {
                 self.in_heading = false;
             }
             TagEnd::Paragraph => {
-                self.flush_line();
-                self.push_blank_line();
+                // Inside a table cell, paragraphs must not emit lines directly —
+                // cell content is collected via spans and rendered by render_table().
+                if !self.in_table {
+                    self.flush_line();
+                    self.push_blank_line();
+                }
             }
             TagEnd::BlockQuote(_) => {
                 self.in_blockquote = false;

@@ -71,6 +71,18 @@ impl MarkdownViewState {
         self.scroll_down(half);
     }
 
+    /// Scroll up by a full page.
+    pub fn scroll_page_up(&mut self) {
+        let page = self.view_height as u16;
+        self.scroll_up(page);
+    }
+
+    /// Scroll down by a full page.
+    pub fn scroll_page_down(&mut self) {
+        let page = self.view_height as u16;
+        self.scroll_down(page);
+    }
+
     /// Jump to the top of the document.
     pub fn scroll_to_top(&mut self) {
         self.scroll_offset = 0;
