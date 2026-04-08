@@ -198,7 +198,8 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
         .block(block)
         .highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .bg(Color::Green)
+                .fg(Color::Black)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("│ ");
