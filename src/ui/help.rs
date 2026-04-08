@@ -38,6 +38,7 @@ pub fn draw(f: &mut Frame) {
         Line::from(Span::styled("── Panels ──", dim_style)),
         shortcut_line("[", "Shrink file tree", key_style, desc_style),
         shortcut_line("]", "Grow file tree", key_style, desc_style),
+        shortcut_line("H", "Toggle file tree", key_style, desc_style),
         Line::from(""),
         Line::from(Span::styled("── Search ──", dim_style)),
         shortcut_line("/", "Open search", key_style, desc_style),

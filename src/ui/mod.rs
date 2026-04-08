@@ -20,16 +20,21 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         ])
         .split(f.area());
 
-    let main_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(app.tree_width_pct),
-            Constraint::Percentage(100 - app.tree_width_pct),
-        ])
-        .split(chunks[0]);
+    if app.tree_hidden {
+        // Full width for the viewer when tree is hidden.
+        markdown_view::draw(f, app, chunks[0], app.focus == Focus::Viewer);
+    } else {
+        let main_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(app.tree_width_pct),
+                Constraint::Percentage(100 - app.tree_width_pct),
+            ])
+            .split(chunks[0]);
 
-    file_tree::draw(f, app, main_chunks[0], app.focus == Focus::Tree);
-    markdown_view::draw(f, app, main_chunks[1], app.focus == Focus::Viewer);
+        file_tree::draw(f, app, main_chunks[0], app.focus == Focus::Tree);
+        markdown_view::draw(f, app, main_chunks[1], app.focus == Focus::Viewer);
+    }
 
     if app.search.active {
         search_bar::draw(f, app, chunks[1]);

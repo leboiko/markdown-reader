@@ -34,6 +34,8 @@ pub struct App {
     pub search: SearchState,
     /// Whether the help overlay is visible.
     pub show_help: bool,
+    /// Whether the file tree panel is hidden.
+    pub tree_hidden: bool,
     /// Width of the file-tree panel as a percentage (10–80).
     pub tree_width_pct: u16,
     /// Root directory being browsed.
@@ -56,6 +58,7 @@ impl App {
             viewer: MarkdownViewState::default(),
             search: SearchState::default(),
             show_help: false,
+            tree_hidden: false,
             tree_width_pct: 25,
             root,
             action_tx: None,
@@ -152,6 +155,14 @@ impl App {
         // Help overlay: any key dismisses it.
         if self.show_help {
             self.show_help = false;
+            return;
+        }
+        // Toggle tree panel visibility from any non-search panel.
+        if code == KeyCode::Char('H') && self.focus != Focus::Search {
+            self.tree_hidden = !self.tree_hidden;
+            if self.tree_hidden && self.focus == Focus::Tree {
+                self.focus = Focus::Viewer;
+            }
             return;
         }
         // Toggle help from any non-search panel.
