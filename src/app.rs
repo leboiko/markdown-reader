@@ -234,6 +234,12 @@ impl App {
 
     fn handle_viewer_key(&mut self, code: KeyCode, modifiers: KeyModifiers) {
         match code {
+            KeyCode::Esc => {
+                // Dismiss active doc search highlights, or do nothing.
+                self.doc_search.active = false;
+                self.doc_search.query.clear();
+                self.doc_search.match_lines.clear();
+            }
             KeyCode::Char('q') => self.running = false,
             KeyCode::Char('j') | KeyCode::Down => self.viewer.scroll_down(1),
             KeyCode::Char('k') | KeyCode::Up => self.viewer.scroll_up(1),
@@ -266,11 +272,14 @@ impl App {
     fn handle_doc_search_key(&mut self, code: KeyCode, _modifiers: KeyModifiers) {
         match code {
             KeyCode::Esc => {
+                // Cancel: clear everything and return to viewer.
                 self.doc_search.active = false;
+                self.doc_search.query.clear();
+                self.doc_search.match_lines.clear();
                 self.focus = Focus::Viewer;
             }
             KeyCode::Enter => {
-                // Confirm search and go back to viewer for n/N navigation.
+                // Confirm: keep highlights and n/N navigation, close the input bar.
                 self.focus = Focus::Viewer;
             }
             KeyCode::Backspace => {
