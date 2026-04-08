@@ -78,6 +78,11 @@ impl MdRenderer {
     }
 
     fn flush_line(&mut self) {
+        // Inside a table, spans are collected per-cell via TagEnd::TableCell
+        // drain — never emit lines directly.
+        if self.in_table {
+            return;
+        }
         let spans = std::mem::take(&mut self.current_spans);
         if self.in_blockquote && !self.in_code_block {
             let mut bq_spans = vec![Span::styled(
@@ -92,6 +97,9 @@ impl MdRenderer {
     }
 
     fn push_blank_line(&mut self) {
+        if self.in_table {
+            return;
+        }
         self.lines.push(Line::from(""));
     }
 
@@ -247,12 +255,8 @@ impl MdRenderer {
                 self.in_heading = false;
             }
             TagEnd::Paragraph => {
-                // Inside a table cell, paragraphs must not emit lines directly —
-                // cell content is collected via spans and rendered by render_table().
-                if !self.in_table {
-                    self.flush_line();
-                    self.push_blank_line();
-                }
+                self.flush_line();
+                self.push_blank_line();
             }
             TagEnd::BlockQuote(_) => {
                 self.in_blockquote = false;
