@@ -161,3 +161,76 @@ pub fn create_picker() -> Option<Picker> {
 
 /// The reason graphics are unavailable in a tmux session.
 pub const TMUX_DISABLED_REASON: &str = "disable tmux for graphics";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SEQUENCE_DIAGRAM: &str = r#"sequenceDiagram
+    participant W as Worker
+    participant CP as CheckpointStore
+    participant ES as EventReader
+    W->>CP: Read checkpoint (last sequence)
+    CP-->>W: sequence_number
+    W->>ES: Poll events (after sequence, limit 500)
+    ES-->>W: batch of StoredEvents"#;
+
+    const GRAPH_LR_1: &str = r#"graph LR
+    subgraph Supervisor
+        direction TB
+        F[Factory] -->|creates| W[Worker]
+        W -->|panics/exits| F
+    end
+    W -->|beat every cycle| HB[Heartbeat]
+    HB -->|checked every 10s| WD[Watchdog]
+    WD -->|stall > 120s| CT[Cancel Token]
+    CT -->|stops| W
+    style WD fill:#c82,stroke:#fff,color:#fff"#;
+
+    const STATE_DIAGRAM: &str = r#"stateDiagram-v2
+    [*] --> CLOSED
+    CLOSED --> OPEN : 5 consecutive failures
+    OPEN --> HALF_OPEN : probe interval elapsed
+    HALF_OPEN --> CLOSED : probe succeeds
+    HALF_OPEN --> OPEN : probe fails (increased backoff)"#;
+
+    const GRAPH_LR_2: &str = r#"graph LR
+    subgraph projections-pg [projections-pg :9092]
+        PG_W[event_log, account_registry]
+    end
+    PG_W --> PG[(PostgreSQL)]
+    style PG fill:#336,stroke:#fff,color:#fff"#;
+
+    #[test]
+    fn render_four_target_diagrams() {
+        let diagrams = [
+            ("sequenceDiagram", SEQUENCE_DIAGRAM),
+            ("graph LR (resilience)", GRAPH_LR_1),
+            ("stateDiagram-v2", STATE_DIAGRAM),
+            ("graph LR (deployments)", GRAPH_LR_2),
+        ];
+
+        let mut ready_count = 0;
+        let mut failed: Vec<(&str, String)> = Vec::new();
+
+        for (name, src) in &diagrams {
+            match mermaid_rs_renderer::render(src) {
+                Ok(svg) => {
+                    match svg_to_image(&svg) {
+                        Ok(_) => {
+                            ready_count += 1;
+                        }
+                        Err(e) => failed.push((name, format!("rasterize: {e}"))),
+                    }
+                }
+                Err(e) => failed.push((name, format!("mermaid: {e}"))),
+            }
+        }
+
+        // CI must have at least 2 of 4 succeed to pass.
+        assert!(
+            ready_count >= 2,
+            "only {ready_count}/4 diagrams rendered successfully; failures: {failed:?}"
+        );
+    }
+}
