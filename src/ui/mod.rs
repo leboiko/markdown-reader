@@ -6,6 +6,7 @@ pub mod help;
 pub mod markdown_view;
 pub mod search_bar;
 pub mod status_bar;
+pub mod tabs;
 
 use crate::app::{App, Focus};
 use ratatui::{
@@ -64,7 +65,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     status_bar::draw(f, app, chunks[2]);
 
-    if app.doc_search.active {
+    let doc_search_active = app.doc_search().map(|ds| ds.active).unwrap_or(false);
+    if doc_search_active {
         doc_search_bar::draw(f, app, viewer_area);
     }
 
