@@ -1,4 +1,5 @@
 pub mod config_popup;
+pub mod table_modal;
 pub mod table_render;
 pub mod doc_search_bar;
 pub mod file_tree;
@@ -110,6 +111,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         tab_picker::draw(f, app);
     }
 
+    if app.table_modal.is_some() {
+        table_modal::draw(f, app);
+    }
+
     if let Some(popup_state) = &app.config_popup {
         let popup_state = popup_state.clone();
         config_popup::render_config_popup(
@@ -126,6 +131,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 fn is_viewer_focused(focus: Focus) -> bool {
     matches!(
         focus,
-        Focus::Viewer | Focus::DocSearch | Focus::Config | Focus::GotoLine | Focus::TabPicker
+        Focus::Viewer
+            | Focus::DocSearch
+            | Focus::Config
+            | Focus::GotoLine
+            | Focus::TabPicker
+            | Focus::TableModal
     )
 }

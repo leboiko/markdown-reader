@@ -19,6 +19,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         Focus::Config => "SETTINGS",
         Focus::GotoLine => "GOTO",
         Focus::TabPicker => "TABS",
+        Focus::TableModal => "TABLE",
     };
 
     let tab_count = app.tabs.len();

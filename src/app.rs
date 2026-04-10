@@ -38,6 +38,20 @@ pub enum Focus {
     GotoLine,
     /// Tab picker overlay.
     TabPicker,
+    /// Full-screen table modal (opened with Enter on a table block).
+    TableModal,
+}
+
+/// State for the full-screen table modal opened with Enter on a table block.
+#[derive(Debug, Clone)]
+pub struct TableModalState {
+    pub tab_id: crate::ui::tabs::TabId,
+    pub h_scroll: u16,
+    pub v_scroll: u16,
+    pub headers: Vec<String>,
+    pub rows: Vec<Vec<String>>,
+    pub alignments: Vec<pulldown_cmark::Alignment>,
+    pub natural_widths: Vec<usize>,
 }
 
 /// Transient state for the settings popup.
@@ -141,6 +155,8 @@ pub struct App {
     pub mermaid_cache: MermaidCache,
     /// Terminal graphics protocol picker; `None` when graphics are disabled.
     pub picker: Option<Picker>,
+    /// State for the full-screen table modal; `None` when the modal is closed.
+    pub table_modal: Option<TableModalState>,
 }
 
 impl App {
@@ -185,6 +201,7 @@ impl App {
             viewer_area_rect: None,
             mermaid_cache: MermaidCache::new(),
             picker,
+            table_modal: None,
         };
 
         app.restore_session();
@@ -433,6 +450,22 @@ impl App {
                 let entries = FileEntry::discover(&self.root);
                 self.tree.rebuild(entries);
                 self.reload_changed_tabs(&changed);
+                // Close modal if the tab it was opened from was reloaded.
+                if let Some(modal) = &self.table_modal {
+                    let tab_id = modal.tab_id;
+                    let reloaded = self.tabs.tabs.iter().any(|t| t.id == tab_id)
+                        && changed.iter().any(|p| {
+                            self.tabs
+                                .tabs
+                                .iter()
+                                .find(|t| t.id == tab_id)
+                                .and_then(|t| t.view.current_path.as_ref())
+                                == Some(p)
+                        });
+                    if reloaded {
+                        self.close_table_modal();
+                    }
+                }
             }
             Action::Resize(_, _) => {}
             Action::Mouse(m) => self.handle_mouse(m),
@@ -458,6 +491,7 @@ impl App {
                 if let Some(id) = picker_hit {
                     self.tabs.set_active(id);
                     self.tab_picker = None;
+                    self.close_table_modal();
                     self.focus = Focus::Viewer;
                     return;
                 }
@@ -471,6 +505,7 @@ impl App {
 
                 if let Some(id) = tab_hit {
                     self.commit_doc_search_if_active();
+                    self.close_table_modal();
                     self.tabs.set_active(id);
                     self.focus = Focus::Viewer;
                     return;
@@ -555,7 +590,10 @@ impl App {
             return;
         }
 
-        if code == KeyCode::Char('H') && self.focus != Focus::Search {
+        if code == KeyCode::Char('H')
+            && self.focus != Focus::Search
+            && self.focus != Focus::TableModal
+        {
             self.tree_hidden = !self.tree_hidden;
             if self.tree_hidden && self.focus == Focus::Tree {
                 self.focus = Focus::Viewer;
@@ -575,10 +613,12 @@ impl App {
             Focus::Config => {}
             Focus::TabPicker => {
                 crate::ui::tab_picker::handle_key(self, code);
-                // Sync focus if picker was closed.
                 if self.tab_picker.is_none() {
                     self.focus = Focus::Viewer;
                 }
+            }
+            Focus::TableModal => {
+                self.handle_table_modal_key(code);
             }
         }
     }
@@ -633,23 +673,29 @@ impl App {
 
     /// Commit any in-progress doc-search and switch focus back to Viewer before
     /// performing a tab switch.
-    ///
-    /// The plan requires: "if the user is mid-typing in Find (Focus::DocSearch)
-    /// and a tab switch happens, commit the current query to the active tab's
-    /// doc_search, return focus to Viewer, then perform the switch."
     fn commit_doc_search_if_active(&mut self) {
         if self.focus == Focus::DocSearch {
             self.focus = Focus::Viewer;
         }
     }
 
+    /// Close the table modal if open, restoring focus to Viewer.
+    pub fn close_table_modal(&mut self) {
+        if self.table_modal.is_some() {
+            self.table_modal = None;
+            self.focus = Focus::Viewer;
+        }
+    }
+
     fn switch_to_next_tab(&mut self) {
         self.commit_doc_search_if_active();
+        self.close_table_modal();
         self.tabs.next();
     }
 
     fn switch_to_prev_tab(&mut self) {
         self.commit_doc_search_if_active();
+        self.close_table_modal();
         self.tabs.prev();
     }
 
@@ -744,6 +790,9 @@ impl App {
         }
 
         match code {
+            KeyCode::Enter => {
+                self.try_open_table_modal();
+            }
             KeyCode::Esc => {
                 if let Some(ds) = self.doc_search_mut() {
                     ds.active = false;
@@ -810,15 +859,18 @@ impl App {
             // Backtick jumps to the previously active tab.
             KeyCode::Char('`') => {
                 self.commit_doc_search_if_active();
+                self.close_table_modal();
                 self.tabs.activate_previous();
             }
             // `1`–`9` jump to that tab by 1-based index; `0` jumps to the last.
             KeyCode::Char('0') => {
                 self.commit_doc_search_if_active();
+                self.close_table_modal();
                 self.tabs.activate_last();
             }
             KeyCode::Char(c @ '1'..='9') => {
                 self.commit_doc_search_if_active();
+                self.close_table_modal();
                 self.tabs.activate_by_index((c as u8 - b'0') as usize);
             }
             // `T` opens the tab picker overlay.
@@ -1183,6 +1235,123 @@ impl App {
         };
         let line = ds.match_lines[ds.current_match];
         tab.view.scroll_offset = line;
+    }
+
+    // ── Table modal ──────────────────────────────────────────────────────────
+
+    /// Open the table modal if the block at the viewport center is a table.
+    fn try_open_table_modal(&mut self) {
+        let view_height = self.tabs.view_height;
+        let Some(tab) = self.tabs.active_tab() else {
+            return;
+        };
+        let center_line = tab.view.scroll_offset + view_height / 2;
+
+        let mut block_start = 0u32;
+        for doc_block in &tab.view.rendered {
+            let block_height = doc_block.height();
+            let block_end = block_start + block_height;
+            if center_line >= block_start && center_line < block_end {
+                if let crate::markdown::DocBlock::Table(table) = doc_block {
+                    let modal = TableModalState {
+                        tab_id: tab.id,
+                        h_scroll: 0,
+                        v_scroll: 0,
+                        headers: table.headers.clone(),
+                        rows: table.rows.clone(),
+                        alignments: table.alignments.clone(),
+                        natural_widths: table.natural_widths.clone(),
+                    };
+                    self.table_modal = Some(modal);
+                    self.focus = Focus::TableModal;
+                }
+                return;
+            }
+            block_start = block_end;
+        }
+    }
+
+    fn handle_table_modal_key(&mut self, code: KeyCode) {
+        use crate::ui::table_modal::max_h_scroll;
+
+        if self.pending_chord.take() == Some('g') && code == KeyCode::Char('g') {
+            if let Some(s) = self.table_modal.as_mut() {
+                s.v_scroll = 0;
+                s.h_scroll = 0;
+            }
+            return;
+        }
+
+        let view_height = self.tabs.view_height as u16;
+
+        match code {
+            KeyCode::Char('q') | KeyCode::Esc | KeyCode::Enter => {
+                self.close_table_modal();
+            }
+            KeyCode::Char('h') | KeyCode::Left => {
+                if let Some(s) = self.table_modal.as_mut() {
+                    s.h_scroll = s.h_scroll.saturating_sub(1);
+                }
+            }
+            KeyCode::Char('l') | KeyCode::Right => {
+                if let Some(s) = self.table_modal.as_mut() {
+                    let max = max_h_scroll(s, view_height);
+                    s.h_scroll = (s.h_scroll + 1).min(max);
+                }
+            }
+            KeyCode::Char('H') => {
+                if let Some(s) = self.table_modal.as_mut() {
+                    s.h_scroll = s.h_scroll.saturating_sub(10);
+                }
+            }
+            KeyCode::Char('L') => {
+                if let Some(s) = self.table_modal.as_mut() {
+                    let max = max_h_scroll(s, view_height);
+                    s.h_scroll = (s.h_scroll + 10).min(max);
+                }
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                if let Some(s) = self.table_modal.as_mut() {
+                    s.v_scroll += 1;
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                if let Some(s) = self.table_modal.as_mut() {
+                    s.v_scroll = s.v_scroll.saturating_sub(1);
+                }
+            }
+            KeyCode::Char('d') | KeyCode::PageDown => {
+                if let Some(s) = self.table_modal.as_mut() {
+                    s.v_scroll += view_height / 2;
+                }
+            }
+            KeyCode::Char('u') | KeyCode::PageUp => {
+                if let Some(s) = self.table_modal.as_mut() {
+                    s.v_scroll = s.v_scroll.saturating_sub(view_height / 2);
+                }
+            }
+            KeyCode::Char('G') => {
+                if let Some(s) = self.table_modal.as_mut() {
+                    // Jump to bottom: rows + 3 border lines - 1.
+                    let total = s.rows.len() as u16 + 3;
+                    s.v_scroll = total.saturating_sub(view_height);
+                }
+            }
+            KeyCode::Char('0') => {
+                if let Some(s) = self.table_modal.as_mut() {
+                    s.h_scroll = 0;
+                }
+            }
+            KeyCode::Char('$') => {
+                if let Some(s) = self.table_modal.as_mut() {
+                    s.h_scroll = max_h_scroll(s, view_height);
+                }
+            }
+            KeyCode::Char('g') => {
+                self.pending_chord = Some('g');
+            }
+            _ => {}
+        }
     }
 
     // ── Mermaid ──────────────────────────────────────────────────────────────
