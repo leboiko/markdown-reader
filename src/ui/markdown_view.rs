@@ -163,6 +163,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
         y: u16,
         height: u16,
         text: Text<'static>,
+        first_line_number: u32,
     }
     struct MermaidDraw {
         y: u16,
@@ -216,6 +217,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                                 y: rect_y,
                                 height: draw_height,
                                 text: visible_text,
+                                first_line_number: block_start + clip_start + 1,
                             });
                         }
                         DocBlock::Mermaid { id, source } => {
@@ -237,6 +239,8 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
         }
     }
 
+    let total_doc_lines = app.tabs.active_tab().map(|t| t.view.total_lines).unwrap_or(0);
+
     // Render text blocks.
     for td in text_draws {
         let rect = Rect {
@@ -246,9 +250,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
             height: td.height,
         };
         if app.show_line_numbers {
-            // For line-number gutter in block mode, we need the absolute line
-            // number. Since we sliced the text, compute a synthetic gutter.
-            render_text_with_gutter(f, rect, td.text, &p);
+            render_text_with_gutter(f, rect, td.text, td.first_line_number, total_doc_lines, &p);
         } else {
             let para = Paragraph::new(td.text).wrap(Wrap { trim: false });
             f.render_widget(para, rect);
@@ -341,14 +343,23 @@ fn render_mermaid_source(f: &mut Frame, rect: Rect, source: &str, footer: &str, 
     f.render_widget(para, rect);
 }
 
-/// Render text with a minimal line-number gutter (relative line numbers within
-/// the visible slice, not absolute document lines).
-fn render_text_with_gutter(f: &mut Frame, rect: Rect, text: Text<'static>, p: &Palette) {
-    let total = text.lines.len() as u32;
-    let num_digits = if total == 0 {
+/// Render a slice of text with an absolute-line-number gutter.
+///
+/// `first_line_number` is the 1-based absolute display line of the slice's first row;
+/// `total_doc_lines` is used to size the gutter so width is stable across blocks.
+fn render_text_with_gutter(
+    f: &mut Frame,
+    rect: Rect,
+    text: Text<'static>,
+    first_line_number: u32,
+    total_doc_lines: u32,
+    p: &Palette,
+) {
+    let slice_len = text.lines.len() as u32;
+    let num_digits = if total_doc_lines == 0 {
         4
     } else {
-        (total.ilog10() + 1).max(4)
+        (total_doc_lines.ilog10() + 1).max(4)
     };
     let gutter_width = num_digits + 3;
 
@@ -356,7 +367,7 @@ fn render_text_with_gutter(f: &mut Frame, rect: Rect, text: Text<'static>, p: &P
         .split(rect);
 
     let gutter_style = Style::new().fg(p.gutter);
-    let gutter_lines: Vec<Line<'static>> = (1..=total)
+    let gutter_lines: Vec<Line<'static>> = (first_line_number..first_line_number + slice_len)
         .map(|n| {
             Line::from(Span::styled(
                 format!("{:>width$} | ", n, width = num_digits as usize),
