@@ -298,9 +298,14 @@ fn draw_mermaid_block(
         }
         Some(MermaidEntry::Ready(protocol)) => {
             if fully_visible {
+                use ratatui::widgets::Clear;
                 use ratatui_image::{Resize, StatefulImage};
+                // Clear the full rect so the padding band around the image
+                // doesn't show stale content left by previous frames.
+                f.render_widget(Clear, rect);
+                let padded = padded_rect(rect, 4, 1);
                 let image = StatefulImage::new().resize(Resize::Fit(None));
-                f.render_stateful_widget(image, rect, protocol.as_mut());
+                f.render_stateful_widget(image, padded, protocol.as_mut());
             } else {
                 render_mermaid_placeholder(f, rect, "scroll to view diagram", p);
             }
@@ -313,6 +318,20 @@ fn draw_mermaid_block(
             let footer = format!("[mermaid \u{2014} {}]", reason.clone());
             render_mermaid_source(f, rect, source, &footer, p);
         }
+    }
+}
+
+/// Shrink `rect` by `h` cells on the left/right and `v` cells on the top/bottom.
+/// If the rect is smaller than the total padding, returns it unchanged.
+fn padded_rect(rect: Rect, h: u16, v: u16) -> Rect {
+    if rect.width <= h * 2 || rect.height <= v * 2 {
+        return rect;
+    }
+    Rect {
+        x: rect.x + h,
+        y: rect.y + v,
+        width: rect.width - h * 2,
+        height: rect.height - v * 2,
     }
 }
 
