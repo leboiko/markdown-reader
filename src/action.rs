@@ -1,4 +1,4 @@
-use crossterm::event::KeyEvent;
+use crossterm::event::{KeyEvent, MouseEvent};
 use std::path::PathBuf;
 
 /// All actions that can be dispatched through the application event loop.
@@ -71,4 +71,7 @@ pub enum Action {
 
     /// Terminal was resized to the given (width, height).
     Resize(u16, u16),
+
+    /// Raw mouse event forwarded from crossterm.
+    Mouse(MouseEvent),
 }

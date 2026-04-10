@@ -40,6 +40,7 @@ impl EventHandler {
                     let action = match evt {
                         Event::Key(key) => Some(Action::RawKey(key)),
                         Event::Resize(w, h) => Some(Action::Resize(w, h)),
+                        Event::Mouse(m) => Some(Action::Mouse(m)),
                         _ => None,
                     };
                     if let Some(action) = action

@@ -9,9 +9,15 @@ use crate::ui::search_bar::{SearchMode, SearchResult, SearchState};
 use crate::ui::tab_picker::TabPickerState;
 use crate::ui::tabs::{OpenOutcome, Tabs};
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyModifiers};
+use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
+use ratatui::layout::Rect;
 use ratatui::prelude::*;
 use std::path::PathBuf;
+
+/// Returns `true` when terminal position `(col, row)` falls inside `rect`.
+fn contains(rect: Rect, col: u16, row: u16) -> bool {
+    col >= rect.x && col < rect.x + rect.width && row >= rect.y && row < rect.y + rect.height
+}
 
 /// Which panel currently receives keyboard input.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -408,6 +414,108 @@ impl App {
                 self.reload_changed_tabs(&changed);
             }
             Action::Resize(_, _) => {}
+            Action::Mouse(m) => self.handle_mouse(m),
+        }
+    }
+
+    fn handle_mouse(&mut self, m: crossterm::event::MouseEvent) {
+        let col = m.column;
+        let row = m.row;
+
+        match m.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                // Tab picker rows take priority when the picker is open.
+                let picker_hit = self
+                    .tab_picker_rects
+                    .iter()
+                    .find(|(_, rect)| contains(*rect, col, row))
+                    .map(|(id, _)| *id);
+
+                if let Some(id) = picker_hit {
+                    self.tabs.set_active(id);
+                    self.tab_picker = None;
+                    self.focus = Focus::Viewer;
+                    return;
+                }
+
+                // Tab bar click.
+                let tab_hit = self
+                    .tab_bar_rects
+                    .iter()
+                    .find(|(_, rect)| contains(*rect, col, row))
+                    .map(|(id, _)| *id);
+
+                if let Some(id) = tab_hit {
+                    self.tabs.set_active(id);
+                    self.focus = Focus::Viewer;
+                    return;
+                }
+
+                // Tree click.
+                if let Some(tree_rect) = self.tree_area_rect
+                    && contains(tree_rect, col, row)
+                {
+                    self.focus = Focus::Tree;
+                    // The List widget renders items inside the block border.
+                    // inner.y = tree_rect.y + 1 (top border).
+                    let inner_y = tree_rect.y + 1;
+                    if row >= inner_y {
+                        let viewport_row = (row - inner_y) as usize;
+                        let offset = self.tree.list_state.offset();
+                        let idx = offset + viewport_row;
+                        if idx < self.tree.flat_items.len() {
+                            self.tree.list_state.select(Some(idx));
+                            let item = self.tree.flat_items[idx].clone();
+                            if item.is_dir {
+                                self.tree.toggle_expand();
+                            } else {
+                                self.open_in_active_tab();
+                            }
+                        }
+                    }
+                    return;
+                }
+
+                // Viewer click.
+                if let Some(viewer_rect) = self.viewer_area_rect
+                    && contains(viewer_rect, col, row)
+                {
+                    self.focus = Focus::Viewer;
+                }
+            }
+            MouseEventKind::ScrollDown => {
+                if let Some(viewer_rect) = self.viewer_area_rect
+                    && contains(viewer_rect, col, row)
+                {
+                    let vh = self.tabs.view_height;
+                    if let Some(tab) = self.tabs.active_tab_mut() {
+                        tab.view.scroll_down(3, vh);
+                    }
+                } else if let Some(tree_rect) = self.tree_area_rect
+                    && contains(tree_rect, col, row)
+                {
+                    self.tree.move_down();
+                    self.tree.move_down();
+                    self.tree.move_down();
+                }
+            }
+            MouseEventKind::ScrollUp => {
+                if let Some(viewer_rect) = self.viewer_area_rect
+                    && contains(viewer_rect, col, row)
+                {
+                    let vh = self.tabs.view_height;
+                    if let Some(tab) = self.tabs.active_tab_mut() {
+                        tab.view.scroll_up(3, vh);
+                    }
+                } else if let Some(tree_rect) = self.tree_area_rect
+                    && contains(tree_rect, col, row)
+                {
+                    self.tree.move_up();
+                    self.tree.move_up();
+                    self.tree.move_up();
+                }
+            }
+            _ => {}
         }
     }
 
