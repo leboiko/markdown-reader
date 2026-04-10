@@ -25,6 +25,8 @@ pub enum Focus {
     DocSearch,
     /// The settings popup.
     Config,
+    /// Go-to-line prompt in the viewer.
+    GotoLine,
 }
 
 /// Transient state for the settings popup.
@@ -69,6 +71,13 @@ pub struct DocSearchState {
     pub current_match: usize,
 }
 
+/// State for the go-to-line prompt.
+#[derive(Debug, Default)]
+pub struct GotoLineState {
+    pub active: bool,
+    pub input: String,
+}
+
 /// Top-level application state.
 pub struct App {
     /// Set to `false` to break the event loop and exit.
@@ -85,6 +94,8 @@ pub struct App {
     pub search: SearchState,
     /// In-document search state.
     pub doc_search: DocSearchState,
+    /// Go-to-line prompt state.
+    pub goto_line: GotoLineState,
     /// Settings popup state; `None` when the popup is closed.
     pub config_popup: Option<ConfigPopupState>,
     /// Whether the help overlay is visible.
@@ -129,6 +140,7 @@ impl App {
             viewer: MarkdownViewState::default(),
             search: SearchState::default(),
             doc_search: DocSearchState::default(),
+            goto_line: GotoLineState::default(),
             config_popup: None,
             show_help: false,
             tree_hidden: false,
@@ -340,6 +352,7 @@ impl App {
             Focus::Tree => self.handle_tree_key(code, modifiers),
             Focus::Viewer => self.handle_viewer_key(code, modifiers),
             Focus::DocSearch => self.handle_doc_search_key(code, modifiers),
+            Focus::GotoLine => self.handle_goto_line_key(code),
             // Config is handled above; this arm is unreachable but required for exhaustiveness.
             Focus::Config => {}
         }
@@ -478,6 +491,43 @@ impl App {
                 self.pre_config_focus = Focus::Viewer;
                 self.config_popup = Some(ConfigPopupState::default());
                 self.focus = Focus::Config;
+            }
+            KeyCode::Char(':') => {
+                self.goto_line.active = true;
+                self.goto_line.input.clear();
+                self.focus = Focus::GotoLine;
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_goto_line_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Esc => {
+                self.goto_line.active = false;
+                self.goto_line.input.clear();
+                self.focus = Focus::Viewer;
+            }
+            KeyCode::Enter => {
+                if let Ok(n) = self.goto_line.input.parse::<u32>()
+                    && n > 0
+                    && self.viewer.total_lines > 0
+                {
+                    let max_line = self.viewer.total_lines;
+                    let target = n.min(max_line) - 1;
+                    self.viewer.scroll_offset = target;
+                }
+                self.goto_line.active = false;
+                self.goto_line.input.clear();
+                self.focus = Focus::Viewer;
+            }
+            KeyCode::Backspace => {
+                self.goto_line.input.pop();
+            }
+            KeyCode::Char(c) if c.is_ascii_digit() => {
+                if self.goto_line.input.len() < 9 {
+                    self.goto_line.input.push(c);
+                }
             }
             _ => {}
         }

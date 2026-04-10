@@ -1,6 +1,7 @@
 pub mod config_popup;
 pub mod doc_search_bar;
 pub mod file_tree;
+pub mod goto_line_bar;
 pub mod help;
 pub mod markdown_view;
 pub mod search_bar;
@@ -32,7 +33,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             chunks[0],
             app.focus == Focus::Viewer
                 || app.focus == Focus::DocSearch
-                || app.focus == Focus::Config,
+                || app.focus == Focus::Config
+                || app.focus == Focus::GotoLine,
         );
     } else {
         let main_chunks = Layout::default()
@@ -51,7 +53,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             main_chunks[1],
             app.focus == Focus::Viewer
                 || app.focus == Focus::DocSearch
-                || app.focus == Focus::Config,
+                || app.focus == Focus::Config
+                || app.focus == Focus::GotoLine,
         );
     }
 
@@ -63,6 +66,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     if app.doc_search.active {
         doc_search_bar::draw(f, app, viewer_area);
+    }
+
+    if app.goto_line.active {
+        goto_line_bar::draw(f, app, viewer_area);
     }
 
     if app.show_help {
