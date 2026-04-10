@@ -109,6 +109,13 @@ fn render_blocking(source: String, picker: &Picker) -> Result<StatefulProtocol, 
     Ok(picker.new_resize_protocol(img))
 }
 
+/// Multiplier applied to the SVG's intrinsic size when rasterizing. Mermaid's
+/// default SVG dimensions are small (a few hundred pixels), and ratatui-image's
+/// `Resize::Fit` preserves aspect without upscaling, so without this the image
+/// only fills a fraction of the viewer. SVG is vector so there is no quality
+/// loss; the extra pixels are downscaled to the rect as needed.
+const SVG_RENDER_SCALE: f32 = 3.0;
+
 /// Rasterize an SVG string to a `DynamicImage`.
 fn svg_to_image(svg: &str) -> Result<DynamicImage, String> {
     let opts = usvg::Options {
@@ -118,8 +125,8 @@ fn svg_to_image(svg: &str) -> Result<DynamicImage, String> {
     let tree = usvg::Tree::from_str(svg, &opts).map_err(|e| format!("usvg parse: {e}"))?;
 
     let size = tree.size();
-    let width = size.width() as u32;
-    let height = size.height() as u32;
+    let width = (size.width() * SVG_RENDER_SCALE).ceil() as u32;
+    let height = (size.height() * SVG_RENDER_SCALE).ceil() as u32;
     if width == 0 || height == 0 {
         return Err("empty SVG dimensions".to_string());
     }
@@ -129,7 +136,7 @@ fn svg_to_image(svg: &str) -> Result<DynamicImage, String> {
 
     resvg::render(
         &tree,
-        resvg::tiny_skia::Transform::identity(),
+        resvg::tiny_skia::Transform::from_scale(SVG_RENDER_SCALE, SVG_RENDER_SCALE),
         &mut pixmap.as_mut(),
     );
 
