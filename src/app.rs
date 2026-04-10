@@ -116,6 +116,12 @@ pub struct App {
     pub action_tx: Option<tokio::sync::mpsc::UnboundedSender<Action>>,
     /// Pending first character of a two-key chord (`[` or `]`).
     pub pending_chord: Option<char>,
+    /// Per-tab rects in the tab bar, populated during each draw for mouse hit-testing.
+    pub tab_bar_rects: Vec<(crate::ui::tabs::TabId, ratatui::layout::Rect)>,
+    /// Cached area of the file-tree panel for mouse hit-testing.
+    pub tree_area_rect: Option<ratatui::layout::Rect>,
+    /// Cached area of the viewer panel for mouse hit-testing.
+    pub viewer_area_rect: Option<ratatui::layout::Rect>,
 }
 
 impl App {
@@ -151,6 +157,9 @@ impl App {
             app_state,
             action_tx: None,
             pending_chord: None,
+            tab_bar_rects: Vec::new(),
+            tree_area_rect: None,
+            viewer_area_rect: None,
         };
 
         app.restore_session();

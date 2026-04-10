@@ -6,6 +6,7 @@ pub mod help;
 pub mod markdown_view;
 pub mod search_bar;
 pub mod status_bar;
+pub mod tab_bar;
 pub mod tabs;
 
 use crate::app::{App, Focus};
@@ -15,23 +16,41 @@ use ratatui::{
 };
 
 pub fn draw(f: &mut Frame, app: &mut App) {
-    let chunks = Layout::default()
+    let area = f.area();
+
+    let outer_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(1),
             Constraint::Length(if app.search.active { 3 } else { 0 }),
             Constraint::Length(1),
         ])
-        .split(f.area());
+        .split(area);
 
     let viewer_area;
 
     if app.tree_hidden {
-        viewer_area = chunks[0];
+        // No tree — tab bar spans the full width of the content area.
+        let has_tabs = !app.tabs.is_empty();
+        let tab_bar_height = if has_tabs { 1 } else { 0 };
+
+        let content_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(tab_bar_height),
+                Constraint::Min(1),
+            ])
+            .split(outer_chunks[0]);
+
+        if has_tabs {
+            tab_bar::draw(f, app, content_chunks[0]);
+        }
+
+        viewer_area = content_chunks[1];
         markdown_view::draw(
             f,
             app,
-            chunks[0],
+            viewer_area,
             app.focus == Focus::Viewer
                 || app.focus == Focus::DocSearch
                 || app.focus == Focus::Config
@@ -44,14 +63,39 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 Constraint::Percentage(app.tree_width_pct),
                 Constraint::Percentage(100 - app.tree_width_pct),
             ])
-            .split(chunks[0]);
+            .split(outer_chunks[0]);
 
-        viewer_area = main_chunks[1];
-        file_tree::draw(f, app, main_chunks[0], app.focus == Focus::Tree);
+        let tree_area = main_chunks[0];
+        let viewer_col = main_chunks[1];
+
+        file_tree::draw(f, app, tree_area, app.focus == Focus::Tree);
+
+        // Store the tree area for mouse hit-testing (populated after tree draw).
+        app.tree_area_rect = Some(tree_area);
+
+        // Tab bar sits above the viewer within the viewer column.
+        let has_tabs = !app.tabs.is_empty();
+        let tab_bar_height = if has_tabs { 1 } else { 0 };
+
+        let viewer_col_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(tab_bar_height),
+                Constraint::Min(1),
+            ])
+            .split(viewer_col);
+
+        if has_tabs {
+            tab_bar::draw(f, app, viewer_col_chunks[0]);
+        }
+
+        viewer_area = viewer_col_chunks[1];
+        app.viewer_area_rect = Some(viewer_area);
+
         markdown_view::draw(
             f,
             app,
-            main_chunks[1],
+            viewer_area,
             app.focus == Focus::Viewer
                 || app.focus == Focus::DocSearch
                 || app.focus == Focus::Config
@@ -60,10 +104,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
 
     if app.search.active {
-        search_bar::draw(f, app, chunks[1]);
+        search_bar::draw(f, app, outer_chunks[1]);
     }
 
-    status_bar::draw(f, app, chunks[2]);
+    status_bar::draw(f, app, outer_chunks[2]);
 
     let doc_search_active = app.doc_search().map(|ds| ds.active).unwrap_or(false);
     if doc_search_active {
@@ -89,3 +133,4 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         );
     }
 }
+
