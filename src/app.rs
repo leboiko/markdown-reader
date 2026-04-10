@@ -446,6 +446,7 @@ impl App {
                     .map(|(id, _)| *id);
 
                 if let Some(id) = tab_hit {
+                    self.commit_doc_search_if_active();
                     self.tabs.set_active(id);
                     self.focus = Focus::Viewer;
                     return;
@@ -606,6 +607,18 @@ impl App {
         self.tabs.rerender_all(&palette);
     }
 
+    /// Commit any in-progress doc-search and switch focus back to Viewer before
+    /// performing a tab switch.
+    ///
+    /// The plan requires: "if the user is mid-typing in Find (Focus::DocSearch)
+    /// and a tab switch happens, commit the current query to the active tab's
+    /// doc_search, return focus to Viewer, then perform the switch."
+    fn commit_doc_search_if_active(&mut self) {
+        if self.focus == Focus::DocSearch {
+            self.focus = Focus::Viewer;
+        }
+    }
+
     fn handle_tree_key(&mut self, code: KeyCode, _modifiers: KeyModifiers) {
         match code {
             KeyCode::Char('q') => self.running = false,
@@ -655,6 +668,7 @@ impl App {
         if let Some(leader) = chord {
             // We have a pending `[` or `]`; see if `t` completes it.
             if code == KeyCode::Char('t') {
+                self.commit_doc_search_if_active();
                 match leader {
                     ']' => self.tabs.next(),
                     '[' => self.tabs.prev(),
@@ -736,10 +750,17 @@ impl App {
                 }
             }
             // Backtick jumps to the previously active tab.
-            KeyCode::Char('`') => self.tabs.activate_previous(),
+            KeyCode::Char('`') => {
+                self.commit_doc_search_if_active();
+                self.tabs.activate_previous();
+            }
             // `1`–`9` jump to that tab by 1-based index; `0` jumps to the last.
-            KeyCode::Char('0') => self.tabs.activate_last(),
+            KeyCode::Char('0') => {
+                self.commit_doc_search_if_active();
+                self.tabs.activate_last();
+            }
             KeyCode::Char(c @ '1'..='9') => {
+                self.commit_doc_search_if_active();
                 self.tabs.activate_by_index((c as u8 - b'0') as usize);
             }
             // `T` opens the tab picker overlay.
