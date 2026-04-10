@@ -22,10 +22,16 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         height: bar_height,
     };
 
-    let total_info = if app.viewer.total_lines == 0 {
+    let total_lines = app
+        .tabs
+        .active_tab()
+        .map(|t| t.view.total_lines)
+        .unwrap_or(0);
+
+    let total_info = if total_lines == 0 {
         String::new()
     } else {
-        format!(" / {}", app.viewer.total_lines)
+        format!(" / {total_lines}")
     };
 
     let line = Line::from(vec![

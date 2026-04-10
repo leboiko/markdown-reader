@@ -5,8 +5,8 @@ use crate::fs::discovery::FileEntry;
 use crate::state::AppState;
 use crate::theme::{Palette, Theme};
 use crate::ui::file_tree::FileTreeState;
-use crate::ui::markdown_view::MarkdownViewState;
 use crate::ui::search_bar::{SearchMode, SearchResult, SearchState};
+use crate::ui::tabs::{OpenOutcome, Tabs};
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::prelude::*;
@@ -88,13 +88,11 @@ pub struct App {
     pub pre_config_focus: Focus,
     /// File-tree widget state.
     pub tree: FileTreeState,
-    /// Markdown viewer widget state.
-    pub viewer: MarkdownViewState,
+    /// All open document tabs (replaces the old single `viewer` field).
+    pub tabs: Tabs,
     /// Search overlay state.
     pub search: SearchState,
-    /// In-document search state.
-    pub doc_search: DocSearchState,
-    /// Go-to-line prompt state.
+    /// Go-to-line prompt state (ephemeral — global, not per-tab).
     pub goto_line: GotoLineState,
     /// Settings popup state; `None` when the popup is closed.
     pub config_popup: Option<ConfigPopupState>,
@@ -116,6 +114,8 @@ pub struct App {
     pub app_state: AppState,
     /// Sender injected into components that need to produce actions.
     pub action_tx: Option<tokio::sync::mpsc::UnboundedSender<Action>>,
+    /// Pending first character of a two-key chord (`[` or `]`).
+    pub pending_chord: Option<char>,
 }
 
 impl App {
@@ -137,9 +137,8 @@ impl App {
             focus: Focus::Tree,
             pre_config_focus: Focus::Tree,
             tree,
-            viewer: MarkdownViewState::default(),
+            tabs: Tabs::new(),
             search: SearchState::default(),
-            doc_search: DocSearchState::default(),
             goto_line: GotoLineState::default(),
             config_popup: None,
             show_help: false,
@@ -151,11 +150,26 @@ impl App {
             show_line_numbers: config.show_line_numbers,
             app_state,
             action_tx: None,
+            pending_chord: None,
         };
 
         app.restore_session();
         app
     }
+
+    // ── Accessor helpers ─────────────────────────────────────────────────────
+
+    /// Return a shared reference to the active tab's doc-search state, if any tab is open.
+    pub fn doc_search(&self) -> Option<&crate::app::DocSearchState> {
+        self.tabs.active_tab().map(|t| &t.doc_search)
+    }
+
+    /// Return a mutable reference to the active tab's doc-search state, if any tab is open.
+    pub fn doc_search_mut(&mut self) -> Option<&mut crate::app::DocSearchState> {
+        self.tabs.active_tab_mut().map(|t| &mut t.doc_search)
+    }
+
+    // ── Session ──────────────────────────────────────────────────────────────
 
     /// If a session exists for the current root and the saved file is still on
     /// disk, load it into the viewer and select it in the tree.
@@ -169,7 +183,6 @@ impl App {
             return;
         }
 
-        // Verify the file is under the current root.
         if !session.file.starts_with(&self.root) {
             return;
         }
@@ -185,21 +198,20 @@ impl App {
             .to_string_lossy()
             .to_string();
 
-        self.viewer
-            .load(session.file.clone(), name, content, &self.palette);
+        let (_, outcome) = self.tabs.open_or_focus(&session.file, true);
+        if matches!(outcome, OpenOutcome::Opened | OpenOutcome::Replaced) {
+            let tab = self.tabs.active_tab_mut().unwrap();
+            tab.view.load(session.file.clone(), name, content, &self.palette);
+            let max_scroll = tab.view.total_lines.saturating_sub(1);
+            tab.view.scroll_offset = session.scroll.min(max_scroll);
+        }
 
-        // Clamp scroll to document bounds.
-        let max_scroll = self.viewer.total_lines.saturating_sub(1);
-        self.viewer.scroll_offset = session.scroll.min(max_scroll);
-
-        // Expand tree directories along the file's path and select it.
         self.expand_and_select(&session.file);
         self.focus = Focus::Viewer;
     }
 
     /// Expand every ancestor directory of `file` in the tree and select the file.
     fn expand_and_select(&mut self, file: &PathBuf) {
-        // Collect ancestors between root and the file.
         let mut to_expand = Vec::new();
         let mut current = file.as_path();
         while let Some(parent) = current.parent() {
@@ -216,7 +228,6 @@ impl App {
         }
         self.tree.flatten_visible();
 
-        // Select the file in the flat list.
         for (i, item) in self.tree.flat_items.iter().enumerate() {
             if item.path == *file {
                 self.tree.list_state.select(Some(i));
@@ -227,10 +238,13 @@ impl App {
 
     /// Save the current session (open file + scroll offset) to disk.
     fn save_session(&mut self) {
-        let Some(path) = self.viewer.current_path.clone() else {
+        let Some(tab) = self.tabs.active_tab() else {
             return;
         };
-        let scroll = self.viewer.scroll_offset;
+        let Some(path) = tab.view.current_path.clone() else {
+            return;
+        };
+        let scroll = tab.view.scroll_offset;
         let root = self.root.clone();
         self.app_state.update_session(&root, path, scroll);
     }
@@ -243,6 +257,8 @@ impl App {
         }
         .save();
     }
+
+    // ── Event loop ───────────────────────────────────────────────────────────
 
     /// Run the main event loop until the user quits.
     pub async fn run(
@@ -263,7 +279,6 @@ impl App {
             }
 
             if !self.running {
-                // Save session state before exiting.
                 self.save_session();
                 break;
             }
@@ -283,13 +298,42 @@ impl App {
             Action::TreeToggle => self.tree.toggle_expand(),
             Action::TreeFirst => self.tree.go_first(),
             Action::TreeLast => self.tree.go_last(),
-            Action::TreeSelect => self.open_selected_file(),
-            Action::ScrollUp(n) => self.viewer.scroll_up(n),
-            Action::ScrollDown(n) => self.viewer.scroll_down(n),
-            Action::ScrollHalfPageUp => self.viewer.scroll_half_page_up(),
-            Action::ScrollHalfPageDown => self.viewer.scroll_half_page_down(),
-            Action::ScrollToTop => self.viewer.scroll_to_top(),
-            Action::ScrollToBottom => self.viewer.scroll_to_bottom(),
+            Action::TreeSelect => self.open_in_active_tab(),
+            Action::ScrollUp(n) => {
+                let vh = self.tabs.view_height;
+                if let Some(tab) = self.tabs.active_tab_mut() {
+                    tab.view.scroll_up(n, vh);
+                }
+            }
+            Action::ScrollDown(n) => {
+                let vh = self.tabs.view_height;
+                if let Some(tab) = self.tabs.active_tab_mut() {
+                    tab.view.scroll_down(n, vh);
+                }
+            }
+            Action::ScrollHalfPageUp => {
+                let vh = self.tabs.view_height;
+                if let Some(tab) = self.tabs.active_tab_mut() {
+                    tab.view.scroll_half_page_up(vh);
+                }
+            }
+            Action::ScrollHalfPageDown => {
+                let vh = self.tabs.view_height;
+                if let Some(tab) = self.tabs.active_tab_mut() {
+                    tab.view.scroll_half_page_down(vh);
+                }
+            }
+            Action::ScrollToTop => {
+                if let Some(tab) = self.tabs.active_tab_mut() {
+                    tab.view.scroll_to_top();
+                }
+            }
+            Action::ScrollToBottom => {
+                let vh = self.tabs.view_height;
+                if let Some(tab) = self.tabs.active_tab_mut() {
+                    tab.view.scroll_to_bottom(vh);
+                }
+            }
             Action::EnterSearch => {
                 self.search.activate();
                 self.focus = Focus::Search;
@@ -316,8 +360,8 @@ impl App {
             Action::FilesChanged(_changed) => {
                 let entries = FileEntry::discover(&self.root);
                 self.tree.rebuild(entries);
-                if self.viewer.current_path.is_some() {
-                    self.reload_current_file();
+                if self.tabs.active_tab().and_then(|t| t.view.current_path.as_ref()).is_some() {
+                    self.reload_current_tab();
                 }
             }
             Action::Resize(_, _) => {}
@@ -330,7 +374,6 @@ impl App {
             return;
         }
 
-        // Config popup captures all input when open.
         if self.focus == Focus::Config {
             self.handle_config_key(code);
             return;
@@ -353,7 +396,6 @@ impl App {
             Focus::Viewer => self.handle_viewer_key(code, modifiers),
             Focus::DocSearch => self.handle_doc_search_key(code, modifiers),
             Focus::GotoLine => self.handle_goto_line_key(code),
-            // Config is handled above; this arm is unreachable but required for exhaustiveness.
             Focus::Config => {}
         }
     }
@@ -389,30 +431,21 @@ impl App {
         let theme_count = Theme::ALL.len();
 
         if cursor < theme_count {
-            // Section 0: Theme
             let theme = Theme::ALL[cursor];
             self.theme = theme;
             self.palette = Palette::from_theme(theme);
-            // Re-render the open document so heading/code colors update.
-            self.rerender_current_doc();
+            self.rerender_all_tabs();
             self.persist_config();
         } else {
-            // Section 1: Markdown — only one option at index theme_count.
             self.show_line_numbers = !self.show_line_numbers;
             self.persist_config();
         }
     }
 
-    /// Re-render the current document with the active palette, preserving scroll.
-    fn rerender_current_doc(&mut self) {
-        let Some(path) = self.viewer.current_path.clone() else {
-            return;
-        };
-        let content = self.viewer.content.clone();
-        let name = self.viewer.file_name.clone();
-        let scroll = self.viewer.scroll_offset;
-        self.viewer.load(path, name, content, &self.palette);
-        self.viewer.scroll_offset = scroll.min(self.viewer.total_lines.saturating_sub(1));
+    /// Re-render every open tab with the active palette, preserving scroll offsets.
+    fn rerender_all_tabs(&mut self) {
+        let palette = self.palette;
+        self.tabs.rerender_all(&palette);
     }
 
     fn handle_tree_key(&mut self, code: KeyCode, _modifiers: KeyModifiers) {
@@ -425,10 +458,12 @@ impl App {
                     if item.is_dir {
                         self.tree.toggle_expand();
                     } else {
-                        self.open_selected_file();
+                        self.open_in_active_tab();
                     }
                 }
             }
+            // `t` in the tree opens the selected file in a new tab.
+            KeyCode::Char('t') => self.open_selected_file(true),
             KeyCode::Char('h') | KeyCode::Left => {
                 if let Some(item) = self.tree.selected_item().cloned()
                     && item.is_dir
@@ -456,33 +491,110 @@ impl App {
     }
 
     fn handle_viewer_key(&mut self, code: KeyCode, modifiers: KeyModifiers) {
+        // Consume and resolve any pending chord first.
+        let chord = self.pending_chord.take();
+
+        if let Some(leader) = chord {
+            // We have a pending `[` or `]`; see if `t` completes it.
+            if code == KeyCode::Char('t') {
+                match leader {
+                    ']' => self.tabs.next(),
+                    '[' => self.tabs.prev(),
+                    _ => {}
+                }
+                return;
+            }
+            // Chord not completed — fall through and handle the current key
+            // normally (the leader is dropped).
+        }
+
         match code {
             KeyCode::Esc => {
-                self.doc_search.active = false;
-                self.doc_search.query.clear();
-                self.doc_search.match_lines.clear();
+                if let Some(ds) = self.doc_search_mut() {
+                    ds.active = false;
+                    ds.query.clear();
+                    ds.match_lines.clear();
+                }
             }
             KeyCode::Char('q') => self.running = false,
-            KeyCode::Char('j') | KeyCode::Down => self.viewer.scroll_down(1),
-            KeyCode::Char('k') | KeyCode::Up => self.viewer.scroll_up(1),
-            KeyCode::Char('d') => self.viewer.scroll_half_page_down(),
-            KeyCode::Char('u') => self.viewer.scroll_half_page_up(),
-            KeyCode::PageDown => self.viewer.scroll_page_down(),
-            KeyCode::PageUp => self.viewer.scroll_page_up(),
-            KeyCode::Char('g') => self.viewer.scroll_to_top(),
-            KeyCode::Char('G') => self.viewer.scroll_to_bottom(),
+            KeyCode::Char('j') | KeyCode::Down => {
+                let vh = self.tabs.view_height;
+                if let Some(tab) = self.tabs.active_tab_mut() {
+                    tab.view.scroll_down(1, vh);
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                let vh = self.tabs.view_height;
+                if let Some(tab) = self.tabs.active_tab_mut() {
+                    tab.view.scroll_up(1, vh);
+                }
+            }
+            KeyCode::Char('d') => {
+                let vh = self.tabs.view_height;
+                if let Some(tab) = self.tabs.active_tab_mut() {
+                    tab.view.scroll_half_page_down(vh);
+                }
+            }
+            KeyCode::Char('u') => {
+                let vh = self.tabs.view_height;
+                if let Some(tab) = self.tabs.active_tab_mut() {
+                    tab.view.scroll_half_page_up(vh);
+                }
+            }
+            KeyCode::PageDown => {
+                let vh = self.tabs.view_height;
+                if let Some(tab) = self.tabs.active_tab_mut() {
+                    tab.view.scroll_page_down(vh);
+                }
+            }
+            KeyCode::PageUp => {
+                let vh = self.tabs.view_height;
+                if let Some(tab) = self.tabs.active_tab_mut() {
+                    tab.view.scroll_page_up(vh);
+                }
+            }
+            KeyCode::Char('g') => {
+                if let Some(tab) = self.tabs.active_tab_mut() {
+                    tab.view.scroll_to_top();
+                }
+            }
+            KeyCode::Char('G') => {
+                let vh = self.tabs.view_height;
+                if let Some(tab) = self.tabs.active_tab_mut() {
+                    tab.view.scroll_to_bottom(vh);
+                }
+            }
             KeyCode::Tab => self.focus = Focus::Tree,
-            KeyCode::Char('[') => self.shrink_tree(),
-            KeyCode::Char(']') => self.grow_tree(),
+            // Latch the chord leader; `]t` / `[t` will be resolved next keystroke.
+            KeyCode::Char('[') => self.pending_chord = Some('['),
+            KeyCode::Char(']') => self.pending_chord = Some(']'),
+            // `x` closes the active tab.
+            KeyCode::Char('x') => {
+                if let Some(id) = self.tabs.active {
+                    self.tabs.close(id);
+                    if self.tabs.is_empty() {
+                        self.focus = Focus::Tree;
+                    }
+                }
+            }
+            // Backtick jumps to the previously active tab.
+            KeyCode::Char('`') => self.tabs.activate_previous(),
+            // `1`–`9` jump to that tab by 1-based index; `0` jumps to the last.
+            KeyCode::Char('0') => self.tabs.activate_last(),
+            KeyCode::Char(c @ '1'..='9') => {
+                self.tabs.activate_by_index((c as u8 - b'0') as usize);
+            }
             KeyCode::Char('/') => {
                 self.search.activate();
                 self.focus = Focus::Search;
             }
             KeyCode::Char('f') if modifiers.contains(KeyModifiers::CONTROL) => {
-                self.doc_search.active = true;
-                self.doc_search.query.clear();
-                self.doc_search.match_lines.clear();
-                self.doc_search.current_match = 0;
+                if let Some(ds) = self.doc_search_mut() {
+                    ds.active = true;
+                    ds.query.clear();
+                    ds.match_lines.clear();
+                    ds.current_match = 0;
+                }
                 self.focus = Focus::DocSearch;
             }
             KeyCode::Char('n') => self.doc_search_next(),
@@ -511,11 +623,14 @@ impl App {
             KeyCode::Enter => {
                 if let Ok(n) = self.goto_line.input.parse::<u32>()
                     && n > 0
-                    && self.viewer.total_lines > 0
                 {
-                    let max_line = self.viewer.total_lines;
-                    let target = n.min(max_line) - 1;
-                    self.viewer.scroll_offset = target;
+                    let tab = self.tabs.active_tab_mut();
+                    if let Some(tab) = tab
+                        && tab.view.total_lines > 0
+                    {
+                        let max_line = tab.view.total_lines;
+                        tab.view.scroll_offset = n.min(max_line) - 1;
+                    }
                 }
                 self.goto_line.active = false;
                 self.goto_line.input.clear();
@@ -536,20 +651,26 @@ impl App {
     fn handle_doc_search_key(&mut self, code: KeyCode, _modifiers: KeyModifiers) {
         match code {
             KeyCode::Esc => {
-                self.doc_search.active = false;
-                self.doc_search.query.clear();
-                self.doc_search.match_lines.clear();
+                if let Some(ds) = self.doc_search_mut() {
+                    ds.active = false;
+                    ds.query.clear();
+                    ds.match_lines.clear();
+                }
                 self.focus = Focus::Viewer;
             }
             KeyCode::Enter => {
                 self.focus = Focus::Viewer;
             }
             KeyCode::Backspace => {
-                self.doc_search.query.pop();
+                if let Some(ds) = self.doc_search_mut() {
+                    ds.query.pop();
+                }
                 self.perform_doc_search();
             }
             KeyCode::Char(c) => {
-                self.doc_search.query.push(c);
+                if let Some(ds) = self.doc_search_mut() {
+                    ds.query.push(c);
+                }
                 self.perform_doc_search();
             }
             KeyCode::Down => self.doc_search_next(),
@@ -589,11 +710,18 @@ impl App {
         }
     }
 
-    fn open_selected_file(&mut self) {
-        let Some(path) = self.tree.selected_path().map(|p| p.to_path_buf()) else {
-            return;
-        };
+    // ── File opening ─────────────────────────────────────────────────────────
 
+    /// Open the selected tree item in the active tab (replacing its content).
+    fn open_in_active_tab(&mut self) {
+        self.open_selected_file(false);
+    }
+
+    /// Open `path` in a tab.
+    ///
+    /// `new_tab == true` pushes a new tab (or focuses an existing one with the
+    /// same path). `new_tab == false` replaces the active tab's content.
+    pub fn open_or_focus(&mut self, path: PathBuf, new_tab: bool) {
         if path.is_dir() {
             return;
         }
@@ -608,16 +736,30 @@ impl App {
             .to_string_lossy()
             .to_string();
 
-        self.viewer.load(path.clone(), name, content, &self.palette);
-        self.focus = Focus::Viewer;
+        let (_, outcome) = self.tabs.open_or_focus(&path, new_tab);
+        if matches!(outcome, OpenOutcome::Opened | OpenOutcome::Replaced) {
+            let palette = self.palette;
+            let tab = self.tabs.active_tab_mut().unwrap();
+            tab.view.load(path.clone(), name, content, &palette);
+        }
 
-        // Persist: new file opened, scroll is 0.
+        self.focus = Focus::Viewer;
         let root = self.root.clone();
         self.app_state.update_session(&root, path, 0);
     }
 
-    fn reload_current_file(&mut self) {
-        let Some(current_path) = self.viewer.current_path.clone() else {
+    fn open_selected_file(&mut self, new_tab: bool) {
+        let Some(path) = self.tree.selected_path().map(|p| p.to_path_buf()) else {
+            return;
+        };
+        self.open_or_focus(path, new_tab);
+    }
+
+    fn reload_current_tab(&mut self) {
+        let Some(tab) = self.tabs.active_tab() else {
+            return;
+        };
+        let Some(current_path) = tab.view.current_path.clone() else {
             return;
         };
         let Ok(content) = std::fs::read_to_string(&current_path) else {
@@ -628,11 +770,14 @@ impl App {
             .unwrap_or_default()
             .to_string_lossy()
             .to_string();
-        let scroll = self.viewer.scroll_offset;
-        self.viewer.load(current_path, name, content, &self.palette);
-        // Preserve scroll after hot-reload.
-        self.viewer.scroll_offset = scroll.min(self.viewer.total_lines.saturating_sub(1));
+        let scroll = tab.view.scroll_offset;
+        let palette = self.palette;
+        let tab = self.tabs.active_tab_mut().unwrap();
+        tab.view.load(current_path, name, content, &palette);
+        tab.view.scroll_offset = scroll.min(tab.view.total_lines.saturating_sub(1));
     }
+
+    // ── Search ───────────────────────────────────────────────────────────────
 
     fn perform_search(&mut self) {
         self.search.results.clear();
@@ -691,7 +836,13 @@ impl App {
             let name = result.name;
             let result_path = result.path;
 
-            self.viewer.load(path.clone(), name, content, &self.palette);
+            let (_, outcome) = self.tabs.open_or_focus(&path, true);
+            if matches!(outcome, OpenOutcome::Opened | OpenOutcome::Replaced) {
+                let palette = self.palette;
+                let tab = self.tabs.active_tab_mut().unwrap();
+                tab.view.load(path.clone(), name, content, &palette);
+            }
+
             self.search.active = false;
             self.focus = Focus::Viewer;
 
@@ -716,47 +867,66 @@ impl App {
     }
 
     fn perform_doc_search(&mut self) {
-        self.doc_search.match_lines.clear();
-        self.doc_search.current_match = 0;
+        let query = match self.doc_search() {
+            Some(ds) => ds.query.clone(),
+            None => return,
+        };
 
-        if self.doc_search.query.is_empty() {
+        if let Some(ds) = self.doc_search_mut() {
+            ds.match_lines.clear();
+            ds.current_match = 0;
+        }
+
+        if query.is_empty() {
             return;
         }
 
-        let query_lower = self.doc_search.query.to_lowercase();
+        let query_lower = query.to_lowercase();
 
-        for (i, line) in self.viewer.rendered.lines.iter().enumerate() {
+        let tab = match self.tabs.active_tab_mut() {
+            Some(t) => t,
+            None => return,
+        };
+
+        for (i, line) in tab.view.rendered.lines.iter().enumerate() {
             let line_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
             if line_text.to_lowercase().contains(&query_lower) {
-                self.doc_search.match_lines.push(i as u32);
+                tab.doc_search.match_lines.push(i as u32);
             }
         }
 
-        if let Some(&line) = self.doc_search.match_lines.first() {
-            self.viewer.scroll_offset = line;
+        if let Some(&line) = tab.doc_search.match_lines.first() {
+            tab.view.scroll_offset = line;
         }
     }
 
     fn doc_search_next(&mut self) {
-        if self.doc_search.match_lines.is_empty() {
+        let Some(tab) = self.tabs.active_tab_mut() else {
+            return;
+        };
+        let ds = &mut tab.doc_search;
+        if ds.match_lines.is_empty() {
             return;
         }
-        self.doc_search.current_match =
-            (self.doc_search.current_match + 1) % self.doc_search.match_lines.len();
-        let line = self.doc_search.match_lines[self.doc_search.current_match];
-        self.viewer.scroll_offset = line;
+        ds.current_match = (ds.current_match + 1) % ds.match_lines.len();
+        let line = ds.match_lines[ds.current_match];
+        tab.view.scroll_offset = line;
     }
 
     fn doc_search_prev(&mut self) {
-        if self.doc_search.match_lines.is_empty() {
+        let Some(tab) = self.tabs.active_tab_mut() else {
+            return;
+        };
+        let ds = &mut tab.doc_search;
+        if ds.match_lines.is_empty() {
             return;
         }
-        self.doc_search.current_match = if self.doc_search.current_match == 0 {
-            self.doc_search.match_lines.len() - 1
+        ds.current_match = if ds.current_match == 0 {
+            ds.match_lines.len() - 1
         } else {
-            self.doc_search.current_match - 1
+            ds.current_match - 1
         };
-        let line = self.doc_search.match_lines[self.doc_search.current_match];
-        self.viewer.scroll_offset = line;
+        let line = ds.match_lines[ds.current_match];
+        tab.view.scroll_offset = line;
     }
 }

@@ -11,6 +11,10 @@ use std::borrow::Cow;
 use std::path::PathBuf;
 
 /// Runtime state for the markdown preview panel.
+///
+/// `view_height` has been lifted to [`crate::ui::tabs::Tabs`] because it is a
+/// viewport property, not a document property — a single height update applies
+/// to every tab.
 #[derive(Debug, Default)]
 pub struct MarkdownViewState {
     /// Raw markdown source of the currently displayed file.
@@ -25,8 +29,6 @@ pub struct MarkdownViewState {
     pub current_path: Option<PathBuf>,
     /// Total number of rendered lines.
     pub total_lines: u32,
-    /// Inner height of the panel (rows minus borders), updated each draw call.
-    pub view_height: u32,
 }
 
 impl MarkdownViewState {
@@ -47,37 +49,37 @@ impl MarkdownViewState {
         self.scroll_offset = 0;
     }
 
-    pub fn scroll_up(&mut self, n: u16) {
+    pub fn scroll_up(&mut self, n: u16, _view_height: u32) {
         self.scroll_offset = self.scroll_offset.saturating_sub(n as u32);
     }
 
-    pub fn scroll_down(&mut self, n: u16) {
-        let max = self.total_lines.saturating_sub(self.view_height / 2);
+    pub fn scroll_down(&mut self, n: u16, view_height: u32) {
+        let max = self.total_lines.saturating_sub(view_height / 2);
         self.scroll_offset = (self.scroll_offset + n as u32).min(max);
     }
 
-    pub fn scroll_half_page_up(&mut self) {
-        self.scroll_up((self.view_height / 2) as u16);
+    pub fn scroll_half_page_up(&mut self, view_height: u32) {
+        self.scroll_up((view_height / 2) as u16, view_height);
     }
 
-    pub fn scroll_half_page_down(&mut self) {
-        self.scroll_down((self.view_height / 2) as u16);
+    pub fn scroll_half_page_down(&mut self, view_height: u32) {
+        self.scroll_down((view_height / 2) as u16, view_height);
     }
 
-    pub fn scroll_page_up(&mut self) {
-        self.scroll_up(self.view_height as u16);
+    pub fn scroll_page_up(&mut self, view_height: u32) {
+        self.scroll_up(view_height as u16, view_height);
     }
 
-    pub fn scroll_page_down(&mut self) {
-        self.scroll_down(self.view_height as u16);
+    pub fn scroll_page_down(&mut self, view_height: u32) {
+        self.scroll_down(view_height as u16, view_height);
     }
 
     pub fn scroll_to_top(&mut self) {
         self.scroll_offset = 0;
     }
 
-    pub fn scroll_to_bottom(&mut self) {
-        self.scroll_offset = self.total_lines.saturating_sub(self.view_height / 2);
+    pub fn scroll_to_bottom(&mut self, view_height: u32) {
+        self.scroll_offset = self.total_lines.saturating_sub(view_height / 2);
     }
 }
 
@@ -91,10 +93,13 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
         p.border_style()
     };
 
-    let title: Cow<str> = if app.viewer.file_name.is_empty() {
+    let active_tab = app.tabs.active_tab();
+    let file_name = active_tab.map(|t| t.view.file_name.as_str()).unwrap_or("");
+
+    let title: Cow<str> = if file_name.is_empty() {
         Cow::Borrowed(" Preview ")
     } else {
-        Cow::Owned(format!(" {} ", app.viewer.file_name))
+        Cow::Owned(format!(" {file_name} "))
     };
 
     let block = Block::default()
@@ -104,9 +109,15 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
         .border_style(border_style);
 
     // Update view height for scroll calculations (subtract two border rows).
-    app.viewer.view_height = area.height.saturating_sub(2) as u32;
+    app.tabs.view_height = area.height.saturating_sub(2) as u32;
 
-    if app.viewer.content.is_empty() {
+    let has_content = app
+        .tabs
+        .active_tab()
+        .map(|t| !t.view.content.is_empty())
+        .unwrap_or(false);
+
+    if !has_content {
         let empty = Paragraph::new("No file selected. Select a markdown file from the tree.")
             .style(p.dim_style().bg(p.background))
             .block(block);
@@ -114,17 +125,18 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
         return;
     }
 
-    let scroll_row = app.viewer.scroll_offset.min(u16::MAX as u32) as u16;
+    let tab = app.tabs.active_tab().unwrap();
+    let scroll_row = tab.view.scroll_offset.min(u16::MAX as u32) as u16;
 
-    let text = if !app.doc_search.query.is_empty() && !app.doc_search.match_lines.is_empty() {
-        let current_line = app
+    let text = if !tab.doc_search.query.is_empty() && !tab.doc_search.match_lines.is_empty() {
+        let current_line = tab
             .doc_search
             .match_lines
-            .get(app.doc_search.current_match)
+            .get(tab.doc_search.current_match)
             .copied();
-        highlight_matches(&app.viewer.rendered, &app.doc_search.query, current_line, p)
+        highlight_matches(&tab.view.rendered, &tab.doc_search.query, current_line, p)
     } else {
-        app.viewer.rendered.clone()
+        tab.view.rendered.clone()
     };
 
     if app.show_line_numbers {
@@ -151,29 +163,24 @@ fn render_with_gutter(
     p: &Palette,
 ) {
     let total = text.lines.len() as u32;
-    // Width needed to display the largest line number, minimum 4 digits.
     let num_digits = if total == 0 {
         4
     } else {
         (total.ilog10() + 1).max(4)
     };
-    // Gutter: digits + " │ " separator (3 chars).
     let gutter_width = num_digits + 3;
 
-    // Split the inner area (after the block border) into gutter | content.
-    // We render the block first to claim its border, then work inside it.
     let inner = block.inner(area);
     f.render_widget(block, area);
 
     let chunks = Layout::horizontal([Constraint::Length(gutter_width as u16), Constraint::Min(0)])
         .split(inner);
 
-    // Build gutter lines: right-aligned 1-indexed numbers.
     let gutter_style = Style::new().fg(p.gutter);
     let gutter_lines: Vec<Line<'static>> = (1..=total)
         .map(|n| {
             Line::from(Span::styled(
-                format!("{:>width$} │ ", n, width = num_digits as usize),
+                format!("{:>width$} | ", n, width = num_digits as usize),
                 gutter_style,
             ))
         })
@@ -216,11 +223,7 @@ fn highlight_matches(
             }
 
             let is_current = current_line == Some(line_idx as u32);
-            let hl_style = if is_current {
-                current_style
-            } else {
-                match_style
-            };
+            let hl_style = if is_current { current_style } else { match_style };
 
             let mut new_spans: Vec<Span<'static>> = Vec::new();
             for span in &line.spans {

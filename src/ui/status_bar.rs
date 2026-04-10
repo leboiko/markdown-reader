@@ -20,15 +20,19 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         Focus::GotoLine => "GOTO",
     };
 
-    let file_info = if app.viewer.file_name.is_empty() {
-        String::new()
-    } else {
-        let pct = if app.viewer.total_lines == 0 {
+    let tab_count = app.tabs.len();
+    let file_info = if let Some(tab) = app.tabs.active_tab()
+        && !tab.view.file_name.is_empty()
+    {
+        let pct = if tab.view.total_lines == 0 {
             0u32
         } else {
-            (app.viewer.scroll_offset * 100 / app.viewer.total_lines.max(1)).min(100)
+            (tab.view.scroll_offset * 100 / tab.view.total_lines.max(1)).min(100)
         };
-        format!(" │ {} ({}%)", app.viewer.file_name, pct)
+        let tab_idx = app.tabs.active_index().map(|i| i + 1).unwrap_or(0);
+        format!(" | [{tab_idx}/{tab_count}] {} ({}%)", tab.view.file_name, pct)
+    } else {
+        String::new()
     };
 
     let line = Line::from(vec![

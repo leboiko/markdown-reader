@@ -22,23 +22,23 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         height: bar_height,
     };
 
-    let match_info = if app.doc_search.match_lines.is_empty() {
-        if app.doc_search.query.is_empty() {
+    let Some(ds) = app.doc_search() else {
+        return;
+    };
+
+    let match_info = if ds.match_lines.is_empty() {
+        if ds.query.is_empty() {
             String::new()
         } else {
             " No matches".to_string()
         }
     } else {
-        format!(
-            " [{}/{}]",
-            app.doc_search.current_match + 1,
-            app.doc_search.match_lines.len()
-        )
+        format!(" [{}/{}]", ds.current_match + 1, ds.match_lines.len())
     };
 
     let line = Line::from(vec![
         Span::styled(" Find: ", Style::default().fg(p.accent_alt)),
-        Span::raw(&app.doc_search.query),
+        Span::raw(ds.query.clone()),
         Span::styled(
             "█",
             Style::default()
