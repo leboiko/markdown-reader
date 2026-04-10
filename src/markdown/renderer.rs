@@ -1,29 +1,41 @@
-use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
+use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
 };
 
+use crate::markdown::{DocBlock, MermaidBlockId};
 use crate::theme::Palette;
 
-/// Render a markdown string into a ratatui [`Text`] value ready for display.
+/// Render a markdown string into a sequence of [`DocBlock`] values.
 ///
-/// All colors are sourced from `palette` so the output reflects the active theme.
-pub fn render_markdown(content: &str, palette: &Palette) -> Text<'static> {
+/// Mermaid fenced code blocks produce [`DocBlock::Mermaid`] entries; all other
+/// content is grouped into [`DocBlock::Text`] runs. Consecutive text lines are
+/// merged so there is at most one `Text` block between two `Mermaid` blocks.
+pub fn render_markdown(content: &str, palette: &Palette) -> Vec<DocBlock> {
     let opts = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
     let parser = Parser::new_ext(content, opts);
-    let mut renderer = MdRenderer::new(palette);
-    renderer.render(parser);
-    Text::from(renderer.lines)
+    let renderer = MdRenderer::new(palette);
+    renderer.render(parser)
 }
 
+// ── Internal renderer ────────────────────────────────────────────────────────
+
 struct MdRenderer {
+    /// Accumulates lines for the current `Text` block.
     lines: Vec<Line<'static>>,
+    /// Completed blocks emitted so far.
+    blocks: Vec<DocBlock>,
     current_spans: Vec<Span<'static>>,
     style_stack: Vec<Style>,
     list_depth: usize,
     list_counters: Vec<Option<u64>>,
     in_code_block: bool,
+    /// `Some(lang)` when inside a fenced block — `None` for indented blocks.
+    code_block_lang: Option<String>,
     code_block_content: Vec<String>,
     in_heading: bool,
     heading_level: u8,
@@ -34,7 +46,6 @@ struct MdRenderer {
     table_rows: Vec<Vec<String>>,
     table_header_row: Option<Vec<String>>,
     table_header: bool,
-    // Captured palette colors — stored as Color to avoid a lifetime on MdRenderer.
     h1: Color,
     h2: Color,
     h3: Color,
@@ -57,11 +68,13 @@ impl MdRenderer {
     fn new(palette: &Palette) -> Self {
         Self {
             lines: Vec::new(),
+            blocks: Vec::new(),
             current_spans: Vec::new(),
             style_stack: vec![Style::default()],
             list_depth: 0,
             list_counters: Vec::new(),
             in_code_block: false,
+            code_block_lang: None,
             code_block_content: Vec::new(),
             in_heading: false,
             heading_level: 0,
@@ -130,7 +143,15 @@ impl MdRenderer {
         self.lines.push(Line::from(""));
     }
 
-    fn render(&mut self, parser: Parser) {
+    /// Drain `self.lines` into a `DocBlock::Text` if there are any pending lines.
+    fn flush_text_block(&mut self) {
+        if !self.lines.is_empty() {
+            let lines = std::mem::take(&mut self.lines);
+            self.blocks.push(DocBlock::Text(Text::from(lines)));
+        }
+    }
+
+    fn render(mut self, parser: Parser) -> Vec<DocBlock> {
         for event in parser {
             match event {
                 Event::Start(tag) => self.start_tag(tag),
@@ -172,6 +193,8 @@ impl MdRenderer {
         if !self.current_spans.is_empty() {
             self.flush_line();
         }
+        self.flush_text_block();
+        self.blocks
     }
 
     fn start_tag(&mut self, tag: Tag) {
@@ -204,8 +227,15 @@ impl MdRenderer {
                 self.in_blockquote = true;
                 self.push_style(Style::default().fg(self.block_quote_fg));
             }
-            Tag::CodeBlock(_) => {
+            Tag::CodeBlock(kind) => {
                 self.in_code_block = true;
+                self.code_block_lang = match &kind {
+                    CodeBlockKind::Fenced(lang) => {
+                        let s = lang.trim().to_lowercase();
+                        if s.is_empty() { None } else { Some(s) }
+                    }
+                    CodeBlockKind::Indented => None,
+                };
                 self.code_block_content.clear();
                 self.flush_line();
             }
@@ -287,8 +317,13 @@ impl MdRenderer {
                 self.push_blank_line();
             }
             TagEnd::CodeBlock => {
-                self.render_code_block();
+                if self.code_block_lang.as_deref() == Some("mermaid") {
+                    self.emit_mermaid_block();
+                } else {
+                    self.render_code_block();
+                }
                 self.in_code_block = false;
+                self.code_block_lang = None;
             }
             TagEnd::List(_) => {
                 self.list_depth = self.list_depth.saturating_sub(1);
@@ -343,6 +378,20 @@ impl MdRenderer {
             self.current_spans
                 .push(Span::styled(text.to_string(), self.current_style()));
         }
+    }
+
+    /// Flush accumulated code lines as a `DocBlock::Mermaid`, preceded by any
+    /// pending text lines as a `DocBlock::Text`.
+    fn emit_mermaid_block(&mut self) {
+        self.flush_text_block();
+
+        let source = self.code_block_content.join("\n");
+        self.code_block_content.clear();
+
+        let id = MermaidBlockId(hash_str(&source));
+        self.blocks.push(DocBlock::Mermaid { id, source });
+        // Blank line after the diagram (will open a new Text block).
+        self.push_blank_line();
     }
 
     fn render_code_block(&mut self) {
@@ -459,4 +508,10 @@ impl MdRenderer {
         self.table_rows.clear();
         self.push_blank_line();
     }
+}
+
+fn hash_str(s: &str) -> u64 {
+    let mut h = DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
 }

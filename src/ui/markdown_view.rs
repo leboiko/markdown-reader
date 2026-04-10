@@ -1,4 +1,5 @@
 use crate::app::App;
+use crate::markdown::{DocBlock, MERMAID_BLOCK_HEIGHT};
 use crate::theme::Palette;
 use ratatui::{
     Frame,
@@ -11,38 +12,28 @@ use std::borrow::Cow;
 use std::path::PathBuf;
 
 /// Runtime state for the markdown preview panel.
-///
-/// `view_height` has been lifted to [`crate::ui::tabs::Tabs`] because it is a
-/// viewport property, not a document property — a single height update applies
-/// to every tab.
 #[derive(Debug, Default)]
 pub struct MarkdownViewState {
     /// Raw markdown source of the currently displayed file.
     pub content: String,
-    /// Pre-rendered ratatui `Text` produced by the markdown renderer.
-    pub rendered: Text<'static>,
-    /// Current scroll offset in rendered lines.
+    /// Pre-rendered block sequence produced by the markdown renderer.
+    pub rendered: Vec<DocBlock>,
+    /// Current scroll offset in display lines.
     pub scroll_offset: u32,
     /// Display name shown in the panel title.
     pub file_name: String,
-    /// Absolute path of the loaded file, used for accurate hot-reload matching.
+    /// Absolute path of the loaded file.
     pub current_path: Option<PathBuf>,
-    /// Total number of rendered lines.
+    /// Total number of display lines across all blocks.
     pub total_lines: u32,
 }
 
 impl MarkdownViewState {
     /// Load a file into the viewer, resetting the scroll position.
-    ///
-    /// # Arguments
-    ///
-    /// * `path`      - Absolute path to the file (used for hot-reload matching).
-    /// * `file_name` - Display name shown in the panel title.
-    /// * `content`   - Raw markdown text to render.
-    /// * `palette`   - Active palette used to color the rendered output.
     pub fn load(&mut self, path: PathBuf, file_name: String, content: String, palette: &Palette) {
-        self.rendered = crate::markdown::renderer::render_markdown(&content, palette);
-        self.total_lines = self.rendered.lines.len() as u32;
+        let blocks = crate::markdown::renderer::render_markdown(&content, palette);
+        self.total_lines = blocks.iter().map(|b| b.height()).sum();
+        self.rendered = blocks;
         self.content = content;
         self.file_name = file_name;
         self.current_path = Some(path);
@@ -81,11 +72,29 @@ impl MarkdownViewState {
     pub fn scroll_to_bottom(&mut self, view_height: u32) {
         self.scroll_offset = self.total_lines.saturating_sub(view_height / 2);
     }
+
+    /// Iterate only `Text` blocks, yielding `(start_line, &Text)`.
+    ///
+    /// Used by doc-search, which cannot operate on binary image data.
+    pub fn text_blocks(&self) -> impl Iterator<Item = (u32, &Text<'static>)> {
+        let mut offset = 0u32;
+        self.rendered.iter().filter_map(move |block| match block {
+            DocBlock::Text(t) => {
+                let start = offset;
+                offset += t.lines.len() as u32;
+                Some((start, t))
+            }
+            DocBlock::Mermaid { .. } => {
+                offset += MERMAID_BLOCK_HEIGHT;
+                None
+            }
+        })
+    }
 }
 
 /// Render the markdown preview panel into `area`.
 pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
-    let p = &app.palette;
+    let p = app.palette;
 
     let border_style = if focused {
         p.border_focused_style()
@@ -108,7 +117,6 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
         .borders(Borders::ALL)
         .border_style(border_style);
 
-    // Update view height for scroll calculations (subtract two border rows).
     app.tabs.view_height = area.height.saturating_sub(2) as u32;
 
     let has_content = app
@@ -125,43 +133,202 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
         return;
     }
 
-    let tab = app.tabs.active_tab().unwrap();
-    let scroll_row = tab.view.scroll_offset.min(u16::MAX as u32) as u16;
+    let view_height = app.tabs.view_height;
+    let inner = block.inner(area);
+    f.render_widget(block, area);
 
-    let text = if !tab.doc_search.query.is_empty() && !tab.doc_search.match_lines.is_empty() {
-        let current_line = tab
-            .doc_search
-            .match_lines
-            .get(tab.doc_search.current_match)
-            .copied();
-        highlight_matches(&tab.view.rendered, &tab.doc_search.query, current_line, p)
+    let tab = app.tabs.active_tab().unwrap();
+    let scroll_offset = tab.view.scroll_offset;
+
+    let doc_search_query = if !tab.doc_search.query.is_empty() && !tab.doc_search.match_lines.is_empty() {
+        Some((tab.doc_search.query.clone(), tab.doc_search.match_lines.get(tab.doc_search.current_match).copied()))
     } else {
-        tab.view.rendered.clone()
+        None
     };
 
-    if app.show_line_numbers {
-        render_with_gutter(f, area, block, text, scroll_row, p);
-    } else {
-        let paragraph = Paragraph::new(text)
-            .block(block)
-            .wrap(Wrap { trim: false })
-            .scroll((scroll_row, 0));
-        f.render_widget(paragraph, area);
+    // Build a flat list of (block_start_line, block) to find which blocks
+    // intersect [scroll_offset, scroll_offset + view_height).
+    let viewport_end = scroll_offset + view_height;
+
+    // We can't hold a borrow into `app.tabs` while also accessing
+    // `app.mermaid_cache`, so we collect rendering instructions first.
+    struct TextDraw {
+        y: u16,
+        height: u16,
+        text: Text<'static>,
+    }
+    struct MermaidDraw {
+        y: u16,
+        height: u16,
+        id: crate::markdown::MermaidBlockId,
+        source: String,
+    }
+
+    let mut text_draws: Vec<TextDraw> = Vec::new();
+    let mut mermaid_draws: Vec<MermaidDraw> = Vec::new();
+
+    {
+        let tab = app.tabs.active_tab().unwrap();
+        let mut block_start = 0u32;
+
+        for doc_block in &tab.view.rendered {
+            let block_height = doc_block.height();
+            let block_end = block_start + block_height;
+
+            if block_end > scroll_offset && block_start < viewport_end {
+                // Lines within this block that are visible.
+                let clip_start = scroll_offset.saturating_sub(block_start);
+                let clip_end = (viewport_end - block_start).min(block_height);
+                let visible_lines = clip_end.saturating_sub(clip_start);
+
+                // Y offset in the inner rect.
+                let y_in_viewport = block_start.saturating_sub(scroll_offset);
+                let rect_y = inner.y.saturating_add(y_in_viewport as u16);
+
+                if rect_y < inner.y + inner.height && visible_lines > 0 {
+                    let draw_height = visible_lines.min((inner.y + inner.height - rect_y) as u32) as u16;
+
+                    match doc_block {
+                        DocBlock::Text(text) => {
+                            // Slice only the visible lines from this Text block.
+                            let start = clip_start as usize;
+                            let end = (clip_start + visible_lines).min(text.lines.len() as u32) as usize;
+                            let visible_text = if let Some((query, current_line)) = &doc_search_query {
+                                let full_text = highlight_matches(text, query, *current_line, &p);
+                                let sliced_lines = full_text.lines[start..end].to_vec();
+                                Text::from(sliced_lines)
+                            } else {
+                                let sliced_lines = text.lines[start..end].to_vec();
+                                Text::from(sliced_lines)
+                            };
+                            text_draws.push(TextDraw {
+                                y: rect_y,
+                                height: draw_height,
+                                text: visible_text,
+                            });
+                        }
+                        DocBlock::Mermaid { id, source } => {
+                            mermaid_draws.push(MermaidDraw {
+                                y: rect_y,
+                                height: draw_height,
+                                id: *id,
+                                source: source.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+
+            block_start = block_end;
+            if block_start >= viewport_end {
+                break;
+            }
+        }
+    }
+
+    // Render text blocks.
+    for td in text_draws {
+        let rect = Rect {
+            x: inner.x,
+            y: td.y,
+            width: inner.width,
+            height: td.height,
+        };
+        if app.show_line_numbers {
+            // For line-number gutter in block mode, we need the absolute line
+            // number. Since we sliced the text, compute a synthetic gutter.
+            render_text_with_gutter(f, rect, td.text, &p);
+        } else {
+            let para = Paragraph::new(td.text).wrap(Wrap { trim: false });
+            f.render_widget(para, rect);
+        }
+    }
+
+    // Render mermaid blocks.
+    for md in mermaid_draws {
+        let rect = Rect {
+            x: inner.x,
+            y: md.y,
+            width: inner.width,
+            height: md.height,
+        };
+        draw_mermaid_block(f, app, rect, md.id, &md.source, &p);
     }
 }
 
-/// Render the document with a line-number gutter on the left.
-///
-/// The gutter and content paragraphs share the same `scroll` value so they
-/// scroll in lockstep without any manual offset tracking.
-fn render_with_gutter(
+/// Draw a mermaid block at the given rect, looking up the cache entry.
+fn draw_mermaid_block(
     f: &mut Frame,
-    area: Rect,
-    block: ratatui::widgets::Block,
-    text: Text<'static>,
-    scroll_row: u16,
+    app: &mut App,
+    rect: Rect,
+    id: crate::markdown::MermaidBlockId,
+    source: &str,
     p: &Palette,
 ) {
+    use crate::mermaid::MermaidEntry;
+
+    let entry = app.mermaid_cache.get_mut(&id);
+
+    match entry {
+        None | Some(MermaidEntry::Pending) => {
+            render_mermaid_placeholder(f, rect, "rendering\u{2026}", p);
+        }
+        Some(MermaidEntry::Ready(protocol)) => {
+            use ratatui_image::{Resize, StatefulImage};
+            let image = StatefulImage::new().resize(Resize::Fit(None));
+            f.render_stateful_widget(image, rect, protocol.as_mut());
+        }
+        Some(MermaidEntry::Failed(msg)) => {
+            let footer = format!("[mermaid \u{2014} {}]", truncate(msg, 60));
+            render_mermaid_source(f, rect, source, &footer, p);
+        }
+        Some(MermaidEntry::SourceOnly(reason)) => {
+            let footer = format!("[mermaid \u{2014} {}]", reason.clone());
+            render_mermaid_source(f, rect, source, &footer, p);
+        }
+    }
+}
+
+fn render_mermaid_placeholder(f: &mut Frame, rect: Rect, msg: &str, p: &Palette) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(p.border_style());
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+
+    if inner.height > 0 {
+        let line = Line::from(Span::styled(msg.to_string(), p.dim_style()));
+        let para = Paragraph::new(Text::from(vec![line]))
+            .alignment(ratatui::layout::Alignment::Center);
+        // Center vertically.
+        let y_offset = inner.height / 2;
+        let target = Rect { y: inner.y + y_offset, height: 1, ..inner };
+        f.render_widget(para, target);
+    }
+}
+
+fn render_mermaid_source(f: &mut Frame, rect: Rect, source: &str, footer: &str, p: &Palette) {
+    let code_style = Style::default().fg(p.code_fg).bg(p.code_bg);
+    let dim_style = p.dim_style();
+
+    let mut lines: Vec<Line<'static>> = source
+        .lines()
+        .map(|l| Line::from(Span::styled(l.to_string(), code_style)))
+        .collect();
+    lines.push(Line::from(Span::styled(footer.to_string(), dim_style)));
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(p.border_style());
+    let para = Paragraph::new(Text::from(lines))
+        .block(block)
+        .wrap(Wrap { trim: false });
+    f.render_widget(para, rect);
+}
+
+/// Render text with a minimal line-number gutter (relative line numbers within
+/// the visible slice, not absolute document lines).
+fn render_text_with_gutter(f: &mut Frame, rect: Rect, text: Text<'static>, p: &Palette) {
     let total = text.lines.len() as u32;
     let num_digits = if total == 0 {
         4
@@ -170,11 +337,8 @@ fn render_with_gutter(
     };
     let gutter_width = num_digits + 3;
 
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
     let chunks = Layout::horizontal([Constraint::Length(gutter_width as u16), Constraint::Min(0)])
-        .split(inner);
+        .split(rect);
 
     let gutter_style = Style::new().fg(p.gutter);
     let gutter_lines: Vec<Line<'static>> = (1..=total)
@@ -186,13 +350,14 @@ fn render_with_gutter(
         })
         .collect();
 
-    let gutter_para = Paragraph::new(Text::from(gutter_lines)).scroll((scroll_row, 0));
-    f.render_widget(gutter_para, chunks[0]);
-
-    let content_para = Paragraph::new(text)
-        .wrap(Wrap { trim: false })
-        .scroll((scroll_row, 0));
-    f.render_widget(content_para, chunks[1]);
+    f.render_widget(
+        Paragraph::new(Text::from(gutter_lines)),
+        chunks[0],
+    );
+    f.render_widget(
+        Paragraph::new(text).wrap(Wrap { trim: false }),
+        chunks[1],
+    );
 }
 
 /// Produce a new `Text` with search matches highlighted.
@@ -270,5 +435,13 @@ fn split_and_highlight(
 
     if start < text.len() {
         out.push(Span::styled(text[start..].to_string(), base_style));
+    }
+}
+
+fn truncate(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        s
+    } else {
+        &s[..max]
     }
 }
