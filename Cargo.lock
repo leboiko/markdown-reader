@@ -1373,7 +1373,7 @@ dependencies = [
 
 [[package]]
 name = "markdown-tui-explorer"
-version = "0.4.3"
+version = "0.4.4"
 dependencies = [
  "anyhow",
  "clap",
@@ -1390,6 +1390,7 @@ dependencies = [
  "serde",
  "tokio",
  "toml",
+ "unicode-width",
 ]
 
 [[package]]
