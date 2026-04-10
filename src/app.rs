@@ -2,7 +2,7 @@ use crate::action::Action;
 use crate::config::Config;
 use crate::event::EventHandler;
 use crate::fs::discovery::FileEntry;
-use crate::state::AppState;
+use crate::state::{AppState, TabSession};
 use crate::theme::{Palette, Theme};
 use crate::ui::file_tree::FileTreeState;
 use crate::ui::search_bar::{SearchMode, SearchResult, SearchState};
@@ -171,42 +171,59 @@ impl App {
 
     // ── Session ──────────────────────────────────────────────────────────────
 
-    /// If a session exists for the current root and the saved file is still on
-    /// disk, load it into the viewer and select it in the tree.
+    /// Restore all tabs from the saved session for the current root directory.
+    ///
+    /// Each persisted `TabSession` is loaded in order; entries whose files no
+    /// longer exist on disk are silently skipped. The saved active index is
+    /// clamped to the number of surviving tabs.
     fn restore_session(&mut self) {
         let session = match self.app_state.sessions.get(&self.root).cloned() {
             Some(s) => s,
             None => return,
         };
 
-        if session.file.as_os_str().is_empty() || !session.file.exists() {
+        let mut last_loaded_path: Option<PathBuf> = None;
+
+        for tab_session in &session.tabs {
+            let path = &tab_session.file;
+            if path.as_os_str().is_empty() || !path.exists() || !path.starts_with(&self.root) {
+                continue;
+            }
+            let Ok(content) = std::fs::read_to_string(path) else {
+                continue;
+            };
+            let name = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            let scroll = tab_session.scroll;
+
+            let (_, outcome) = self.tabs.open_or_focus(path, true);
+            if matches!(outcome, OpenOutcome::Opened | OpenOutcome::Replaced) {
+                let tab = self.tabs.active_tab_mut().unwrap();
+                tab.view.load(path.clone(), name, content, &self.palette);
+                let max_scroll = tab.view.total_lines.saturating_sub(1);
+                tab.view.scroll_offset = scroll.min(max_scroll);
+            }
+
+            last_loaded_path = Some(path.clone());
+        }
+
+        // Activate the saved active index, clamped to surviving tabs.
+        let target_active = session.active.min(self.tabs.len().saturating_sub(1));
+        self.tabs.activate_by_index(target_active + 1);
+
+        if self.tabs.is_empty() {
             return;
         }
 
-        if !session.file.starts_with(&self.root) {
-            return;
+        // Select the active tab's file in the tree.
+        let active_path = self.tabs.active_tab().and_then(|t| t.view.current_path.clone());
+        let tree_path = active_path.or(last_loaded_path);
+        if let Some(path) = tree_path {
+            self.expand_and_select(&path);
         }
-
-        let Ok(content) = std::fs::read_to_string(&session.file) else {
-            return;
-        };
-
-        let name = session
-            .file
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
-
-        let (_, outcome) = self.tabs.open_or_focus(&session.file, true);
-        if matches!(outcome, OpenOutcome::Opened | OpenOutcome::Replaced) {
-            let tab = self.tabs.active_tab_mut().unwrap();
-            tab.view.load(session.file.clone(), name, content, &self.palette);
-            let max_scroll = tab.view.total_lines.saturating_sub(1);
-            tab.view.scroll_offset = session.scroll.min(max_scroll);
-        }
-
-        self.expand_and_select(&session.file);
         self.focus = Focus::Viewer;
     }
 
@@ -236,17 +253,27 @@ impl App {
         }
     }
 
-    /// Save the current session (open file + scroll offset) to disk.
+    /// Save all open tabs and the active index to disk.
     fn save_session(&mut self) {
-        let Some(tab) = self.tabs.active_tab() else {
+        let tab_sessions: Vec<TabSession> = self
+            .tabs
+            .tabs
+            .iter()
+            .filter_map(|t| {
+                t.view.current_path.as_ref().map(|p| TabSession {
+                    file: p.clone(),
+                    scroll: t.view.scroll_offset,
+                })
+            })
+            .collect();
+
+        if tab_sessions.is_empty() {
             return;
-        };
-        let Some(path) = tab.view.current_path.clone() else {
-            return;
-        };
-        let scroll = tab.view.scroll_offset;
+        }
+
+        let active_idx = self.tabs.active_index().unwrap_or(0);
         let root = self.root.clone();
-        self.app_state.update_session(&root, path, scroll);
+        self.app_state.update_session(&root, tab_sessions, active_idx);
     }
 
     /// Persist the current config settings.
@@ -744,8 +771,7 @@ impl App {
         }
 
         self.focus = Focus::Viewer;
-        let root = self.root.clone();
-        self.app_state.update_session(&root, path, 0);
+        // Session is persisted on quit via save_session(); no need to write here.
     }
 
     fn open_selected_file(&mut self, new_tab: bool) {
@@ -853,8 +879,6 @@ impl App {
                 }
             }
 
-            let root = self.root.clone();
-            self.app_state.update_session(&root, path, 0);
         }
     }
 
