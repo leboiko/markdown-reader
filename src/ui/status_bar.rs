@@ -47,7 +47,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         Span::styled(file_info, Style::default().fg(p.status_bar_fg)),
         Span::raw("  "),
         Span::styled(
-            " Tab:panel  /:search  c:settings  q:quit  ?:help ",
+            " Tab:panel  t:new-tab  T:picker  x:close-tab  /:search  c:settings  q:quit  ?:help ",
             Style::default().fg(p.dim),
         ),
     ]);

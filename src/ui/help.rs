@@ -39,6 +39,14 @@ pub fn draw(f: &mut Frame, app: &App) {
         shortcut_line("n / N", "Next / prev match", key_style, desc_style),
         shortcut_line(":", "Go to line", key_style, desc_style),
         Line::from(""),
+        Line::from(Span::styled("── Tabs ──", dim_style)),
+        shortcut_line("t (tree)", "Open file in new tab", key_style, desc_style),
+        shortcut_line("]t / [t", "Next / previous tab", key_style, desc_style),
+        shortcut_line("1-9 / 0", "Jump to tab N / last tab", key_style, desc_style),
+        shortcut_line("`", "Jump to previous tab", key_style, desc_style),
+        shortcut_line("x", "Close current tab", key_style, desc_style),
+        shortcut_line("T", "Open tab picker", key_style, desc_style),
+        Line::from(""),
         Line::from(Span::styled("── Panels ──", dim_style)),
         shortcut_line("[", "Shrink file tree", key_style, desc_style),
         shortcut_line("]", "Grow file tree", key_style, desc_style),
@@ -67,7 +75,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     ];
 
     let height = lines.len() as u16 + 2;
-    let width = 52;
+    let width = 54;
 
     let area = centered_rect(width, height, f.area());
 
@@ -85,7 +93,7 @@ pub fn draw(f: &mut Frame, app: &App) {
 
 fn shortcut_line<'a>(key: &'a str, desc: &'a str, key_style: Style, desc_style: Style) -> Line<'a> {
     Line::from(vec![
-        Span::styled(format!("  {:<18}", key), key_style),
+        Span::styled(format!("  {:<20}", key), key_style),
         Span::styled(desc, desc_style),
     ])
 }
