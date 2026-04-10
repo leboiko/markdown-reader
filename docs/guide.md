@@ -127,6 +127,54 @@ Each tab keeps its own find state. Switching tabs with an active find
 preserves every tab's highlights independently — return to a previous
 tab and its matches are still there.
 
+## Mermaid diagrams
+
+Fenced code blocks tagged `mermaid` render as actual inline diagrams
+— no Node, no Chromium, no external process. The source is parsed by
+`mermaid-rs-renderer`, rasterized at 3× its native size by `resvg`,
+and handed to `ratatui-image`, which picks the best graphics protocol
+your terminal supports: Kitty (for Kitty, Ghostty, WezTerm), Sixel
+(for Foot, xterm, WezTerm, Contour), iTerm2 inline images (for iTerm2
+and WezTerm), or Unicode halfblocks as a universal fallback.
+
+The first time the reader encounters a diagram it shows a
+`rendering…` placeholder for a few milliseconds while the diagram is
+rasterized on a background thread. Once rendered, the image is
+cached, so switching tabs, reloading the file, or scrolling away and
+back shows it immediately.
+
+Each reserved diagram block is 20 terminal rows tall, with a small
+padding band around the image so it doesn't touch the viewer border.
+If you scroll so the block is only partially visible (top or bottom
+clipped by the viewer), a `scroll to view diagram` placeholder is
+shown instead of a jittering resized image; scroll the block fully
+into view and the image comes back.
+
+### When diagrams don't render
+
+Two cases show the source instead of an image:
+
+- **You're inside tmux.** The reader detects `$TMUX` at startup and
+  disables graphics unconditionally, because tmux strips image
+  escape sequences unless it was compiled with passthrough support
+  and explicitly configured. The footer says
+  `[mermaid — disable tmux for graphics]` so you know the cause.
+  Run the reader directly in your terminal to see diagrams.
+- **The diagram itself failed to parse or rasterize.**
+  `mermaid-rs-renderer` is pre-1.0 and does not yet handle every
+  mermaid feature perfectly. When a specific diagram fails, its
+  source is shown with a short error in the footer, e.g.
+  `[mermaid — render error: unsupported directive]`. Other diagrams
+  in the same document render normally.
+
+### Alacritty and other non-graphics terminals
+
+Alacritty explicitly does not support any graphics protocol. On
+Alacritty, `ratatui-image` falls back to rendering the diagram as
+Unicode halfblocks — low resolution but still readable. It looks
+"pixelated" but you can make out the structure. For the best
+experience, use Ghostty, Kitty, WezTerm, iTerm2, or Foot.
+
 ## Global search
 
 Press `/` from the tree or viewer to open the global search overlay.

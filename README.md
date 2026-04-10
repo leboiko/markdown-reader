@@ -38,6 +38,12 @@ drawn on the left of the viewer content when enabled.
   vim-style `gt`/`gT`, jump by number (`1`–`9`, `0` for last), close with
   `x`, and use `T` for a full tab picker overlay. Duplicate opens focus the
   existing tab instead of piling up.
+- **Mermaid diagram rendering** — fenced ```` ```mermaid ```` blocks are
+  rasterized in pure Rust (no Node, no Chromium) and displayed inline as
+  real images using the Kitty graphics protocol, Sixel, iTerm2 inline
+  images, or Unicode halfblocks depending on your terminal. Falls back to
+  styled source when running inside tmux or on terminals without graphics
+  support.
 - **Themes** — six built-in palettes (Default, Dracula, Solarized Dark,
   Nord, Gruvbox Dark, GitHub Light). Switch live from the settings modal;
   every open document re-renders with the new colors.
@@ -207,6 +213,48 @@ out of the box.
 | Scroll wheel in the tree | Move the tree selection |
 | Click a row in the tab picker | Activate that tab |
 
+## Mermaid diagrams
+
+Fenced code blocks tagged `mermaid` are rendered as real diagrams inline
+with the surrounding text. The rendering pipeline is pure Rust:
+
+1. `mermaid-rs-renderer` parses the diagram source and produces SVG.
+2. `resvg` rasterizes the SVG to a PNG at three times the intrinsic size
+   (so there is enough pixel budget for the image to fill the viewer).
+3. `ratatui-image` detects the terminal's graphics protocol — Kitty,
+   Sixel, iTerm2 inline images, or Unicode halfblocks — and displays the
+   image inline.
+
+Rendering runs on a background thread, so the UI never blocks on a slow
+diagram. While a diagram is being rasterized for the first time, a
+`rendering…` placeholder is shown in its reserved space. Results are
+cached per-document and shared across tabs, so reopening the same file
+or switching tabs does not trigger a re-render.
+
+**Terminal support.** Kitty, Ghostty, WezTerm, and Konsole get the best
+quality via the Kitty graphics protocol. iTerm2 gets native inline
+images. Foot, xterm, mintty, and Contour get Sixel. Alacritty and other
+terminals without graphics support get a Unicode halfblock fallback —
+low-resolution but still readable.
+
+**tmux.** When `$TMUX` is set, graphics are unconditionally disabled:
+tmux strips image escape sequences unless it was compiled with passthrough
+support and explicitly configured, and the failure mode is subtle. Inside
+tmux, mermaid blocks fall back to showing their source with a
+`[mermaid — disable tmux for graphics]` footer so you know the cause.
+
+**Partial scroll.** When a diagram is only partially visible (scrolled
+on- or off-screen), a bordered `scroll to view diagram` placeholder is
+shown instead of a shrunken image. Scrolling the full block into view
+brings the image back.
+
+**Supported diagram types.** Everything `mermaid-rs-renderer` supports,
+which covers flowcharts, sequence diagrams, state diagrams, class
+diagrams, entity-relationship diagrams, Gantt charts, pie charts, and
+more. Fidelity on subgraphs, styles, and complex layouts depends on the
+renderer's pre-1.0 maturity — when a specific diagram fails, the source
+is shown with a short error in the footer.
+
 ## Themes
 
 Six built-in themes, switchable live from the settings modal (`c`):
@@ -291,6 +339,10 @@ shows the default theme.
 | serde | Config and state serialization |
 | toml | TOML format for config and state files |
 | dirs | Platform-native config/state directories |
+| mermaid-rs-renderer | Pure-Rust mermaid → SVG renderer |
+| resvg | SVG rasterization |
+| image | Bitmap decoding and manipulation |
+| ratatui-image | Terminal image display (Kitty, Sixel, iTerm2, halfblocks) |
 
 ## License
 
