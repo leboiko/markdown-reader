@@ -1,8 +1,11 @@
 mod action;
 mod app;
+mod config;
 mod event;
 mod fs;
 mod markdown;
+mod state;
+mod theme;
 mod ui;
 
 use anyhow::Result;
@@ -27,8 +30,6 @@ struct TerminalGuard;
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        // Each call is best-effort: failures are ignored so that the other
-        // cleanup steps still execute.
         let _ = disable_raw_mode();
         let _ = execute!(
             std::io::stdout(),
@@ -56,13 +57,10 @@ async fn main() -> Result<()> {
     let mut stdout = std::io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
 
-    // The guard is intentionally created _after_ setup so it only cleans up
-    // what has actually been enabled. It is kept alive until the end of main.
     let _guard = TerminalGuard;
 
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // Run the app; the guard restores the terminal whether this succeeds or not.
     App::new(root).run(&mut terminal).await
 }

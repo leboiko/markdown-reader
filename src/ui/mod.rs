@@ -1,3 +1,4 @@
+pub mod config_popup;
 pub mod doc_search_bar;
 pub mod file_tree;
 pub mod help;
@@ -25,7 +26,14 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     if app.tree_hidden {
         viewer_area = chunks[0];
-        markdown_view::draw(f, app, chunks[0], app.focus == Focus::Viewer || app.focus == Focus::DocSearch);
+        markdown_view::draw(
+            f,
+            app,
+            chunks[0],
+            app.focus == Focus::Viewer
+                || app.focus == Focus::DocSearch
+                || app.focus == Focus::Config,
+        );
     } else {
         let main_chunks = Layout::default()
             .direction(Direction::Horizontal)
@@ -37,7 +45,14 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
         viewer_area = main_chunks[1];
         file_tree::draw(f, app, main_chunks[0], app.focus == Focus::Tree);
-        markdown_view::draw(f, app, main_chunks[1], app.focus == Focus::Viewer || app.focus == Focus::DocSearch);
+        markdown_view::draw(
+            f,
+            app,
+            main_chunks[1],
+            app.focus == Focus::Viewer
+                || app.focus == Focus::DocSearch
+                || app.focus == Focus::Config,
+        );
     }
 
     if app.search.active {
@@ -46,12 +61,22 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     status_bar::draw(f, app, chunks[2]);
 
-    // Doc search bar overlays the bottom of the viewer area.
     if app.doc_search.active {
         doc_search_bar::draw(f, app, viewer_area);
     }
 
     if app.show_help {
-        help::draw(f);
+        help::draw(f, app);
+    }
+
+    if let Some(popup_state) = &app.config_popup {
+        let popup_state = popup_state.clone();
+        config_popup::render_config_popup(
+            f,
+            &popup_state,
+            app.theme,
+            app.show_line_numbers,
+            &app.palette,
+        );
     }
 }

@@ -1,21 +1,22 @@
+use crate::app::App;
 use ratatui::{
     Frame,
     layout::{Constraint, Flex, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
 /// Render a centered help overlay listing all keyboard shortcuts.
-pub fn draw(f: &mut Frame) {
-    let header_style = Style::default()
-        .fg(Color::Cyan)
-        .add_modifier(Modifier::BOLD);
+pub fn draw(f: &mut Frame, app: &App) {
+    let p = &app.palette;
+
+    let header_style = Style::default().fg(p.accent).add_modifier(Modifier::BOLD);
     let key_style = Style::default()
-        .fg(Color::Green)
+        .fg(p.accent_alt)
         .add_modifier(Modifier::BOLD);
-    let desc_style = Style::default().fg(Color::White);
-    let dim_style = Style::default().fg(Color::DarkGray);
+    let desc_style = Style::default().fg(p.foreground);
+    let dim_style = p.dim_style();
 
     let lines = vec![
         Line::from(Span::styled("Keyboard Shortcuts", header_style)),
@@ -48,26 +49,32 @@ pub fn draw(f: &mut Frame) {
         shortcut_line("Enter", "Open selected result", key_style, desc_style),
         shortcut_line("Esc", "Close search", key_style, desc_style),
         Line::from(""),
+        Line::from(Span::styled("── Settings ──", dim_style)),
+        shortcut_line(
+            "c",
+            "Open settings (theme, line numbers)",
+            key_style,
+            desc_style,
+        ),
+        shortcut_line("Esc / c", "Close settings", key_style, desc_style),
+        Line::from(""),
         Line::from(Span::styled("── General ──", dim_style)),
         shortcut_line("?", "Toggle this help", key_style, desc_style),
         shortcut_line("q", "Quit", key_style, desc_style),
         Line::from(""),
-        Line::from(Span::styled(
-            "Press any key to close",
-            dim_style,
-        )),
+        Line::from(Span::styled("Press any key to close", dim_style)),
     ];
 
-    let height = lines.len() as u16 + 2; // +2 for borders
-    let width = 48;
+    let height = lines.len() as u16 + 2;
+    let width = 52;
 
     let area = centered_rect(width, height, f.area());
 
     let block = Block::default()
         .title(" Help ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(Color::Rgb(20, 20, 30)));
+        .border_style(Style::default().fg(p.border_focused))
+        .style(Style::default().bg(p.help_bg));
 
     let paragraph = Paragraph::new(lines).block(block);
 
@@ -75,19 +82,13 @@ pub fn draw(f: &mut Frame) {
     f.render_widget(paragraph, area);
 }
 
-fn shortcut_line<'a>(
-    key: &'a str,
-    desc: &'a str,
-    key_style: Style,
-    desc_style: Style,
-) -> Line<'a> {
+fn shortcut_line<'a>(key: &'a str, desc: &'a str, key_style: Style, desc_style: Style) -> Line<'a> {
     Line::from(vec![
         Span::styled(format!("  {:<18}", key), key_style),
         Span::styled(desc, desc_style),
     ])
 }
 
-/// Return a centered `Rect` of the given size within `area`.
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
     let vertical = Layout::vertical([Constraint::Length(height)])
         .flex(Flex::Center)

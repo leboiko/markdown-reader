@@ -3,7 +3,7 @@ use crate::fs::discovery::FileEntry;
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::Line,
     widgets::{Block, Borders, List, ListItem, ListState},
 };
@@ -40,7 +40,7 @@ impl FileTreeState {
     /// Replace the entry tree and rebuild the flat list, preserving selection.
     pub fn rebuild(&mut self, entries: Vec<FileEntry>) {
         self.entries = entries;
-        self.flatten();
+        self.flatten_visible();
         if !self.flat_items.is_empty() && self.list_state.selected().is_none() {
             self.list_state.select(Some(0));
         }
@@ -51,7 +51,7 @@ impl FileTreeState {
     /// Uses `std::mem::take` to avoid cloning the entire entry tree: the
     /// entries are temporarily moved out, flattened via a standalone function,
     /// then moved back — no allocation beyond the flat list itself.
-    fn flatten(&mut self) {
+    pub fn flatten_visible(&mut self) {
         self.flat_items.clear();
         // Take entries out to satisfy the borrow checker (we need &self.expanded
         // and &mut self.flat_items simultaneously).
@@ -107,7 +107,7 @@ impl FileTreeState {
             } else {
                 self.expanded.insert(item.path);
             }
-            self.flatten();
+            self.flatten_visible();
         }
     }
 
@@ -154,14 +154,17 @@ fn flatten_entries(
 
 /// Render the file-tree panel into `area`.
 pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
+    let p = &app.palette;
+
     let border_style = if focused {
-        Style::default().fg(Color::Cyan)
+        p.border_focused_style()
     } else {
-        Style::default().fg(Color::DarkGray)
+        p.border_style()
     };
 
     let block = Block::default()
         .title(" Files ")
+        .title_style(p.title_style())
         .borders(Borders::ALL)
         .border_style(border_style);
 
@@ -181,11 +184,9 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                 "  "
             };
             let style = if item.is_dir {
-                Style::default()
-                    .fg(Color::Blue)
-                    .add_modifier(Modifier::BOLD)
+                Style::default().fg(p.accent).add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::White)
+                Style::default().fg(p.foreground)
             };
             ListItem::new(Line::styled(
                 format!("{indent}{prefix}{}", item.name),
@@ -196,12 +197,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
 
     let list = List::new(items)
         .block(block)
-        .highlight_style(
-            Style::default()
-                .bg(Color::Green)
-                .fg(Color::Black)
-                .add_modifier(Modifier::BOLD),
-        )
+        .highlight_style(p.selected_style())
         .highlight_symbol("│ ");
 
     f.render_stateful_widget(list, area, &mut app.tree.list_state);

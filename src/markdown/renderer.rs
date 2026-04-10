@@ -4,16 +4,15 @@ use ratatui::{
     text::{Line, Span, Text},
 };
 
+use crate::theme::Palette;
+
 /// Render a markdown string into a ratatui [`Text`] value ready for display.
 ///
-/// Supported markdown features: headings, paragraphs, block-quotes, fenced
-/// code blocks, ordered/unordered lists, task lists, tables, emphasis, bold,
-/// strikethrough, inline code, links, and horizontal rules.
-pub fn render_markdown(content: &str) -> Text<'static> {
+/// All colors are sourced from `palette` so the output reflects the active theme.
+pub fn render_markdown(content: &str, palette: &Palette) -> Text<'static> {
     let opts = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
-
     let parser = Parser::new_ext(content, opts);
-    let mut renderer = MdRenderer::new();
+    let mut renderer = MdRenderer::new(palette);
     renderer.render(parser);
     Text::from(renderer.lines)
 }
@@ -27,21 +26,35 @@ struct MdRenderer {
     in_code_block: bool,
     code_block_content: Vec<String>,
     in_heading: bool,
-    #[allow(dead_code)]
     heading_level: u8,
     in_blockquote: bool,
-    // Table state — we buffer all rows and render on TagEnd::Table
     in_table: bool,
-    #[allow(dead_code)]
     table_alignments: Vec<pulldown_cmark::Alignment>,
     table_row: Vec<String>,
     table_rows: Vec<Vec<String>>,
     table_header_row: Option<Vec<String>>,
     table_header: bool,
+    // Captured palette colors — stored as Color to avoid a lifetime on MdRenderer.
+    h1: Color,
+    h2: Color,
+    h3: Color,
+    heading_other: Color,
+    inline_code: Color,
+    code_fg: Color,
+    code_bg: Color,
+    code_border: Color,
+    link: Color,
+    list_marker: Color,
+    task_marker: Color,
+    block_quote_fg: Color,
+    block_quote_border: Color,
+    table_header_color: Color,
+    table_border: Color,
+    dim: Color,
 }
 
 impl MdRenderer {
-    fn new() -> Self {
+    fn new(palette: &Palette) -> Self {
         Self {
             lines: Vec::new(),
             current_spans: Vec::new(),
@@ -59,6 +72,22 @@ impl MdRenderer {
             table_rows: Vec::new(),
             table_header_row: None,
             table_header: false,
+            h1: palette.h1,
+            h2: palette.h2,
+            h3: palette.h3,
+            heading_other: palette.heading_other,
+            inline_code: palette.inline_code,
+            code_fg: palette.code_fg,
+            code_bg: palette.code_bg,
+            code_border: palette.code_border,
+            link: palette.link,
+            list_marker: palette.list_marker,
+            task_marker: palette.task_marker,
+            block_quote_fg: palette.block_quote_fg,
+            block_quote_border: palette.block_quote_border,
+            table_header_color: palette.table_header,
+            table_border: palette.table_border,
+            dim: palette.dim,
         }
     }
 
@@ -78,8 +107,6 @@ impl MdRenderer {
     }
 
     fn flush_line(&mut self) {
-        // Inside a table, spans are collected per-cell via TagEnd::TableCell
-        // drain — never emit lines directly.
         if self.in_table {
             return;
         }
@@ -87,7 +114,7 @@ impl MdRenderer {
         if self.in_blockquote && !self.in_code_block {
             let mut bq_spans = vec![Span::styled(
                 "│ ".to_string(),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(self.block_quote_border),
             )];
             bq_spans.extend(spans);
             self.lines.push(Line::from(bq_spans));
@@ -112,7 +139,7 @@ impl MdRenderer {
                 Event::Code(code) => {
                     let style = self
                         .current_style()
-                        .fg(Color::Green)
+                        .fg(self.inline_code)
                         .add_modifier(Modifier::BOLD);
                     self.current_spans
                         .push(Span::styled(format!("`{code}`"), style));
@@ -128,7 +155,7 @@ impl MdRenderer {
                     self.flush_line();
                     self.lines.push(Line::from(Span::styled(
                         "─".repeat(60),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(self.dim),
                     )));
                     self.push_blank_line();
                 }
@@ -136,7 +163,7 @@ impl MdRenderer {
                     let marker = if checked { "☑ " } else { "☐ " };
                     self.current_spans.push(Span::styled(
                         marker.to_string(),
-                        Style::default().fg(Color::Cyan),
+                        Style::default().fg(self.task_marker),
                     ));
                 }
                 _ => {}
@@ -152,20 +179,16 @@ impl MdRenderer {
             Tag::Heading { level, .. } => {
                 self.in_heading = true;
                 self.heading_level = level as u8;
-                let style = match level {
-                    pulldown_cmark::HeadingLevel::H1 => Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-                    pulldown_cmark::HeadingLevel::H2 => Style::default()
-                        .fg(Color::Blue)
-                        .add_modifier(Modifier::BOLD),
-                    pulldown_cmark::HeadingLevel::H3 => Style::default()
-                        .fg(Color::Magenta)
-                        .add_modifier(Modifier::BOLD),
-                    _ => Style::default()
-                        .fg(Color::White)
-                        .add_modifier(Modifier::BOLD),
+                let color = match level {
+                    pulldown_cmark::HeadingLevel::H1 => self.h1,
+                    pulldown_cmark::HeadingLevel::H2 => self.h2,
+                    pulldown_cmark::HeadingLevel::H3 => self.h3,
+                    _ => self.heading_other,
                 };
+                let mut style = Style::default().fg(color).add_modifier(Modifier::BOLD);
+                if level == pulldown_cmark::HeadingLevel::H1 {
+                    style = style.add_modifier(Modifier::UNDERLINED);
+                }
                 self.push_style(style);
                 let prefix = match level {
                     pulldown_cmark::HeadingLevel::H1 => "█ ",
@@ -179,7 +202,7 @@ impl MdRenderer {
             Tag::Paragraph => {}
             Tag::BlockQuote(_) => {
                 self.in_blockquote = true;
-                self.push_style(Style::default().fg(Color::Gray));
+                self.push_style(Style::default().fg(self.block_quote_fg));
             }
             Tag::CodeBlock(_) => {
                 self.in_code_block = true;
@@ -209,7 +232,7 @@ impl MdRenderer {
                     format!("{indent}• ")
                 };
                 self.current_spans
-                    .push(Span::styled(bullet, Style::default().fg(Color::Yellow)));
+                    .push(Span::styled(bullet, Style::default().fg(self.list_marker)));
             }
             Tag::Emphasis => {
                 self.push_style(Style::default().add_modifier(Modifier::ITALIC));
@@ -223,7 +246,7 @@ impl MdRenderer {
             Tag::Link { .. } => {
                 self.push_style(
                     Style::default()
-                        .fg(Color::Blue)
+                        .fg(self.link)
                         .add_modifier(Modifier::UNDERLINED),
                 );
             }
@@ -310,11 +333,9 @@ impl MdRenderer {
 
     fn handle_text(&mut self, text: &str) {
         if self.in_code_block {
-            // Buffer code lines — we render the whole block at TagEnd::CodeBlock
             for line in text.split('\n') {
                 self.code_block_content.push(line.to_string());
             }
-            // Remove trailing empty line from pulldown-cmark
             if self.code_block_content.last().is_some_and(|l| l.is_empty()) {
                 self.code_block_content.pop();
             }
@@ -324,30 +345,24 @@ impl MdRenderer {
         }
     }
 
-    /// Render the buffered code block with a box that fits the content width.
     fn render_code_block(&mut self) {
-        let code_style = Style::default()
-            .fg(Color::Rgb(180, 200, 180))
-            .bg(Color::Rgb(40, 40, 40));
-        let border_style = Style::default().fg(Color::DarkGray);
+        let code_style = Style::default().fg(self.code_fg).bg(self.code_bg);
+        let border_style = Style::default().fg(self.code_border);
 
-        // Find the widest line to size the box
         let max_width = self
             .code_block_content
             .iter()
             .map(|l| l.len())
             .max()
             .unwrap_or(0)
-            .max(20); // minimum box width
-        let inner_width = max_width + 1; // 1 char padding on right
+            .max(20);
+        let inner_width = max_width + 1;
 
-        // Top border
         self.lines.push(Line::from(Span::styled(
             format!("╭{}╮", "─".repeat(inner_width + 1)),
             border_style,
         )));
 
-        // Code lines
         for line in &self.code_block_content {
             self.lines.push(Line::from(Span::styled(
                 format!("│ {:<inner_width$}│", line),
@@ -355,7 +370,6 @@ impl MdRenderer {
             )));
         }
 
-        // Bottom border
         self.lines.push(Line::from(Span::styled(
             format!("╰{}╯", "─".repeat(inner_width + 1)),
             border_style,
@@ -365,15 +379,13 @@ impl MdRenderer {
         self.push_blank_line();
     }
 
-    /// Render the fully buffered table with dynamic column widths.
     fn render_table(&mut self) {
-        let border_style = Style::default().fg(Color::DarkGray);
+        let border_style = Style::default().fg(self.table_border);
         let header_style = Style::default()
-            .fg(Color::Cyan)
+            .fg(self.table_header_color)
             .add_modifier(Modifier::BOLD);
-        let cell_style = Style::default().fg(Color::White);
+        let cell_style = Style::default().fg(self.heading_other);
 
-        // Collect all rows (header + body) to compute column widths
         let header = self.table_header_row.take().unwrap_or_default();
         let num_cols = header
             .len()
@@ -383,7 +395,6 @@ impl MdRenderer {
             return;
         }
 
-        // Compute max width for each column
         let mut col_widths = vec![0usize; num_cols];
         for (i, cell) in header.iter().enumerate() {
             col_widths[i] = col_widths[i].max(cell.len());
@@ -395,23 +406,18 @@ impl MdRenderer {
                 }
             }
         }
-        // Ensure minimum column width of 3
         for w in &mut col_widths {
             *w = (*w).max(3);
         }
 
-        // Top border: ┌───┬───┬───┐
         let top: String = col_widths
             .iter()
             .map(|w| "─".repeat(w + 2))
             .collect::<Vec<_>>()
             .join("┬");
-        self.lines.push(Line::from(Span::styled(
-            format!("┌{top}┐"),
-            border_style,
-        )));
+        self.lines
+            .push(Line::from(Span::styled(format!("┌{top}┐"), border_style)));
 
-        // Header row
         let mut spans = Vec::new();
         spans.push(Span::styled("│".to_string(), border_style));
         for (i, w) in col_widths.iter().enumerate() {
@@ -421,18 +427,14 @@ impl MdRenderer {
         }
         self.lines.push(Line::from(spans));
 
-        // Header separator: ├───┼───┼───┤
         let sep: String = col_widths
             .iter()
             .map(|w| "─".repeat(w + 2))
             .collect::<Vec<_>>()
             .join("┼");
-        self.lines.push(Line::from(Span::styled(
-            format!("├{sep}┤"),
-            border_style,
-        )));
+        self.lines
+            .push(Line::from(Span::styled(format!("├{sep}┤"), border_style)));
 
-        // Body rows
         for row in &self.table_rows {
             let mut spans = Vec::new();
             spans.push(Span::styled("│".to_string(), border_style));
@@ -444,7 +446,6 @@ impl MdRenderer {
             self.lines.push(Line::from(spans));
         }
 
-        // Bottom border: └───┴───┴───┘
         let bottom: String = col_widths
             .iter()
             .map(|w| "─".repeat(w + 2))

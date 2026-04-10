@@ -1,6 +1,6 @@
 [package]
 name = "markdown-tui-explorer"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "A terminal-based markdown file browser and viewer with search, syntax highlighting, and live reload"
 license = "MIT"
@@ -23,3 +23,6 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "sync", 
 notify-debouncer-mini = "0.7"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+serde = { version = "1.0.228", features = ["derive"] }
+toml = "1.1.2"
+dirs = "6.0.0"

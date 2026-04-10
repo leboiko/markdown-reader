@@ -1,7 +1,7 @@
 use crate::action::Action;
 use crossterm::event::{self, Event};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
