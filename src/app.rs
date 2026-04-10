@@ -393,12 +393,10 @@ impl App {
                 self.perform_search();
             }
             Action::SearchConfirm => self.confirm_search(),
-            Action::FilesChanged(_changed) => {
+            Action::FilesChanged(changed) => {
                 let entries = FileEntry::discover(&self.root);
                 self.tree.rebuild(entries);
-                if self.tabs.active_tab().and_then(|t| t.view.current_path.as_ref()).is_some() {
-                    self.reload_current_tab();
-                }
+                self.reload_changed_tabs(&changed);
             }
             Action::Resize(_, _) => {}
         }
@@ -790,26 +788,36 @@ impl App {
         self.open_or_focus(path, new_tab);
     }
 
-    fn reload_current_tab(&mut self) {
-        let Some(tab) = self.tabs.active_tab() else {
+    /// Reload every open tab whose path is in the `changed` set.
+    ///
+    /// Preserves each tab's scroll offset (clamped to the new line count).
+    /// This replaces `reload_current_tab` for the `FilesChanged` handler.
+    fn reload_changed_tabs(&mut self, changed: &[PathBuf]) {
+        if changed.is_empty() || self.tabs.is_empty() {
             return;
-        };
-        let Some(current_path) = tab.view.current_path.clone() else {
-            return;
-        };
-        let Ok(content) = std::fs::read_to_string(&current_path) else {
-            return;
-        };
-        let name = current_path
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
-        let scroll = tab.view.scroll_offset;
+        }
+
         let palette = self.palette;
-        let tab = self.tabs.active_tab_mut().unwrap();
-        tab.view.load(current_path, name, content, &palette);
-        tab.view.scroll_offset = scroll.min(tab.view.total_lines.saturating_sub(1));
+
+        for tab in &mut self.tabs.tabs {
+            let Some(path) = tab.view.current_path.clone() else {
+                continue;
+            };
+            if !changed.contains(&path) {
+                continue;
+            }
+            let Ok(content) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let name = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            let scroll = tab.view.scroll_offset;
+            tab.view.load(path, name, content, &palette);
+            tab.view.scroll_offset = scroll.min(tab.view.total_lines.saturating_sub(1));
+        }
     }
 
     // ── Search ───────────────────────────────────────────────────────────────
