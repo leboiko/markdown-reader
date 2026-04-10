@@ -168,6 +168,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
     struct MermaidDraw {
         y: u16,
         height: u16,
+        fully_visible: bool,
         id: crate::markdown::MermaidBlockId,
         source: String,
     }
@@ -221,9 +222,13 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                             });
                         }
                         DocBlock::Mermaid { id, source } => {
+                            let fully_visible = clip_start == 0
+                                && visible_lines == block_height
+                                && draw_height as u32 == block_height;
                             mermaid_draws.push(MermaidDraw {
                                 y: rect_y,
                                 height: draw_height,
+                                fully_visible,
                                 id: *id,
                                 source: source.clone(),
                             });
@@ -265,15 +270,20 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
             width: inner.width,
             height: md.height,
         };
-        draw_mermaid_block(f, app, rect, md.id, &md.source, &p);
+        draw_mermaid_block(f, app, rect, md.fully_visible, md.id, &md.source, &p);
     }
 }
 
 /// Draw a mermaid block at the given rect, looking up the cache entry.
+///
+/// When `fully_visible` is false (the block is partially scrolled on- or
+/// off-screen), skip image rendering and show a placeholder; otherwise the
+/// image widget would re-fit to the shrinking rect and visibly jitter.
 fn draw_mermaid_block(
     f: &mut Frame,
     app: &mut App,
     rect: Rect,
+    fully_visible: bool,
     id: crate::markdown::MermaidBlockId,
     source: &str,
     p: &Palette,
@@ -287,9 +297,13 @@ fn draw_mermaid_block(
             render_mermaid_placeholder(f, rect, "rendering\u{2026}", p);
         }
         Some(MermaidEntry::Ready(protocol)) => {
-            use ratatui_image::{Resize, StatefulImage};
-            let image = StatefulImage::new().resize(Resize::Fit(None));
-            f.render_stateful_widget(image, rect, protocol.as_mut());
+            if fully_visible {
+                use ratatui_image::{Resize, StatefulImage};
+                let image = StatefulImage::new().resize(Resize::Fit(None));
+                f.render_stateful_widget(image, rect, protocol.as_mut());
+            } else {
+                render_mermaid_placeholder(f, rect, "scroll to view diagram", p);
+            }
         }
         Some(MermaidEntry::Failed(msg)) => {
             let footer = format!("[mermaid \u{2014} {}]", truncate(msg, 60));

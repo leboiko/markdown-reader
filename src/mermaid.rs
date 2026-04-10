@@ -1,10 +1,22 @@
 use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
 
 use image::{DynamicImage, RgbaImage};
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
 use resvg::usvg;
 
 use crate::markdown::MermaidBlockId;
+
+/// System fonts are loaded once on first use and reused for every diagram.
+/// Without this, resvg rasterizes shapes but cannot render any text in the SVG.
+fn font_db() -> &'static Arc<usvg::fontdb::Database> {
+    static DB: OnceLock<Arc<usvg::fontdb::Database>> = OnceLock::new();
+    DB.get_or_init(|| {
+        let mut db = usvg::fontdb::Database::new();
+        db.load_system_fonts();
+        Arc::new(db)
+    })
+}
 
 /// The state of a mermaid diagram in the render cache.
 pub enum MermaidEntry {
@@ -99,7 +111,10 @@ fn render_blocking(source: String, picker: &Picker) -> Result<StatefulProtocol, 
 
 /// Rasterize an SVG string to a `DynamicImage`.
 fn svg_to_image(svg: &str) -> Result<DynamicImage, String> {
-    let opts = usvg::Options::default();
+    let opts = usvg::Options {
+        fontdb: Arc::clone(font_db()),
+        ..usvg::Options::default()
+    };
     let tree = usvg::Tree::from_str(svg, &opts).map_err(|e| format!("usvg parse: {e}"))?;
 
     let size = tree.size();
