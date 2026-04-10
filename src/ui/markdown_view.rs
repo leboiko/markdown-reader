@@ -88,6 +88,10 @@ impl MarkdownViewState {
                 offset += MERMAID_BLOCK_HEIGHT;
                 None
             }
+            DocBlock::Table(t) => {
+                offset += t.rendered_height;
+                None
+            }
         })
     }
 }
@@ -233,6 +237,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                                 source: source.clone(),
                             });
                         }
+                        DocBlock::Table(_) => {}
                     }
                 }
             }

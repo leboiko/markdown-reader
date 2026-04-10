@@ -1202,7 +1202,7 @@ impl App {
             .iter()
             .filter_map(|b| match b {
                 crate::markdown::DocBlock::Mermaid { id, source } => Some((*id, source.clone())),
-                crate::markdown::DocBlock::Text(_) => None,
+                crate::markdown::DocBlock::Text(_) | crate::markdown::DocBlock::Table(_) => None,
             })
             .collect();
 
@@ -1225,7 +1225,7 @@ impl App {
             .flat_map(|t| t.view.rendered.iter())
             .filter_map(|b| match b {
                 crate::markdown::DocBlock::Mermaid { id, source } => Some((*id, source.clone())),
-                crate::markdown::DocBlock::Text(_) => None,
+                crate::markdown::DocBlock::Text(_) | crate::markdown::DocBlock::Table(_) => None,
             })
             .collect();
 

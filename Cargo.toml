@@ -30,3 +30,4 @@ mermaid-rs-renderer = "0.2.1"
 ratatui-image = { version = "10.0.6", default-features = false, features = ["crossterm", "image-defaults"] }
 image = "0.25"
 resvg = "0.46"
+unicode-width = "0.2"
