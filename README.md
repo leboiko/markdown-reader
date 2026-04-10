@@ -1,44 +1,65 @@
 # markdown-reader
 
-A terminal-based markdown file browser and viewer built with Rust and [ratatui](https://github.com/ratatui/ratatui).
+A terminal-based markdown file browser and viewer built with Rust and
+[ratatui](https://github.com/ratatui/ratatui). Browse a repository, open
+multiple files as tabs, search across content, jump to lines, switch themes,
+and resume exactly where you left off.
 
 ## Layout
 
 ```
-+-------------------+----------------------------------------------+
-|                   |                                              |
-|  Files            |  Preview                                     |
-|                   |                                              |
-|  ▼ docs/          |  # Document Title                            |
-|    README.md      |                                              |
-|    guide.md       |  Some rendered **markdown** content with     |
-|  ▶ src/           |  syntax highlighting, lists, tables, and     |
-|    CHANGELOG.md   |  code blocks displayed inline.               |
-|                   |                                              |
-|       30%         |                      70%                     |
-+-------------------+----------------------------------------------+
-| Search [Files] (Tab to toggle)  / query█                        |
-+-------------------+----------------------------------------------+
-| TREE | readme.md (42%)    Tab:panel  /:search  q:quit           |
-+-----------------------------------------------------------------+
++-----------------+--------------------------------------------------+
+|                 |  1: README.md   2: guide.md   3: CHANGELOG.md   |
+|  Files          +--------------------------------------------------+
+|                 |                                                  |
+|  ▼ docs/        |  # Document Title                                |
+|    README.md    |                                                  |
+|    guide.md     |    1 │ Some rendered **markdown** content with   |
+|  ▶ src/         |    2 │ headings, lists, tables, and code blocks  |
+|    CHANGELOG.md |    3 │ rendered inline.                          |
+|                 |                                                  |
+|      30%        |                      70%                         |
++-----------------+--------------------------------------------------+
+| Search [Files] (Tab to toggle)  / query█                           |
++---------------------------------------------------------------------+
+| VIEWER [1/3] README.md (42%)  Tab:panel  t:new-tab  T:picker  ...  |
++---------------------------------------------------------------------+
 ```
 
-The interface is split into three sections: a file tree on the left (30% width),
-a markdown viewer on the right (70% width), and a status bar at the bottom. A
-search bar appears between the main area and the status bar when activated.
+The window is split into three stacked sections: a main area, an optional
+search bar, and a single-line status bar. The main area holds the file tree
+on the left and the viewer on the right. When one or more files are open, a
+tab strip is rendered above the viewer. An optional line-number gutter is
+drawn on the left of the viewer content when enabled.
 
 ## Features
 
-- **File tree browser** -- navigate directories with collapsible folder nodes
-- **Rendered markdown preview** -- headings, lists, code blocks, tables, links,
-  blockquotes, task lists, and more, all rendered with color and style
-- **Vim-style keybindings** -- `j`/`k` navigation, `g`/`G` jump to start/end,
-  `d`/`u` for half-page scrolling
-- **Fuzzy search** -- search by file name or file content, with result cycling
-- **Live file watching** -- the tree and open file automatically reload when
-  files change on disk
-- **Respects .gitignore** -- uses the `ignore` crate to skip ignored files
-- **Async runtime** -- built on Tokio for non-blocking I/O and file watching
+- **Multiple tabs** — open many markdown files at once, navigate them with
+  vim-style `gt`/`gT`, jump by number (`1`–`9`, `0` for last), close with
+  `x`, and use `T` for a full tab picker overlay. Duplicate opens focus the
+  existing tab instead of piling up.
+- **Themes** — six built-in palettes (Default, Dracula, Solarized Dark,
+  Nord, Gruvbox Dark, GitHub Light). Switch live from the settings modal;
+  every open document re-renders with the new colors.
+- **Session resume** — per-project: the last open tabs, active tab, and
+  scroll positions are saved and restored automatically on the next launch.
+- **Line numbers** — optional left gutter in the viewer, togglable from
+  settings.
+- **Global search** — by filename or by content, with result cycling.
+  Confirming a result opens the file in a new tab without clobbering the
+  current one.
+- **In-document find** — `Ctrl+f` to search within the active document,
+  with highlighted matches and `n`/`N` to cycle. Per-tab state — switching
+  tabs preserves each tab's find state independently.
+- **Go to line** — `:` opens a prompt; type a line number, Enter jumps.
+  Clamped to document bounds and aligned with the gutter numbering.
+- **Mouse support** — click tabs to activate, click file tree items to
+  open, scroll the viewer or tree with the wheel.
+- **Rendered markdown preview** — headings, lists, code blocks, tables,
+  links, blockquotes, task lists, and more, styled from the active theme.
+- **Live file watching** — the tree and open tabs reload when files change
+  on disk, preserving per-tab scroll positions.
+- **Respects .gitignore** — uses the `ignore` crate to skip ignored files.
 
 ## Installation
 
@@ -81,84 +102,195 @@ markdown-reader ~/projects/my-docs
 markdown-reader --help
 ```
 
-Once inside the TUI, use `Tab` to switch between the file tree and the viewer,
-`/` to open the search bar, and `q` to quit.
+Once inside the TUI, press `?` at any time for the keyboard help overlay.
+Press `c` to open the settings modal (themes and line numbers). Press `q`
+to quit — the current tabs and scroll positions are saved before exit, so
+reopening the same directory resumes where you left off.
 
-## Keyboard Shortcuts
+## Keyboard shortcuts
 
-### Tree Panel
+### Navigation (tree)
 
-| Key              | Action                            |
-|------------------|-----------------------------------|
-| `j` / Down       | Move cursor down                  |
-| `k` / Up         | Move cursor up                    |
-| `l` / Right / Enter | Open file or expand directory  |
-| `h` / Left       | Collapse directory                |
-| `g`              | Jump to first item                |
-| `G`              | Jump to last item                 |
-| `Tab`            | Switch focus to viewer            |
-| `/`              | Open search                       |
-| `q`              | Quit                              |
+| Key | Action |
+|---|---|
+| `j` / `Down` | Move down |
+| `k` / `Up` | Move up |
+| `Enter` / `l` / `Right` | Open file (current tab) / expand directory |
+| `h` / `Left` | Collapse directory |
+| `gg` | Jump to first item |
+| `G` | Jump to last item |
+| `Tab` | Switch focus to viewer |
+| `t` | Open selected file in a **new tab** |
 
-### Viewer Panel
+### Viewer
 
-| Key              | Action                            |
-|------------------|-----------------------------------|
-| `j` / Down       | Scroll down one line              |
-| `k` / Up         | Scroll up one line                |
-| `d` / PageDown   | Scroll down half page             |
-| `u` / PageUp     | Scroll up half page               |
-| `g`              | Scroll to top                     |
-| `G`              | Scroll to bottom                  |
-| `Tab`            | Switch focus to tree              |
-| `/`              | Open search                       |
-| `q`              | Quit                              |
+| Key | Action |
+|---|---|
+| `j` / `Down` | Scroll down one line |
+| `k` / `Up` | Scroll up one line |
+| `d` / `u` | Half-page scroll down / up |
+| `PageDown` / `PageUp` | Full-page scroll down / up |
+| `gg` | Scroll to top |
+| `G` | Scroll to bottom |
+| `Ctrl+f` | Find in document |
+| `n` / `N` | Next / previous match |
+| `:` | Go to line |
+| `Tab` | Switch focus to tree |
 
-### Search Mode
+### Tabs
 
-| Key              | Action                            |
-|------------------|-----------------------------------|
-| Any character    | Append to search query            |
-| `Backspace`      | Delete last character             |
-| `Tab`            | Toggle between file name / content search |
-| `Down` / `Ctrl-n`| Next result                      |
-| `Up` / `Ctrl-p` | Previous result                   |
-| `Enter`          | Open selected result              |
-| `Esc`            | Close search                      |
+| Key | Action |
+|---|---|
+| `gt` | Next tab |
+| `gT` | Previous tab |
+| `1`–`9` | Jump to tab N (1-indexed) |
+| `0` | Jump to last tab |
+| `` ` `` | Jump to previously active tab |
+| `x` | Close the active tab |
+| `T` | Open the tab picker overlay |
 
-## Markdown Rendering
+The tab picker lists every open tab. Use `j`/`k` or arrows to navigate,
+`Enter` to activate, `x` to close a tab from within the picker, and
+`Esc` or `T` to dismiss.
 
-| Element          | Rendering                                        |
-|------------------|--------------------------------------------------|
-| H1               | Cyan, bold, underlined, with `█` prefix          |
-| H2               | Blue, bold, with `▌` prefix                      |
-| H3               | Magenta, bold, with `▎` prefix                   |
-| H4-H6            | White, bold                                      |
-| Bold             | Terminal bold                                     |
-| Italic           | Terminal italic                                   |
-| Strikethrough    | Terminal strikethrough                            |
-| Inline code      | Green, bold, wrapped in backticks                 |
-| Code block       | Box-drawn border, tinted background               |
-| Blockquote       | Gray text with `│` left border                   |
-| Unordered list   | Colored bullets: `•`, `◦`, `▪` by depth          |
-| Ordered list     | Numbered with yellow markers                      |
-| Task list        | Checkbox markers (checked/unchecked)              |
-| Table            | Box-drawn grid with bold cyan header              |
-| Link             | Blue, underlined                                  |
-| Horizontal rule  | Full-width `─` line                               |
+A maximum of 32 tabs can be open at once. Attempting to open a 33rd tab
+is silently ignored; close an existing one first.
+
+### Panels
+
+| Key | Action |
+|---|---|
+| `[` | Shrink file tree |
+| `]` | Grow file tree |
+| `H` | Toggle file tree visibility |
+
+### Search
+
+| Key | Action |
+|---|---|
+| `/` | Open search |
+| Any character | Append to query |
+| `Backspace` | Delete last character |
+| `Tab` | Toggle file-name vs content search |
+| `Down` / `Ctrl+n` | Next result |
+| `Up` / `Ctrl+p` | Previous result |
+| `Enter` | Open selected result (in a new tab) |
+| `Esc` | Close search |
+
+### Settings
+
+| Key | Action |
+|---|---|
+| `c` | Open settings (theme, line numbers) |
+| `Esc` / `c` | Close settings |
+
+### General
+
+| Key | Action |
+|---|---|
+| `?` | Toggle help overlay |
+| `q` | Quit (saves session) |
+
+## Mouse support
+
+The terminal must forward mouse events. Most modern terminals (iTerm2,
+Alacritty, Kitty, WezTerm, GNOME Terminal, Windows Terminal) do so
+out of the box.
+
+| Action | Effect |
+|---|---|
+| Click a tab | Activate that tab |
+| Click a file-tree item | Select and open it |
+| Click a directory | Toggle expand/collapse |
+| Click inside the viewer | Focus the viewer |
+| Scroll wheel in the viewer | Scroll the document (3 lines per tick) |
+| Scroll wheel in the tree | Move the tree selection |
+| Click a row in the tab picker | Activate that tab |
+
+## Themes
+
+Six built-in themes, switchable live from the settings modal (`c`):
+
+- **Default** — balanced palette that works on dark terminals.
+- **Dracula** — the classic pink/purple dark theme.
+- **Solarized Dark** — Ethan Schoonover's dark palette.
+- **Nord** — cool blue-based Arctic palette.
+- **Gruvbox Dark** — warm retro groove.
+- **GitHub Light** — bright palette for light terminals.
+
+Theme changes re-render every open tab immediately, so switching feels
+instantaneous. The choice is persisted and restored on next launch.
+
+## Configuration and state files
+
+Both files are TOML. Missing or corrupt files are silently ignored — the
+app starts with defaults rather than refusing to launch.
+
+### `config.toml` — user preferences
+
+- **Linux**: `$XDG_CONFIG_HOME/markdown-reader/config.toml`
+  (typically `~/.config/markdown-reader/config.toml`)
+- **macOS**: `~/Library/Application Support/markdown-reader/config.toml`
+- **Windows**: `%APPDATA%\markdown-reader\config.toml`
+
+Fields:
+
+```toml
+theme = "dracula"          # default | dracula | solarized_dark | nord | gruvbox_dark | github_light
+show_line_numbers = true
+```
+
+### `state.toml` — per-project session
+
+Holds a map of canonical root paths to their saved tab lists and active
+indices. Old (v0.1.0) single-file entries from prior versions are read
+transparently.
+
+- **Linux**: `$XDG_STATE_HOME/markdown-reader/state.toml`
+  (typically `~/.local/state/markdown-reader/state.toml`)
+- **macOS**: `~/Library/Application Support/markdown-reader/state.toml`
+- **Windows**: `%LOCALAPPDATA%\markdown-reader\state.toml`
+
+To reset a session (for example, if you want a fresh start on a project),
+delete the state file. Configuration is untouched.
+
+## Markdown rendering
+
+Elements are rendered with styles from the active theme; the list below
+shows the default theme.
+
+| Element | Rendering |
+|---|---|
+| H1 | Cyan, bold, underlined, with `█` prefix |
+| H2 | Blue, bold, with `▌` prefix |
+| H3 | Magenta, bold, with `▎` prefix |
+| H4–H6 | Bold |
+| Bold / italic / strikethrough | Terminal modifiers |
+| Inline code | Themed, wrapped in backticks |
+| Code block | Box-drawn border, tinted background |
+| Blockquote | Dim text with `│` left border |
+| Unordered list | Colored bullets `•`, `◦`, `▪` by depth |
+| Ordered list | Numbered, themed markers |
+| Task list | Checked / unchecked boxes |
+| Table | Box-drawn grid with bold header |
+| Link | Underlined, themed |
+| Horizontal rule | Full-width `─` line |
 
 ## Dependencies
 
-| Crate                  | Purpose                          |
-|------------------------|----------------------------------|
-| ratatui                | Terminal UI framework            |
-| crossterm              | Terminal backend / input events  |
-| pulldown-cmark         | Markdown parsing                 |
-| ignore                 | .gitignore-aware file discovery  |
-| tokio                  | Async runtime                    |
-| notify-debouncer-mini  | Filesystem change watching       |
-| clap                   | CLI argument parsing             |
-| anyhow                 | Error handling                   |
+| Crate | Purpose |
+|---|---|
+| ratatui | Terminal UI framework |
+| crossterm | Terminal backend, input and mouse events |
+| pulldown-cmark | Markdown parsing |
+| ignore | .gitignore-aware file discovery |
+| tokio | Async runtime |
+| notify-debouncer-mini | Filesystem change watching |
+| clap | CLI argument parsing |
+| anyhow | Error handling |
+| serde | Config and state serialization |
+| toml | TOML format for config and state files |
+| dirs | Platform-native config/state directories |
 
 ## License
 
