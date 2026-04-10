@@ -4,6 +4,7 @@ mod config;
 mod event;
 mod fs;
 mod markdown;
+mod mermaid;
 mod state;
 mod theme;
 mod ui;

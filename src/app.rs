@@ -2,6 +2,7 @@ use crate::action::Action;
 use crate::config::Config;
 use crate::event::EventHandler;
 use crate::fs::discovery::FileEntry;
+use crate::mermaid::MermaidCache;
 use crate::state::{AppState, TabSession};
 use crate::theme::{Palette, Theme};
 use crate::ui::file_tree::FileTreeState;
@@ -12,6 +13,7 @@ use anyhow::Result;
 use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 use ratatui::layout::Rect;
 use ratatui::prelude::*;
+use ratatui_image::picker::Picker;
 use std::path::PathBuf;
 
 /// Returns `true` when terminal position `(col, row)` falls inside `rect`.
@@ -135,6 +137,10 @@ pub struct App {
     pub tree_area_rect: Option<ratatui::layout::Rect>,
     /// Cached area of the viewer panel for mouse hit-testing.
     pub viewer_area_rect: Option<ratatui::layout::Rect>,
+    /// Cache of mermaid diagram render state, keyed by diagram hash.
+    pub mermaid_cache: MermaidCache,
+    /// Terminal graphics protocol picker; `None` when graphics are disabled.
+    pub picker: Option<Picker>,
 }
 
 impl App {
@@ -150,6 +156,8 @@ impl App {
         let entries = FileEntry::discover(&root);
         let mut tree = FileTreeState::default();
         tree.rebuild(entries);
+
+        let picker = crate::mermaid::create_picker();
 
         let mut app = Self {
             running: true,
@@ -175,6 +183,8 @@ impl App {
             tab_picker: None,
             tree_area_rect: None,
             viewer_area_rect: None,
+            mermaid_cache: MermaidCache::new(),
+            picker,
         };
 
         app.restore_session();
@@ -241,6 +251,9 @@ impl App {
         if self.tabs.is_empty() {
             return;
         }
+
+        // Mermaid queuing requires action_tx, which isn't set yet at
+        // restore_session time. Diagrams will be queued on first file open.
 
         // Select the active tab's file in the tree.
         let active_path = self.tabs.active_tab().and_then(|t| t.view.current_path.clone());
@@ -318,6 +331,10 @@ impl App {
     ) -> Result<()> {
         let (mut events, tx) = EventHandler::new();
         self.action_tx = Some(tx.clone());
+
+        // Queue renders for any tabs that were restored from session before
+        // action_tx was available.
+        self.queue_mermaid_for_all_tabs();
 
         let root_clone = self.root.clone();
         let _watcher = crate::fs::watcher::spawn_watcher(&root_clone, tx.clone());
@@ -415,6 +432,9 @@ impl App {
             }
             Action::Resize(_, _) => {}
             Action::Mouse(m) => self.handle_mouse(m),
+            Action::MermaidReady(id, entry) => {
+                self.mermaid_cache.insert(id, *entry);
+            }
         }
     }
 
@@ -964,8 +984,8 @@ impl App {
             tab.view.load(path.clone(), name, content, &palette);
         }
 
+        self.queue_mermaid_for_active_tab();
         self.focus = Focus::Viewer;
-        // Session is persisted on quit via save_session(); no need to write here.
     }
 
     fn open_selected_file(&mut self, new_tab: bool) {
@@ -1005,6 +1025,8 @@ impl App {
             tab.view.load(path, name, content, &palette);
             tab.view.scroll_offset = scroll.min(tab.view.total_lines.saturating_sub(1));
         }
+
+        self.queue_mermaid_for_all_tabs();
     }
 
     // ── Search ───────────────────────────────────────────────────────────────
@@ -1116,10 +1138,12 @@ impl App {
             None => return,
         };
 
-        for (i, line) in tab.view.rendered.lines.iter().enumerate() {
-            let line_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-            if line_text.to_lowercase().contains(&query_lower) {
-                tab.doc_search.match_lines.push(i as u32);
+        for (block_start, text) in tab.view.text_blocks() {
+            for (i, line) in text.lines.iter().enumerate() {
+                let line_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+                if line_text.to_lowercase().contains(&query_lower) {
+                    tab.doc_search.match_lines.push(block_start + i as u32);
+                }
             }
         }
 
@@ -1156,5 +1180,56 @@ impl App {
         };
         let line = ds.match_lines[ds.current_match];
         tab.view.scroll_offset = line;
+    }
+
+    // ── Mermaid ──────────────────────────────────────────────────────────────
+
+    /// Queue background renders for all mermaid diagrams in the active tab.
+    fn queue_mermaid_for_active_tab(&mut self) {
+        let Some(tx) = self.action_tx.clone() else {
+            return;
+        };
+        let Some(tab) = self.tabs.active_tab() else {
+            return;
+        };
+
+        let diagrams: Vec<(crate::markdown::MermaidBlockId, String)> = tab
+            .view
+            .rendered
+            .iter()
+            .filter_map(|b| match b {
+                crate::markdown::DocBlock::Mermaid { id, source } => Some((*id, source.clone())),
+                crate::markdown::DocBlock::Text(_) => None,
+            })
+            .collect();
+
+        let in_tmux = std::env::var("TMUX").is_ok();
+        for (id, source) in diagrams {
+            self.mermaid_cache
+                .ensure_queued(id, &source, self.picker.as_ref(), &tx, in_tmux);
+        }
+    }
+
+    fn queue_mermaid_for_all_tabs(&mut self) {
+        let Some(tx) = self.action_tx.clone() else {
+            return;
+        };
+
+        let diagrams: Vec<(crate::markdown::MermaidBlockId, String)> = self
+            .tabs
+            .tabs
+            .iter()
+            .flat_map(|t| t.view.rendered.iter())
+            .filter_map(|b| match b {
+                crate::markdown::DocBlock::Mermaid { id, source } => Some((*id, source.clone())),
+                crate::markdown::DocBlock::Text(_) => None,
+            })
+            .collect();
+
+        let in_tmux = std::env::var("TMUX").is_ok();
+        for (id, source) in diagrams {
+            self.mermaid_cache
+                .ensure_queued(id, &source, self.picker.as_ref(), &tx, in_tmux);
+        }
     }
 }

@@ -1,15 +1,14 @@
+use crate::markdown::MermaidBlockId;
+use crate::mermaid::MermaidEntry;
 use crossterm::event::{KeyEvent, MouseEvent};
 use std::path::PathBuf;
 
 /// All actions that can be dispatched through the application event loop.
 ///
-/// `RawKey` events are produced by the input task and translated into
-/// more specific variants by the focused-widget key handlers.
-///
-/// Many variants are constructed only through `handle_key` dispatch paths
-/// rather than at their definition site, so dead-code analysis produces
-/// false positives for this enum.
-#[derive(Debug, Clone)]
+/// `RawKey` events are produced by the input task and translated into more
+/// specific variants by the focused-widget key handlers. Many variants are
+/// constructed only through `handle_key` dispatch paths, so dead-code analysis
+/// produces false positives for this enum.
 #[allow(dead_code)]
 pub enum Action {
     /// Exit the application.
@@ -74,4 +73,9 @@ pub enum Action {
 
     /// Raw mouse event forwarded from crossterm.
     Mouse(MouseEvent),
+
+    /// A background mermaid render completed; entry is ready to be stored.
+    ///
+    /// Boxed to avoid inflating every `Action` variant by the size of `MermaidEntry`.
+    MermaidReady(MermaidBlockId, Box<MermaidEntry>),
 }
