@@ -94,13 +94,13 @@ impl Tabs {
     ///
     /// This method does **not** do filesystem I/O; the caller is responsible
     /// for calling [`MarkdownViewState::load`] when a new tab was created.
-    pub fn open_or_focus(
-        &mut self,
-        path: &PathBuf,
-        new_tab: bool,
-    ) -> (TabId, OpenOutcome) {
+    pub fn open_or_focus(&mut self, path: &PathBuf, new_tab: bool) -> (TabId, OpenOutcome) {
         // Deduplicate: if already open, just switch.
-        if let Some(existing) = self.tabs.iter().find(|t| t.view.current_path.as_ref() == Some(path)) {
+        if let Some(existing) = self
+            .tabs
+            .iter()
+            .find(|t| t.view.current_path.as_ref() == Some(path))
+        {
             let id = existing.id;
             self.set_active(id);
             return (id, OpenOutcome::Focused);
@@ -182,7 +182,11 @@ impl Tabs {
         let Some(idx) = self.active_index() else {
             return;
         };
-        let prev_idx = if idx == 0 { self.tabs.len() - 1 } else { idx - 1 };
+        let prev_idx = if idx == 0 {
+            self.tabs.len() - 1
+        } else {
+            idx - 1
+        };
         let id = self.tabs[prev_idx].id;
         self.set_active(id);
     }

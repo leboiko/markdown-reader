@@ -173,7 +173,10 @@ fn visible_window(
             let extra = widths[start - 1];
             let reserve_l = if start > 1 { overflow_reserve } else { 0 };
             let reserve_r = if end < n { overflow_reserve } else { 0 };
-            if used.saturating_add(extra).saturating_add(reserve_l).saturating_add(reserve_r)
+            if used
+                .saturating_add(extra)
+                .saturating_add(reserve_l)
+                .saturating_add(reserve_r)
                 <= available_width
             {
                 start -= 1;
@@ -187,7 +190,10 @@ fn visible_window(
             let extra = widths[end];
             let reserve_l = if start > 0 { overflow_reserve } else { 0 };
             let reserve_r = if end + 1 < n { overflow_reserve } else { 0 };
-            if used.saturating_add(extra).saturating_add(reserve_l).saturating_add(reserve_r)
+            if used
+                .saturating_add(extra)
+                .saturating_add(reserve_l)
+                .saturating_add(reserve_r)
                 <= available_width
             {
                 end += 1;

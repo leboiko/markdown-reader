@@ -44,10 +44,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         // No tree panel — tab bar spans the full content width.
         let content_chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(tab_bar_height),
-                Constraint::Min(1),
-            ])
+            .constraints([Constraint::Length(tab_bar_height), Constraint::Min(1)])
             .split(outer_chunks[0]);
 
         if has_tabs {
@@ -57,12 +54,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         viewer_area = content_chunks[1];
         app.viewer_area_rect = Some(viewer_area);
 
-        markdown_view::draw(
-            f,
-            app,
-            viewer_area,
-            is_viewer_focused(app.focus),
-        );
+        markdown_view::draw(f, app, viewer_area, is_viewer_focused(app.focus));
     } else {
         let main_chunks = Layout::default()
             .direction(Direction::Horizontal)
@@ -81,10 +73,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         // Tab bar sits above the viewer within the viewer column.
         let viewer_col_chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(tab_bar_height),
-                Constraint::Min(1),
-            ])
+            .constraints([Constraint::Length(tab_bar_height), Constraint::Min(1)])
             .split(viewer_col);
 
         if has_tabs {
@@ -94,12 +83,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         viewer_area = viewer_col_chunks[1];
         app.viewer_area_rect = Some(viewer_area);
 
-        markdown_view::draw(
-            f,
-            app,
-            viewer_area,
-            is_viewer_focused(app.focus),
-        );
+        markdown_view::draw(f, app, viewer_area, is_viewer_focused(app.focus));
     }
 
     if app.search.active {

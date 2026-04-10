@@ -256,7 +256,10 @@ impl App {
         // restore_session time. Diagrams will be queued on first file open.
 
         // Select the active tab's file in the tree.
-        let active_path = self.tabs.active_tab().and_then(|t| t.view.current_path.clone());
+        let active_path = self
+            .tabs
+            .active_tab()
+            .and_then(|t| t.view.current_path.clone());
         let tree_path = active_path.or(last_loaded_path);
         if let Some(path) = tree_path {
             self.expand_and_select(&path);
@@ -310,7 +313,8 @@ impl App {
 
         let active_idx = self.tabs.active_index().unwrap_or(0);
         let root = self.root.clone();
-        self.app_state.update_session(&root, tab_sessions, active_idx);
+        self.app_state
+            .update_session(&root, tab_sessions, active_idx);
     }
 
     /// Persist the current config settings.
@@ -1104,7 +1108,6 @@ impl App {
                     break;
                 }
             }
-
         }
     }
 

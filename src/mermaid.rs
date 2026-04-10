@@ -91,8 +91,7 @@ impl MermaidCache {
 
 /// CPU-bound: render mermaid source → SVG → DynamicImage → StatefulProtocol.
 fn render_blocking(source: String, picker: &Picker) -> Result<StatefulProtocol, String> {
-    let svg = mermaid_rs_renderer::render(&source)
-        .map_err(|e| format!("render error: {e}"))?;
+    let svg = mermaid_rs_renderer::render(&source).map_err(|e| format!("render error: {e}"))?;
 
     let img = svg_to_image(&svg).map_err(|e| format!("svg rasterize: {e}"))?;
     Ok(picker.new_resize_protocol(img))
@@ -101,8 +100,7 @@ fn render_blocking(source: String, picker: &Picker) -> Result<StatefulProtocol, 
 /// Rasterize an SVG string to a `DynamicImage`.
 fn svg_to_image(svg: &str) -> Result<DynamicImage, String> {
     let opts = usvg::Options::default();
-    let tree = usvg::Tree::from_str(svg, &opts)
-        .map_err(|e| format!("usvg parse: {e}"))?;
+    let tree = usvg::Tree::from_str(svg, &opts).map_err(|e| format!("usvg parse: {e}"))?;
 
     let size = tree.size();
     let width = size.width() as u32;
@@ -111,10 +109,14 @@ fn svg_to_image(svg: &str) -> Result<DynamicImage, String> {
         return Err("empty SVG dimensions".to_string());
     }
 
-    let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height)
-        .ok_or("failed to allocate pixmap")?;
+    let mut pixmap =
+        resvg::tiny_skia::Pixmap::new(width, height).ok_or("failed to allocate pixmap")?;
 
-    resvg::render(&tree, resvg::tiny_skia::Transform::identity(), &mut pixmap.as_mut());
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::identity(),
+        &mut pixmap.as_mut(),
+    );
 
     // tiny_skia's pixmap is RGBA premultiplied; image::RgbaImage is RGBA
     // straight-alpha. Demultiply each pixel.
@@ -215,14 +217,12 @@ mod tests {
 
         for (name, src) in &diagrams {
             match mermaid_rs_renderer::render(src) {
-                Ok(svg) => {
-                    match svg_to_image(&svg) {
-                        Ok(_) => {
-                            ready_count += 1;
-                        }
-                        Err(e) => failed.push((name, format!("rasterize: {e}"))),
+                Ok(svg) => match svg_to_image(&svg) {
+                    Ok(_) => {
+                        ready_count += 1;
                     }
-                }
+                    Err(e) => failed.push((name, format!("rasterize: {e}"))),
+                },
                 Err(e) => failed.push((name, format!("mermaid: {e}"))),
             }
         }

@@ -39,8 +39,15 @@ pub struct Session {
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum SessionCompat {
-    New { tabs: Vec<TabSession>, active: usize },
-    Legacy { file: PathBuf, #[serde(default)] scroll: u32 },
+    New {
+        tabs: Vec<TabSession>,
+        active: usize,
+    },
+    Legacy {
+        file: PathBuf,
+        #[serde(default)]
+        scroll: u32,
+    },
 }
 
 impl From<SessionCompat> for Session {
@@ -91,15 +98,13 @@ impl AppState {
     }
 
     /// Replace the session for `root` with a snapshot of `tabs` and `active_idx`.
-    pub fn update_session(
-        &mut self,
-        root: &Path,
-        tabs: Vec<TabSession>,
-        active_idx: usize,
-    ) {
+    pub fn update_session(&mut self, root: &Path, tabs: Vec<TabSession>, active_idx: usize) {
         self.sessions.insert(
             root.to_path_buf(),
-            Session { tabs, active: active_idx },
+            Session {
+                tabs,
+                active: active_idx,
+            },
         );
         self.save();
     }
@@ -138,9 +143,18 @@ scroll = 42
     fn session_new_roundtrip() {
         let original = Session {
             tabs: vec![
-                TabSession { file: PathBuf::from("/a.md"), scroll: 0 },
-                TabSession { file: PathBuf::from("/b.md"), scroll: 10 },
-                TabSession { file: PathBuf::from("/c.md"), scroll: 5 },
+                TabSession {
+                    file: PathBuf::from("/a.md"),
+                    scroll: 0,
+                },
+                TabSession {
+                    file: PathBuf::from("/b.md"),
+                    scroll: 10,
+                },
+                TabSession {
+                    file: PathBuf::from("/c.md"),
+                    scroll: 5,
+                },
             ],
             active: 1,
         };

@@ -111,7 +111,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             let num_style = if is_cursor {
                 Style::default().fg(p.accent).add_modifier(Modifier::BOLD)
             } else if is_active {
-                Style::default().fg(p.accent_alt).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(p.accent_alt)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(p.dim)
             };
@@ -122,7 +124,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                     .bg(p.selection_bg)
                     .add_modifier(Modifier::BOLD)
             } else if is_active {
-                Style::default().fg(p.accent_alt).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(p.accent_alt)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(p.foreground)
             };
@@ -226,4 +230,3 @@ pub fn handle_key(app: &mut App, code: crossterm::event::KeyCode) -> bool {
         _ => true,
     }
 }
-

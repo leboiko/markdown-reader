@@ -140,11 +140,18 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
     let tab = app.tabs.active_tab().unwrap();
     let scroll_offset = tab.view.scroll_offset;
 
-    let doc_search_query = if !tab.doc_search.query.is_empty() && !tab.doc_search.match_lines.is_empty() {
-        Some((tab.doc_search.query.clone(), tab.doc_search.match_lines.get(tab.doc_search.current_match).copied()))
-    } else {
-        None
-    };
+    let doc_search_query =
+        if !tab.doc_search.query.is_empty() && !tab.doc_search.match_lines.is_empty() {
+            Some((
+                tab.doc_search.query.clone(),
+                tab.doc_search
+                    .match_lines
+                    .get(tab.doc_search.current_match)
+                    .copied(),
+            ))
+        } else {
+            None
+        };
 
     // Build a flat list of (block_start_line, block) to find which blocks
     // intersect [scroll_offset, scroll_offset + view_height).
@@ -186,14 +193,18 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                 let rect_y = inner.y.saturating_add(y_in_viewport as u16);
 
                 if rect_y < inner.y + inner.height && visible_lines > 0 {
-                    let draw_height = visible_lines.min((inner.y + inner.height - rect_y) as u32) as u16;
+                    let draw_height =
+                        visible_lines.min((inner.y + inner.height - rect_y) as u32) as u16;
 
                     match doc_block {
                         DocBlock::Text(text) => {
                             // Slice only the visible lines from this Text block.
                             let start = clip_start as usize;
-                            let end = (clip_start + visible_lines).min(text.lines.len() as u32) as usize;
-                            let visible_text = if let Some((query, current_line)) = &doc_search_query {
+                            let end =
+                                (clip_start + visible_lines).min(text.lines.len() as u32) as usize;
+                            let visible_text = if let Some((query, current_line)) =
+                                &doc_search_query
+                            {
                                 let full_text = highlight_matches(text, query, *current_line, &p);
                                 let sliced_lines = full_text.lines[start..end].to_vec();
                                 Text::from(sliced_lines)
@@ -298,11 +309,15 @@ fn render_mermaid_placeholder(f: &mut Frame, rect: Rect, msg: &str, p: &Palette)
 
     if inner.height > 0 {
         let line = Line::from(Span::styled(msg.to_string(), p.dim_style()));
-        let para = Paragraph::new(Text::from(vec![line]))
-            .alignment(ratatui::layout::Alignment::Center);
+        let para =
+            Paragraph::new(Text::from(vec![line])).alignment(ratatui::layout::Alignment::Center);
         // Center vertically.
         let y_offset = inner.height / 2;
-        let target = Rect { y: inner.y + y_offset, height: 1, ..inner };
+        let target = Rect {
+            y: inner.y + y_offset,
+            height: 1,
+            ..inner
+        };
         f.render_widget(para, target);
     }
 }
@@ -350,14 +365,8 @@ fn render_text_with_gutter(f: &mut Frame, rect: Rect, text: Text<'static>, p: &P
         })
         .collect();
 
-    f.render_widget(
-        Paragraph::new(Text::from(gutter_lines)),
-        chunks[0],
-    );
-    f.render_widget(
-        Paragraph::new(text).wrap(Wrap { trim: false }),
-        chunks[1],
-    );
+    f.render_widget(Paragraph::new(Text::from(gutter_lines)), chunks[0]);
+    f.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), chunks[1]);
 }
 
 /// Produce a new `Text` with search matches highlighted.
@@ -388,7 +397,11 @@ fn highlight_matches(
             }
 
             let is_current = current_line == Some(line_idx as u32);
-            let hl_style = if is_current { current_style } else { match_style };
+            let hl_style = if is_current {
+                current_style
+            } else {
+                match_style
+            };
 
             let mut new_spans: Vec<Span<'static>> = Vec::new();
             for span in &line.spans {
@@ -439,9 +452,5 @@ fn split_and_highlight(
 }
 
 fn truncate(s: &str, max: usize) -> &str {
-    if s.len() <= max {
-        s
-    } else {
-        &s[..max]
-    }
+    if s.len() <= max { s } else { &s[..max] }
 }

@@ -31,7 +31,10 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
             (tab.view.scroll_offset * 100 / tab.view.total_lines.max(1)).min(100)
         };
         let tab_idx = app.tabs.active_index().map(|i| i + 1).unwrap_or(0);
-        format!(" | [{tab_idx}/{tab_count}] {} ({}%)", tab.view.file_name, pct)
+        format!(
+            " | [{tab_idx}/{tab_count}] {} ({}%)",
+            tab.view.file_name, pct
+        )
     } else {
         String::new()
     };
