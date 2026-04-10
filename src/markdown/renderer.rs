@@ -6,8 +6,9 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
 };
+use unicode_width::UnicodeWidthStr;
 
-use crate::markdown::{DocBlock, MermaidBlockId};
+use crate::markdown::{DocBlock, MermaidBlockId, TableBlock, TableBlockId};
 use crate::theme::Palette;
 
 /// Render a markdown string into a sequence of [`DocBlock`] values.
@@ -59,8 +60,6 @@ struct MdRenderer {
     task_marker: Color,
     block_quote_fg: Color,
     block_quote_border: Color,
-    table_header_color: Color,
-    table_border: Color,
     dim: Color,
 }
 
@@ -98,8 +97,6 @@ impl MdRenderer {
             task_marker: palette.task_marker,
             block_quote_fg: palette.block_quote_fg,
             block_quote_border: palette.block_quote_border,
-            table_header_color: palette.table_header,
-            table_border: palette.table_border,
             dim: palette.dim,
         }
     }
@@ -342,7 +339,7 @@ impl MdRenderer {
                 self.pop_style();
             }
             TagEnd::Table => {
-                self.render_table();
+                self.emit_table_block();
                 self.in_table = false;
             }
             TagEnd::TableHead => {
@@ -428,84 +425,60 @@ impl MdRenderer {
         self.push_blank_line();
     }
 
-    fn render_table(&mut self) {
-        let border_style = Style::default().fg(self.table_border);
-        let header_style = Style::default()
-            .fg(self.table_header_color)
-            .add_modifier(Modifier::BOLD);
-        let cell_style = Style::default().fg(self.heading_other);
+    fn emit_table_block(&mut self) {
+        let headers = self.table_header_row.take().unwrap_or_default();
+        let rows = std::mem::take(&mut self.table_rows);
+        let alignments = std::mem::take(&mut self.table_alignments);
 
-        let header = self.table_header_row.take().unwrap_or_default();
-        let num_cols = header
+        let num_cols = headers
             .len()
-            .max(self.table_rows.iter().map(|r| r.len()).max().unwrap_or(0));
+            .max(rows.iter().map(|r| r.len()).max().unwrap_or(0));
 
         if num_cols == 0 {
             return;
         }
 
-        let mut col_widths = vec![0usize; num_cols];
-        for (i, cell) in header.iter().enumerate() {
-            col_widths[i] = col_widths[i].max(cell.len());
+        let mut natural_widths = vec![0usize; num_cols];
+        for (i, cell) in headers.iter().enumerate() {
+            natural_widths[i] = natural_widths[i].max(UnicodeWidthStr::width(cell.as_str()));
         }
-        for row in &self.table_rows {
+        for row in &rows {
             for (i, cell) in row.iter().enumerate() {
                 if i < num_cols {
-                    col_widths[i] = col_widths[i].max(cell.len());
+                    natural_widths[i] =
+                        natural_widths[i].max(UnicodeWidthStr::width(cell.as_str()));
                 }
             }
         }
-        for w in &mut col_widths {
-            *w = (*w).max(3);
+        // Minimum column width of 1 so borders are always valid.
+        for w in &mut natural_widths {
+            *w = (*w).max(1);
         }
 
-        let top: String = col_widths
-            .iter()
-            .map(|w| "─".repeat(w + 2))
-            .collect::<Vec<_>>()
-            .join("┬");
-        self.lines
-            .push(Line::from(Span::styled(format!("┌{top}┐"), border_style)));
-
-        let mut spans = Vec::new();
-        spans.push(Span::styled("│".to_string(), border_style));
-        for (i, w) in col_widths.iter().enumerate() {
-            let cell = header.get(i).map(|s| s.as_str()).unwrap_or("");
-            spans.push(Span::styled(format!(" {:<w$} ", cell), header_style));
-            spans.push(Span::styled("│".to_string(), border_style));
+        let mut content_bytes = Vec::new();
+        for h in &headers {
+            content_bytes.extend_from_slice(h.as_bytes());
         }
-        self.lines.push(Line::from(spans));
-
-        let sep: String = col_widths
-            .iter()
-            .map(|w| "─".repeat(w + 2))
-            .collect::<Vec<_>>()
-            .join("┼");
-        self.lines
-            .push(Line::from(Span::styled(format!("├{sep}┤"), border_style)));
-
-        for row in &self.table_rows {
-            let mut spans = Vec::new();
-            spans.push(Span::styled("│".to_string(), border_style));
-            for (i, w) in col_widths.iter().enumerate() {
-                let cell = row.get(i).map(|s| s.as_str()).unwrap_or("");
-                spans.push(Span::styled(format!(" {:<w$} ", cell), cell_style));
-                spans.push(Span::styled("│".to_string(), border_style));
+        for row in &rows {
+            for cell in row {
+                content_bytes.extend_from_slice(cell.as_bytes());
             }
-            self.lines.push(Line::from(spans));
         }
+        let id = TableBlockId(hash_bytes(&content_bytes));
 
-        let bottom: String = col_widths
-            .iter()
-            .map(|w| "─".repeat(w + 2))
-            .collect::<Vec<_>>()
-            .join("┴");
-        self.lines.push(Line::from(Span::styled(
-            format!("└{bottom}┘"),
-            border_style,
-        )));
+        // Pessimistic height: top + header + separator + rows + bottom.
+        // layout_table will refine this on first draw; this seeds the scrolling math.
+        let rendered_height = (rows.len() as u32 + 3).max(3);
 
-        self.table_rows.clear();
+        self.flush_text_block();
+        self.blocks.push(DocBlock::Table(TableBlock {
+            id,
+            headers,
+            rows,
+            alignments,
+            natural_widths,
+            rendered_height,
+        }));
         self.push_blank_line();
     }
 }
@@ -513,5 +486,11 @@ impl MdRenderer {
 fn hash_str(s: &str) -> u64 {
     let mut h = DefaultHasher::new();
     s.hash(&mut h);
+    h.finish()
+}
+
+fn hash_bytes(b: &[u8]) -> u64 {
+    let mut h = DefaultHasher::new();
+    b.hash(&mut h);
     h.finish()
 }
