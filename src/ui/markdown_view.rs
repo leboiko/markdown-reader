@@ -1,6 +1,7 @@
 use crate::app::App;
-use crate::markdown::{DocBlock, MERMAID_BLOCK_HEIGHT};
+use crate::markdown::{DocBlock, TableBlockId, MERMAID_BLOCK_HEIGHT};
 use crate::theme::Palette;
+use crate::ui::table_render::layout_table;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -9,7 +10,14 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::path::PathBuf;
+
+/// Cached rendering of a single table at a given layout width.
+#[derive(Debug)]
+pub struct TableLayout {
+    pub text: Text<'static>,
+}
 
 /// Runtime state for the markdown preview panel.
 #[derive(Debug, Default)]
@@ -26,6 +34,11 @@ pub struct MarkdownViewState {
     pub current_path: Option<PathBuf>,
     /// Total number of display lines across all blocks.
     pub total_lines: u32,
+    /// The inner width used for the last layout pass; cached layouts are invalid
+    /// when this changes.
+    pub layout_width: u16,
+    /// Per-table rendering cache keyed by `TableBlockId`.
+    pub table_layouts: HashMap<TableBlockId, TableLayout>,
 }
 
 impl MarkdownViewState {
@@ -141,6 +154,42 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
+    // If the inner width has changed, all table layout caches are stale.
+    // Recompute heights for every table block and update total_lines.
+    {
+        let tab = app.tabs.active_tab_mut().unwrap();
+        if tab.view.layout_width != inner.width {
+            tab.view.layout_width = inner.width;
+            tab.view.table_layouts.clear();
+
+            for doc_block in &mut tab.view.rendered {
+                if let DocBlock::Table(table) = doc_block {
+                    let (text, height, _was_truncated) = layout_table(table, inner.width, &p);
+                    table.rendered_height = height;
+                    tab.view.table_layouts.insert(table.id, TableLayout { text });
+                }
+            }
+
+            tab.view.total_lines = tab.view.rendered.iter().map(|b| b.height()).sum();
+            let max_scroll = tab.view.total_lines.saturating_sub(view_height / 2);
+            tab.view.scroll_offset = tab.view.scroll_offset.min(max_scroll);
+        } else {
+            // Populate cache for any tables not yet laid out (e.g. first draw).
+            for doc_block in &mut tab.view.rendered {
+                if let DocBlock::Table(table) = doc_block
+                    && let std::collections::hash_map::Entry::Vacant(e) =
+                        tab.view.table_layouts.entry(table.id)
+                {
+                    let (text, height, _was_truncated) = layout_table(table, inner.width, &p);
+                    table.rendered_height = height;
+                    e.insert(TableLayout { text });
+                }
+            }
+            // Recompute total_lines in case any table heights were just populated.
+            tab.view.total_lines = tab.view.rendered.iter().map(|b| b.height()).sum();
+        }
+    }
+
     let tab = app.tabs.active_tab().unwrap();
     let scroll_offset = tab.view.scroll_offset;
 
@@ -237,7 +286,22 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                                 source: source.clone(),
                             });
                         }
-                        DocBlock::Table(_) => {}
+                        DocBlock::Table(table) => {
+                            // Slice visible lines from the cached rendered text.
+                            if let Some(cached) = tab.view.table_layouts.get(&table.id) {
+                                let start = clip_start as usize;
+                                let end = (clip_start + visible_lines)
+                                    .min(cached.text.lines.len() as u32)
+                                    as usize;
+                                let sliced = cached.text.lines[start..end].to_vec();
+                                text_draws.push(TextDraw {
+                                    y: rect_y,
+                                    height: draw_height,
+                                    text: Text::from(sliced),
+                                    first_line_number: block_start + clip_start + 1,
+                                });
+                            }
+                        }
                     }
                 }
             }

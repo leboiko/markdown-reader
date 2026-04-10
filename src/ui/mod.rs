@@ -1,4 +1,5 @@
 pub mod config_popup;
+pub mod table_render;
 pub mod doc_search_bar;
 pub mod file_tree;
 pub mod goto_line_bar;
