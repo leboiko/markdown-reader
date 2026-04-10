@@ -154,17 +154,33 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    // If the inner width has changed, all table layout caches are stale.
+    // When line numbers are on, the gutter steals cells from the left of the
+    // content area. Tables must be laid out against the actual content width
+    // or their rows wrap inside ratatui's Paragraph and the grid breaks.
+    let effective_width = if app.show_line_numbers {
+        let estimate = app
+            .tabs
+            .active_tab()
+            .map(|t| t.view.total_lines.max(10))
+            .unwrap_or(10);
+        let num_digits = (estimate.ilog10() + 1).max(4) as u16;
+        let gutter_width = num_digits + 3;
+        inner.width.saturating_sub(gutter_width)
+    } else {
+        inner.width
+    };
+
+    // If the effective width has changed, all table layout caches are stale.
     // Recompute heights for every table block and update total_lines.
     {
         let tab = app.tabs.active_tab_mut().unwrap();
-        if tab.view.layout_width != inner.width {
-            tab.view.layout_width = inner.width;
+        if tab.view.layout_width != effective_width {
+            tab.view.layout_width = effective_width;
             tab.view.table_layouts.clear();
 
             for doc_block in &mut tab.view.rendered {
                 if let DocBlock::Table(table) = doc_block {
-                    let (text, height, _was_truncated) = layout_table(table, inner.width, &p);
+                    let (text, height, _was_truncated) = layout_table(table, effective_width, &p);
                     table.rendered_height = height;
                     tab.view.table_layouts.insert(table.id, TableLayout { text });
                 }
@@ -180,7 +196,8 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                     && let std::collections::hash_map::Entry::Vacant(e) =
                         tab.view.table_layouts.entry(table.id)
                 {
-                    let (text, height, _was_truncated) = layout_table(table, inner.width, &p);
+                    let (text, height, _was_truncated) =
+                        layout_table(table, effective_width, &p);
                     table.rendered_height = height;
                     e.insert(TableLayout { text });
                 }
