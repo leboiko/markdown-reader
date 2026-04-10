@@ -19,6 +19,13 @@ use ratatui::{
 pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
 
+    // Clear stale rects at the start of each draw so hit-tests against the
+    // previous frame's layout never fire.
+    app.tree_area_rect = None;
+    app.viewer_area_rect = None;
+    app.tab_bar_rects.clear();
+    app.tab_picker_rects.clear();
+
     let outer_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -28,13 +35,13 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         ])
         .split(area);
 
+    let has_tabs = !app.tabs.is_empty();
+    let tab_bar_height: u16 = if has_tabs { 1 } else { 0 };
+
     let viewer_area;
 
     if app.tree_hidden {
-        // No tree — tab bar spans the full width of the content area.
-        let has_tabs = !app.tabs.is_empty();
-        let tab_bar_height = if has_tabs { 1 } else { 0 };
-
+        // No tree panel — tab bar spans the full content width.
         let content_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -48,14 +55,13 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         }
 
         viewer_area = content_chunks[1];
+        app.viewer_area_rect = Some(viewer_area);
+
         markdown_view::draw(
             f,
             app,
             viewer_area,
-            app.focus == Focus::Viewer
-                || app.focus == Focus::DocSearch
-                || app.focus == Focus::Config
-                || app.focus == Focus::GotoLine,
+            is_viewer_focused(app.focus),
         );
     } else {
         let main_chunks = Layout::default()
@@ -70,14 +76,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         let viewer_col = main_chunks[1];
 
         file_tree::draw(f, app, tree_area, app.focus == Focus::Tree);
-
-        // Store the tree area for mouse hit-testing (populated after tree draw).
         app.tree_area_rect = Some(tree_area);
 
         // Tab bar sits above the viewer within the viewer column.
-        let has_tabs = !app.tabs.is_empty();
-        let tab_bar_height = if has_tabs { 1 } else { 0 };
-
         let viewer_col_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -97,10 +98,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             f,
             app,
             viewer_area,
-            app.focus == Focus::Viewer
-                || app.focus == Focus::DocSearch
-                || app.focus == Focus::Config
-                || app.focus == Focus::GotoLine,
+            is_viewer_focused(app.focus),
         );
     }
 
@@ -139,3 +137,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
 }
 
+/// Returns `true` when the viewer panel should render as focused.
+fn is_viewer_focused(focus: Focus) -> bool {
+    matches!(
+        focus,
+        Focus::Viewer | Focus::DocSearch | Focus::Config | Focus::GotoLine | Focus::TabPicker
+    )
+}
