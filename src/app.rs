@@ -6,6 +6,7 @@ use crate::state::{AppState, TabSession};
 use crate::theme::{Palette, Theme};
 use crate::ui::file_tree::FileTreeState;
 use crate::ui::search_bar::{SearchMode, SearchResult, SearchState};
+use crate::ui::tab_picker::TabPickerState;
 use crate::ui::tabs::{OpenOutcome, Tabs};
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyModifiers};
@@ -27,6 +28,8 @@ pub enum Focus {
     Config,
     /// Go-to-line prompt in the viewer.
     GotoLine,
+    /// Tab picker overlay.
+    TabPicker,
 }
 
 /// Transient state for the settings popup.
@@ -118,6 +121,10 @@ pub struct App {
     pub pending_chord: Option<char>,
     /// Per-tab rects in the tab bar, populated during each draw for mouse hit-testing.
     pub tab_bar_rects: Vec<(crate::ui::tabs::TabId, ratatui::layout::Rect)>,
+    /// Per-row rects in the tab picker overlay for mouse hit-testing.
+    pub tab_picker_rects: Vec<(crate::ui::tabs::TabId, ratatui::layout::Rect)>,
+    /// Tab picker overlay state; `None` when the picker is closed.
+    pub tab_picker: Option<TabPickerState>,
     /// Cached area of the file-tree panel for mouse hit-testing.
     pub tree_area_rect: Option<ratatui::layout::Rect>,
     /// Cached area of the viewer panel for mouse hit-testing.
@@ -158,6 +165,8 @@ impl App {
             action_tx: None,
             pending_chord: None,
             tab_bar_rects: Vec::new(),
+            tab_picker_rects: Vec::new(),
+            tab_picker: None,
             tree_area_rect: None,
             viewer_area_rect: None,
         };
@@ -431,6 +440,13 @@ impl App {
             Focus::DocSearch => self.handle_doc_search_key(code, modifiers),
             Focus::GotoLine => self.handle_goto_line_key(code),
             Focus::Config => {}
+            Focus::TabPicker => {
+                crate::ui::tab_picker::handle_key(self, code);
+                // Sync focus if picker was closed.
+                if self.tab_picker.is_none() {
+                    self.focus = Focus::Viewer;
+                }
+            }
         }
     }
 
@@ -617,6 +633,14 @@ impl App {
             KeyCode::Char('0') => self.tabs.activate_last(),
             KeyCode::Char(c @ '1'..='9') => {
                 self.tabs.activate_by_index((c as u8 - b'0') as usize);
+            }
+            // `T` opens the tab picker overlay.
+            KeyCode::Char('T') => {
+                if !self.tabs.is_empty() {
+                    let cursor = self.tabs.active_index().unwrap_or(0);
+                    self.tab_picker = Some(TabPickerState { cursor });
+                    self.focus = Focus::TabPicker;
+                }
             }
             KeyCode::Char('/') => {
                 self.search.activate();

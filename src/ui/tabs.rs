@@ -77,7 +77,7 @@ impl Tabs {
         self.active.and_then(|id| self.index_of(id))
     }
 
-    fn set_active(&mut self, id: TabId) {
+    pub fn set_active(&mut self, id: TabId) {
         if self.active != Some(id) {
             self.previous = self.active;
             self.active = Some(id);

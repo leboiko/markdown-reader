@@ -7,6 +7,7 @@ pub mod markdown_view;
 pub mod search_bar;
 pub mod status_bar;
 pub mod tab_bar;
+pub mod tab_picker;
 pub mod tabs;
 
 use crate::app::{App, Focus};
@@ -120,6 +121,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     if app.show_help {
         help::draw(f, app);
+    }
+
+    if app.tab_picker.is_some() {
+        tab_picker::draw(f, app);
     }
 
     if let Some(popup_state) = &app.config_popup {
