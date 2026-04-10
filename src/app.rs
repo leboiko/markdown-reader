@@ -619,7 +619,59 @@ impl App {
         }
     }
 
+    fn switch_to_next_tab(&mut self) {
+        self.commit_doc_search_if_active();
+        self.tabs.next();
+    }
+
+    fn switch_to_prev_tab(&mut self) {
+        self.commit_doc_search_if_active();
+        self.tabs.prev();
+    }
+
+    fn resolve_g_chord_tree(&mut self, code: KeyCode) -> bool {
+        match code {
+            KeyCode::Char('g') => {
+                self.tree.go_first();
+                true
+            }
+            KeyCode::Char('t') => {
+                self.switch_to_next_tab();
+                true
+            }
+            KeyCode::Char('T') => {
+                self.switch_to_prev_tab();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn resolve_g_chord_viewer(&mut self, code: KeyCode) -> bool {
+        match code {
+            KeyCode::Char('g') => {
+                if let Some(tab) = self.tabs.active_tab_mut() {
+                    tab.view.scroll_to_top();
+                }
+                true
+            }
+            KeyCode::Char('t') => {
+                self.switch_to_next_tab();
+                true
+            }
+            KeyCode::Char('T') => {
+                self.switch_to_prev_tab();
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn handle_tree_key(&mut self, code: KeyCode, _modifiers: KeyModifiers) {
+        if self.pending_chord.take() == Some('g') && self.resolve_g_chord_tree(code) {
+            return;
+        }
+
         match code {
             KeyCode::Char('q') => self.running = false,
             KeyCode::Char('j') | KeyCode::Down => self.tree.move_down(),
@@ -648,7 +700,7 @@ impl App {
                 self.search.activate();
                 self.focus = Focus::Search;
             }
-            KeyCode::Char('g') => self.tree.go_first(),
+            KeyCode::Char('g') => self.pending_chord = Some('g'),
             KeyCode::Char('G') => self.tree.go_last(),
             KeyCode::Char('[') => self.shrink_tree(),
             KeyCode::Char(']') => self.grow_tree(),
@@ -662,22 +714,9 @@ impl App {
     }
 
     fn handle_viewer_key(&mut self, code: KeyCode, modifiers: KeyModifiers) {
-        // Consume and resolve any pending chord first.
-        let chord = self.pending_chord.take();
-
-        if let Some(leader) = chord {
-            // We have a pending `[` or `]`; see if `t` completes it.
-            if code == KeyCode::Char('t') {
-                self.commit_doc_search_if_active();
-                match leader {
-                    ']' => self.tabs.next(),
-                    '[' => self.tabs.prev(),
-                    _ => {}
-                }
-                return;
-            }
-            // Chord not completed — fall through and handle the current key
-            // normally (the leader is dropped).
+        // Resolve a pending vim `g` chord before normal dispatch.
+        if self.pending_chord.take() == Some('g') && self.resolve_g_chord_viewer(code) {
+            return;
         }
 
         match code {
@@ -725,11 +764,7 @@ impl App {
                     tab.view.scroll_page_up(vh);
                 }
             }
-            KeyCode::Char('g') => {
-                if let Some(tab) = self.tabs.active_tab_mut() {
-                    tab.view.scroll_to_top();
-                }
-            }
+            KeyCode::Char('g') => self.pending_chord = Some('g'),
             KeyCode::Char('G') => {
                 let vh = self.tabs.view_height;
                 if let Some(tab) = self.tabs.active_tab_mut() {
@@ -737,9 +772,8 @@ impl App {
                 }
             }
             KeyCode::Tab => self.focus = Focus::Tree,
-            // Latch the chord leader; `]t` / `[t` will be resolved next keystroke.
-            KeyCode::Char('[') => self.pending_chord = Some('['),
-            KeyCode::Char(']') => self.pending_chord = Some(']'),
+            KeyCode::Char('[') => self.shrink_tree(),
+            KeyCode::Char(']') => self.grow_tree(),
             // `x` closes the active tab.
             KeyCode::Char('x') => {
                 if let Some(id) = self.tabs.active {
