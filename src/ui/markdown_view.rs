@@ -263,7 +263,8 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                             let visible_text = if let Some((query, current_line)) =
                                 &doc_search_query
                             {
-                                let full_text = highlight_matches(text, query, *current_line, &p);
+                                let full_text =
+                                    highlight_matches(text, query, *current_line, block_start, &p);
                                 let sliced_lines = full_text.lines[start..end].to_vec();
                                 Text::from(sliced_lines)
                             } else {
@@ -298,8 +299,13 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                                     as usize;
                                 let visible_text =
                                     if let Some((query, current_line)) = &doc_search_query {
-                                        let full =
-                                            highlight_matches(&cached.text, query, *current_line, &p);
+                                        let full = highlight_matches(
+                                            &cached.text,
+                                            query,
+                                            *current_line,
+                                            block_start,
+                                            &p,
+                                        );
                                         Text::from(full.lines[start..end].to_vec())
                                     } else {
                                         Text::from(cached.text.lines[start..end].to_vec())
@@ -493,10 +499,16 @@ fn render_text_with_gutter(
 }
 
 /// Produce a new `Text` with search matches highlighted.
+///
+/// `block_start` is the absolute display-line offset of `text`'s first row.
+/// It is added to the local line index before comparing against
+/// `current_line` (which is absolute), so the "current match" color lands
+/// on the right row regardless of which block the match lives in.
 fn highlight_matches(
     text: &Text<'static>,
     query: &str,
     current_line: Option<u32>,
+    block_start: u32,
     p: &Palette,
 ) -> Text<'static> {
     let query_lower = query.to_lowercase();
@@ -519,7 +531,7 @@ fn highlight_matches(
                 return line.clone();
             }
 
-            let is_current = current_line == Some(line_idx as u32);
+            let is_current = current_line == Some(block_start + line_idx as u32);
             let hl_style = if is_current {
                 current_style
             } else {
