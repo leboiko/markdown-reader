@@ -6,9 +6,7 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
 };
-use unicode_width::UnicodeWidthStr;
-
-use crate::markdown::{DocBlock, MermaidBlockId, TableBlock, TableBlockId};
+use crate::markdown::{CellSpans, DocBlock, MermaidBlockId, TableBlock, TableBlockId, cell_display_width, cell_to_string};
 use crate::theme::Palette;
 
 /// Render a markdown string into a sequence of [`DocBlock`] values.
@@ -43,9 +41,9 @@ struct MdRenderer {
     in_blockquote: bool,
     in_table: bool,
     table_alignments: Vec<pulldown_cmark::Alignment>,
-    table_row: Vec<String>,
-    table_rows: Vec<Vec<String>>,
-    table_header_row: Option<Vec<String>>,
+    table_row: Vec<CellSpans>,
+    table_rows: Vec<Vec<CellSpans>>,
+    table_header_row: Option<Vec<CellSpans>>,
     table_header: bool,
     h1: Color,
     h2: Color,
@@ -352,12 +350,8 @@ impl MdRenderer {
                 }
             }
             TagEnd::TableCell => {
-                let cell_text: String = self
-                    .current_spans
-                    .drain(..)
-                    .map(|s| s.content.to_string())
-                    .collect();
-                self.table_row.push(cell_text);
+                let cell_spans: CellSpans = self.current_spans.drain(..).collect();
+                self.table_row.push(cell_spans);
             }
             _ => {}
         }
@@ -440,13 +434,12 @@ impl MdRenderer {
 
         let mut natural_widths = vec![0usize; num_cols];
         for (i, cell) in headers.iter().enumerate() {
-            natural_widths[i] = natural_widths[i].max(UnicodeWidthStr::width(cell.as_str()));
+            natural_widths[i] = natural_widths[i].max(cell_display_width(cell));
         }
         for row in &rows {
             for (i, cell) in row.iter().enumerate() {
                 if i < num_cols {
-                    natural_widths[i] =
-                        natural_widths[i].max(UnicodeWidthStr::width(cell.as_str()));
+                    natural_widths[i] = natural_widths[i].max(cell_display_width(cell));
                 }
             }
         }
@@ -455,13 +448,14 @@ impl MdRenderer {
             *w = (*w).max(1);
         }
 
+        // Hash the flattened text content for a stable, content-derived id.
         let mut content_bytes = Vec::new();
         for h in &headers {
-            content_bytes.extend_from_slice(h.as_bytes());
+            content_bytes.extend_from_slice(cell_to_string(h).as_bytes());
         }
         for row in &rows {
             for cell in row {
-                content_bytes.extend_from_slice(cell.as_bytes());
+                content_bytes.extend_from_slice(cell_to_string(cell).as_bytes());
             }
         }
         let id = TableBlockId(hash_bytes(&content_bytes));

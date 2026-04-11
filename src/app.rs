@@ -68,8 +68,13 @@ pub fn collect_match_lines(
                     // No cached layout yet — fall back to raw cell text so search
                     // is functional before the first draw populates the cache.
                     let mut row_offset = 1u32; // skip top border line
-                    for row in std::iter::once(&table.headers).chain(table.rows.iter()) {
-                        let row_text = row.join(" ");
+                    let all_rows = std::iter::once(&table.headers).chain(table.rows.iter());
+                    for row in all_rows {
+                        let row_text: String = row
+                            .iter()
+                            .map(|cell| crate::markdown::cell_to_string(cell))
+                            .collect::<Vec<_>>()
+                            .join(" ");
                         if row_text.to_lowercase().contains(query_lower) {
                             matches.push(offset + row_offset);
                         }
@@ -1345,8 +1350,16 @@ impl App {
                     tab_id: tab.id,
                     h_scroll: 0,
                     v_scroll: 0,
-                    headers: table.headers.clone(),
-                    rows: table.rows.clone(),
+                    headers: table
+                        .headers
+                        .iter()
+                        .map(|c| crate::markdown::cell_to_string(c))
+                        .collect(),
+                    rows: table
+                        .rows
+                        .iter()
+                        .map(|r| r.iter().map(|c| crate::markdown::cell_to_string(c)).collect())
+                        .collect(),
                     alignments: table.alignments.clone(),
                     natural_widths: table.natural_widths.clone(),
                 };
@@ -1500,7 +1513,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::markdown::{MermaidBlockId, TableBlock, TableBlockId};
+    use crate::markdown::{CellSpans, MermaidBlockId, TableBlock, TableBlockId};
     use crate::mermaid::MermaidEntry;
     use crate::ui::markdown_view::TableLayout;
     use ratatui::text::{Line, Span, Text};
@@ -1513,11 +1526,15 @@ mod tests {
         DocBlock::Text(Text::from(text_lines))
     }
 
+    fn str_cell(s: &str) -> CellSpans {
+        vec![Span::raw(s.to_string())]
+    }
+
     fn make_table_block(id: u64, headers: &[&str], rows: &[&[&str]]) -> DocBlock {
-        let h: Vec<String> = headers.iter().map(|s| s.to_string()).collect();
-        let r: Vec<Vec<String>> = rows
+        let h: Vec<CellSpans> = headers.iter().map(|s| str_cell(s)).collect();
+        let r: Vec<Vec<CellSpans>> = rows
             .iter()
-            .map(|row| row.iter().map(|s| s.to_string()).collect())
+            .map(|row| row.iter().map(|s| str_cell(s)).collect())
             .collect();
         let num_cols = h.len();
         let natural_widths = vec![10usize; num_cols];

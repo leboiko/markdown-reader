@@ -5,7 +5,7 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use crate::markdown::TableBlock;
+use crate::markdown::{CellSpans, TableBlock, cell_display_width};
 use crate::theme::Palette;
 
 /// Lay out a table for the given `inner_width` and render it to a `Text`.
@@ -65,13 +65,14 @@ pub fn layout_table(table: &TableBlock, inner_width: u16, palette: &Palette) -> 
     lines.push(border_line('┌', '─', '┬', '┐', &col_widths, border_style));
 
     // Header row
-    lines.push(cell_line(
+    lines.push(span_cell_line(
         &table.headers,
         &col_widths,
         &table.alignments,
         border_style,
         header_style,
         num_cols,
+        palette,
     ));
 
     // Header separator: ├──┼──┤
@@ -79,13 +80,14 @@ pub fn layout_table(table: &TableBlock, inner_width: u16, palette: &Palette) -> 
 
     // Data rows
     for row in &table.rows {
-        lines.push(cell_line(
+        lines.push(span_cell_line(
             row,
             &col_widths,
             &table.alignments,
             border_style,
             cell_style,
             num_cols,
+            palette,
         ));
     }
 
@@ -169,88 +171,132 @@ fn border_line(
     Line::from(Span::styled(s, style))
 }
 
-/// Render one data or header row.
-fn cell_line(
-    cells: &[String],
+/// Render one data or header row, preserving each cell's inline span styling.
+///
+/// `cell_style` is applied only as a fallback for padding spans; actual cell
+/// content retains whatever style was set by the markdown renderer.
+fn span_cell_line(
+    cells: &[CellSpans],
     col_widths: &[usize],
     alignments: &[Alignment],
     border_style: Style,
     cell_style: Style,
     num_cols: usize,
+    palette: &Palette,
 ) -> Line<'static> {
-    let mut spans: Vec<Span<'static>> = Vec::with_capacity(num_cols * 3 + 1);
-    spans.push(Span::styled("│".to_string(), border_style));
+    let empty: CellSpans = Vec::new();
+    let mut out: Vec<Span<'static>> = Vec::with_capacity(num_cols * 4 + 1);
+    out.push(Span::styled("│".to_string(), border_style));
 
     for (i, &w) in col_widths.iter().enumerate().take(num_cols) {
-        let raw = cells.get(i).map(|s| s.as_str()).unwrap_or("");
-        let aligned = align_cell(raw, w, alignments.get(i).copied().unwrap_or(Alignment::None));
-        spans.push(Span::styled(format!(" {aligned} "), cell_style));
-        spans.push(Span::styled("│".to_string(), border_style));
+        let cell = cells.get(i).unwrap_or(&empty);
+        let cell_w = cell_display_width(cell);
+        let alignment = alignments.get(i).copied().unwrap_or(Alignment::None);
+
+        out.push(Span::styled(" ".to_string(), cell_style));
+
+        if cell_w <= w {
+            let padding = w - cell_w;
+            let (left_pad, right_pad) = match alignment {
+                Alignment::Right => (padding, 0),
+                Alignment::Center => (padding / 2, padding - padding / 2),
+                Alignment::Left | Alignment::None => (0, padding),
+            };
+            if left_pad > 0 {
+                out.push(Span::styled(" ".repeat(left_pad), cell_style));
+            }
+            out.extend(cell.iter().cloned());
+            if right_pad > 0 {
+                out.push(Span::styled(" ".repeat(right_pad), cell_style));
+            }
+        } else {
+            out.extend(truncate_spans(cell, w, palette));
+        }
+
+        out.push(Span::styled(" │".to_string(), border_style));
     }
 
-    Line::from(spans)
+    Line::from(out)
 }
 
-/// Pad or truncate `text` to exactly `width` display columns, respecting alignment.
+/// Truncate a sequence of spans to fit within `max_width` display columns.
 ///
-/// If `text` is wider than `width`, it is truncated at the last character
-/// boundary where displayed width <= `width - 1`, and an ellipsis `…` is appended.
-fn align_cell(text: &str, width: usize, alignment: Alignment) -> String {
-    if width == 0 {
-        return String::new();
+/// Walks spans in order, accumulating displayed width. When adding the next span
+/// would exceed the budget, the current span is cut at the last char boundary
+/// that fits within `max_width - 1` columns, and a `…` span with a dim style is
+/// appended. The truncated span retains its original style up to the cut point.
+pub fn truncate_spans(spans: &[Span<'static>], max_width: usize, palette: &Palette) -> Vec<Span<'static>> {
+    if max_width == 0 {
+        return Vec::new();
     }
 
-    let display_width = UnicodeWidthStr::width(text);
+    let dim_style = palette.dim_style();
+    let mut out: Vec<Span<'static>> = Vec::new();
+    let mut used = 0usize;
+    let budget = max_width.saturating_sub(1); // reserve 1 col for '…'
 
-    if display_width <= width {
-        let padding = width - display_width;
-        return match alignment {
-            Alignment::Right => format!("{}{}", " ".repeat(padding), text),
-            Alignment::Center => {
-                let left = padding / 2;
-                let right = padding - left;
-                format!("{}{}{}", " ".repeat(left), text, " ".repeat(right))
-            }
-            Alignment::Left | Alignment::None => {
-                format!("{}{}", text, " ".repeat(padding))
-            }
-        };
-    }
+    'outer: for span in spans {
+        let text = span.content.as_ref();
+        let span_w = UnicodeWidthStr::width(text);
 
-    // Need to truncate. Walk chars accumulating widths until we exceed width-1.
-    let truncate_at = width.saturating_sub(1); // reserve 1 col for '…'
-    let mut accumulated = 0usize;
-    let mut byte_end = 0usize;
-    for ch in text.chars() {
-        let ch_w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
-        if accumulated + ch_w > truncate_at {
-            break;
+        if used + span_w <= budget {
+            out.push(span.clone());
+            used += span_w;
+            continue;
         }
-        accumulated += ch_w;
-        byte_end += ch.len_utf8();
+
+        // This span overflows — cut inside it.
+        let mut byte_end = 0usize;
+        let mut accumulated = 0usize;
+        for ch in text.chars() {
+            let ch_w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+            if used + accumulated + ch_w > budget {
+                break;
+            }
+            accumulated += ch_w;
+            byte_end += ch.len_utf8();
+        }
+
+        if byte_end > 0 {
+            out.push(Span::styled(text[..byte_end].to_string(), span.style));
+        }
+        // Pad to fill the gap left by double-width chars if needed.
+        let pad = budget.saturating_sub(used + accumulated);
+        if pad > 0 {
+            out.push(Span::styled(" ".repeat(pad), span.style));
+        }
+        out.push(Span::styled("\u{2026}".to_string(), dim_style));
+        break 'outer;
     }
 
-    let truncated = &text[..byte_end];
-    // Pad back to `width` if truncated content is narrower than width-1 (e.g. double-width chars).
-    let pad = width.saturating_sub(accumulated + 1);
-    format!("{}{}{}", truncated, " ".repeat(pad), "\u{2026}")
+    // If all spans fit without hitting the budget (used == cell_w <= max_width),
+    // no truncation occurred — return as-is without the ellipsis.
+    if used == spans.iter().map(|s| UnicodeWidthStr::width(s.content.as_ref())).sum::<usize>() {
+        return out;
+    }
+
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::markdown::{TableBlock, TableBlockId};
+    use crate::markdown::{CellSpans, TableBlock, TableBlockId, cell_display_width};
     use crate::theme::{Palette, Theme};
 
     fn palette() -> Palette {
         Palette::from_theme(Theme::Default)
     }
 
+    fn str_cell(s: &str) -> CellSpans {
+        vec![Span::raw(s.to_string())]
+    }
+
     fn make_table(headers: &[&str], rows: &[&[&str]], alignments: &[Alignment]) -> TableBlock {
-        let h: Vec<String> = headers.iter().map(|s| s.to_string()).collect();
-        let r: Vec<Vec<String>> = rows
+        let h: Vec<CellSpans> = headers.iter().map(|s| str_cell(s)).collect();
+        let r: Vec<Vec<CellSpans>> = rows
             .iter()
-            .map(|row| row.iter().map(|s| s.to_string()).collect())
+            .map(|row| row.iter().map(|s| str_cell(s)).collect())
             .collect();
         let aligns: Vec<Alignment> = if alignments.is_empty() {
             vec![Alignment::None; headers.len()]
@@ -258,14 +304,13 @@ mod tests {
             alignments.to_vec()
         };
         let mut natural_widths = vec![0usize; headers.len()];
-        for (i, h) in h.iter().enumerate() {
-            natural_widths[i] = natural_widths[i].max(UnicodeWidthStr::width(h.as_str()));
+        for (i, cell) in h.iter().enumerate() {
+            natural_widths[i] = natural_widths[i].max(cell_display_width(cell));
         }
         for row in &r {
             for (i, cell) in row.iter().enumerate() {
                 if i < headers.len() {
-                    natural_widths[i] =
-                        natural_widths[i].max(UnicodeWidthStr::width(cell.as_str()));
+                    natural_widths[i] = natural_widths[i].max(cell_display_width(cell));
                 }
             }
         }
@@ -376,5 +421,62 @@ mod tests {
             "Right-aligned cell must start with space padding: {inner:?}"
         );
         assert!(trimmed == "42", "Cell content must be '42'");
+    }
+
+    #[test]
+    fn truncate_spans_cuts_inside_plain_span() {
+        use ratatui::style::{Color, Style};
+        let p = palette();
+        let bold = Style::default().add_modifier(ratatui::style::Modifier::BOLD);
+        let plain = Style::default().fg(Color::White);
+        let code = Style::default().fg(Color::Yellow);
+
+        let spans: Vec<Span<'static>> = vec![
+            Span::styled("bold".to_string(), bold),
+            Span::styled(" plain text here".to_string(), plain),
+            Span::styled("`code`".to_string(), code),
+        ];
+        // Width=10 means budget=9. "bold" (4) + " plain" (6) = 10 > 9.
+        // So we cut inside " plain text here" at " plain" (6 chars, fits in budget=9-4=5 remaining).
+        let result = truncate_spans(&spans, 10, &p);
+
+        // First span (bold) must survive unchanged.
+        assert_eq!(result[0].content.as_ref(), "bold");
+        assert_eq!(result[0].style, bold);
+
+        // The plain span must be partially present (truncated).
+        let plain_part = &result[1];
+        assert_eq!(plain_part.style, plain);
+        let plain_text = plain_part.content.as_ref();
+        assert!(
+            UnicodeWidthStr::width(plain_text) <= 5,
+            "plain truncated part too wide: {plain_text:?}"
+        );
+
+        // Last output span must be the ellipsis.
+        let last = result.last().unwrap();
+        assert_eq!(last.content.as_ref(), "\u{2026}", "must end with ellipsis");
+
+        // Code span must not appear.
+        assert!(
+            !result.iter().any(|s| s.content.as_ref().contains("`code`")),
+            "code span must not appear after truncation"
+        );
+
+        // Total displayed width must be <= 10.
+        let total_w: usize = result
+            .iter()
+            .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+            .sum();
+        assert!(total_w <= 10, "total width {total_w} exceeds limit 10");
+    }
+
+    #[test]
+    fn truncate_spans_short_cell_no_truncation() {
+        let p = palette();
+        let spans = vec![Span::raw("hi".to_string())];
+        let result = truncate_spans(&spans, 10, &p);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].content.as_ref(), "hi");
     }
 }
