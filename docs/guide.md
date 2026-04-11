@@ -175,6 +175,56 @@ Unicode halfblocks — low resolution but still readable. It looks
 "pixelated" but you can make out the structure. For the best
 experience, use Ghostty, Kitty, WezTerm, iTerm2, or Foot.
 
+## Wide tables
+
+Markdown tables get rendered with a fair-share column algorithm that
+always fits the viewer. Each column is guaranteed at least six cells,
+and the remaining horizontal space is distributed proportionally to
+each column's natural width, so a table with one long prose column
+and two short numeric ones keeps the short columns legible while
+shrinking the long one. Every data row renders on exactly one visual
+line; cells longer than their column width are truncated with `…`.
+
+When any cell was truncated, a dim line
+`[press ⏎ to expand full table]` appears right below the table's
+bottom border so you know the full content is available. Tables that
+fit cleanly render without the hint.
+
+If your terminal is so narrow that even six cells per column won't
+fit, the table collapses to a single-line placeholder
+`[ table — too narrow, press ⏎ to expand ]`. Pressing `Enter` still
+opens the modal, so no content is ever unreachable.
+
+### The table modal
+
+Press `Enter` in the viewer whenever a table is visible on screen —
+header, body row, borders, or even the "too narrow" placeholder — to
+open a centered modal. Unlike the in-document render, the modal
+displays every cell at its natural width with no truncation. You
+navigate it like a large grid:
+
+| Key | Action |
+|---|---|
+| `h` / `Left` | Pan left one cell |
+| `l` / `Right` | Pan right one cell |
+| `H` / `Shift+Left` | Pan left ten cells |
+| `L` / `Shift+Right` | Pan right ten cells |
+| `0` | Jump to the first column |
+| `$` | Jump to the last column |
+| `j` / `Down` | Scroll rows down |
+| `k` / `Up` | Scroll rows up |
+| `d` / `u` | Half-page scroll |
+| `gg` | Jump to the top-left corner (both row and column reset) |
+| `G` | Jump to the last row |
+| `q` / `Esc` / `Enter` | Close the modal |
+
+If more than one table is on screen at once, `Enter` opens the first
+one (the topmost). To expand a later one, scroll past the first, then
+press `Enter` again.
+
+The modal closes automatically when you switch tabs or when the
+underlying file changes and the table is removed by a live reload.
+
 ## Global search
 
 Press `/` from the tree or viewer to open the global search overlay.

@@ -44,6 +44,12 @@ drawn on the left of the viewer content when enabled.
   images, or Unicode halfblocks depending on your terminal. Falls back to
   styled source when running inside tmux or on terminals without graphics
   support.
+- **Wide table handling** — tables are rendered with fair-share column
+  widths that always fit the viewer, with overlong cells truncated to
+  `…`. When truncation happens, a `[press ⏎ to expand full table]` hint
+  appears below the table. Press `Enter` anywhere a table is visible to
+  open a full-screen modal that shows every cell at natural width with
+  horizontal and vertical panning.
 - **Themes** — six built-in palettes (Default, Dracula, Solarized Dark,
   Nord, Gruvbox Dark, GitHub Light). Switch live from the settings modal;
   every open document re-renders with the new colors.
@@ -141,7 +147,31 @@ reopening the same directory resumes where you left off.
 | `Ctrl+f` | Find in document |
 | `n` / `N` | Next / previous match |
 | `:` | Go to line |
+| `Enter` | Expand the first visible table into the modal viewer |
 | `Tab` | Switch focus to tree |
+
+### Table modal
+
+Press `Enter` in the viewer when a table is visible on screen to open a
+centered modal that shows the table at its natural column widths with
+every cell value intact. The modal supports horizontal and vertical
+panning so you can reach any cell regardless of how many columns or how
+long the cell content is.
+
+| Key | Action |
+|---|---|
+| `h` / `Left` | Pan left by 1 cell |
+| `l` / `Right` | Pan right by 1 cell |
+| `H` / `Shift+Left` | Pan left by 10 cells |
+| `L` / `Shift+Right` | Pan right by 10 cells |
+| `0` | Jump to the first column |
+| `$` | Jump to the last column |
+| `j` / `Down` | Scroll rows down |
+| `k` / `Up` | Scroll rows up |
+| `d` / `u` | Half-page scroll down / up |
+| `gg` | Jump to the top-left corner (row and column reset) |
+| `G` | Jump to the last row |
+| `q` / `Esc` / `Enter` | Close the modal and return to the viewer |
 
 ### Tabs
 
@@ -254,6 +284,39 @@ diagrams, entity-relationship diagrams, Gantt charts, pie charts, and
 more. Fidelity on subgraphs, styles, and complex layouts depends on the
 renderer's pre-1.0 maturity — when a specific diagram fails, the source
 is shown with a short error in the footer.
+
+## Wide tables
+
+Markdown tables are rendered with a fair-share column-width algorithm
+that always fits the viewer. Every column gets a minimum of six cells,
+and the remaining horizontal space is distributed proportionally to each
+column's natural width — so a table with one long column and two short
+ones keeps the short columns legible while shrinking the long one. Cells
+that are longer than their allotted column width are truncated with `…`,
+and every data row renders on exactly one visual line so the grid never
+breaks under wrapping.
+
+When **any** truncation happened, a dim line
+`[press ⏎ to expand full table]` is drawn directly below the table's
+bottom border as a discoverability hint. Tables that fit without
+truncation render without the hint.
+
+On very narrow terminals where even the minimum six cells per column
+would not fit, the table collapses to a single-line placeholder
+`[ table — too narrow, press ⏎ to expand ]`. `Enter` still opens the
+modal so no content is unreachable.
+
+### Table modal
+
+Press `Enter` anywhere a table is visible (header, body row, top or
+bottom border) to open the modal. Unlike the in-document render, the
+modal renders every cell at its natural width with no truncation. Pan
+the view with `h`/`l` (one cell) and `H`/`L` (ten cells); scroll rows
+with `j`/`k`/`d`/`u`/`gg`/`G`; jump to column ends with `0` and `$`.
+`q`, `Esc`, or `Enter` close the modal and return focus to the viewer.
+
+If more than one table is visible, `Enter` opens the topmost one; scroll
+it past the viewport and press `Enter` again for the next.
 
 ## Themes
 
