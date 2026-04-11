@@ -2,10 +2,12 @@ use crate::action::Action;
 use crate::config::Config;
 use crate::event::EventHandler;
 use crate::fs::discovery::FileEntry;
-use crate::mermaid::MermaidCache;
+use crate::markdown::{DocBlock, MERMAID_BLOCK_HEIGHT};
+use crate::mermaid::{MermaidCache, MermaidEntry};
 use crate::state::{AppState, TabSession};
 use crate::theme::{Palette, Theme};
 use crate::ui::file_tree::FileTreeState;
+use crate::ui::markdown_view::TableLayout;
 use crate::ui::search_bar::{SearchMode, SearchResult, SearchState};
 use crate::ui::tab_picker::TabPickerState;
 use crate::ui::tabs::{OpenOutcome, Tabs};
@@ -14,11 +16,91 @@ use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 use ratatui::layout::Rect;
 use ratatui::prelude::*;
 use ratatui_image::picker::Picker;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// Returns `true` when terminal position `(col, row)` falls inside `rect`.
 fn contains(rect: Rect, col: u16, row: u16) -> bool {
     col >= rect.x && col < rect.x + rect.width && row >= rect.y && row < rect.y + rect.height
+}
+
+/// Collect absolute display-line numbers whose text matches `query_lower` across
+/// all block types in `blocks`.
+///
+/// Tables: match against the cached fair-share rendered lines so highlights align
+/// with what is on screen; fall back to joining raw cell text before the first draw.
+///
+/// Mermaid: only match when the entry is showing as source (Failed / SourceOnly /
+/// absent). Rendered images have no searchable text content. Only the first
+/// `MERMAID_BLOCK_HEIGHT - 1` source lines are considered — lines beyond that
+/// overflow the fixed block height and are not visible.
+pub fn collect_match_lines(
+    blocks: &[DocBlock],
+    table_layouts: &HashMap<crate::markdown::TableBlockId, TableLayout>,
+    mermaid_cache: &MermaidCache,
+    query_lower: &str,
+) -> Vec<u32> {
+    let mut matches = Vec::new();
+    let mut offset = 0u32;
+
+    for block in blocks {
+        match block {
+            DocBlock::Text(text) => {
+                for (i, line) in text.lines.iter().enumerate() {
+                    let line_text: String =
+                        line.spans.iter().map(|s| s.content.as_ref()).collect();
+                    if line_text.to_lowercase().contains(query_lower) {
+                        matches.push(offset + i as u32);
+                    }
+                }
+                offset += text.lines.len() as u32;
+            }
+            DocBlock::Table(table) => {
+                if let Some(layout) = table_layouts.get(&table.id) {
+                    for (i, line) in layout.text.lines.iter().enumerate() {
+                        let line_text: String =
+                            line.spans.iter().map(|s| s.content.as_ref()).collect();
+                        if line_text.to_lowercase().contains(query_lower) {
+                            matches.push(offset + i as u32);
+                        }
+                    }
+                } else {
+                    // No cached layout yet — fall back to raw cell text so search
+                    // is functional before the first draw populates the cache.
+                    let mut row_offset = 1u32; // skip top border line
+                    for row in std::iter::once(&table.headers).chain(table.rows.iter()) {
+                        let row_text = row.join(" ");
+                        if row_text.to_lowercase().contains(query_lower) {
+                            matches.push(offset + row_offset);
+                        }
+                        row_offset += 1;
+                    }
+                }
+                offset += table.rendered_height;
+            }
+            DocBlock::Mermaid { id, source } => {
+                let show_as_source = match mermaid_cache.get(id) {
+                    None | Some(MermaidEntry::Failed(_)) | Some(MermaidEntry::SourceOnly(_)) => {
+                        true
+                    }
+                    Some(MermaidEntry::Pending) | Some(MermaidEntry::Ready(_)) => false,
+                };
+                if show_as_source {
+                    // Only search lines that fit inside the fixed block height.
+                    // Lines past MERMAID_BLOCK_HEIGHT - 1 are not visible.
+                    let limit = (MERMAID_BLOCK_HEIGHT - 1) as usize;
+                    for (i, line) in source.lines().take(limit).enumerate() {
+                        if line.to_lowercase().contains(query_lower) {
+                            matches.push(offset + i as u32);
+                        }
+                    }
+                }
+                offset += MERMAID_BLOCK_HEIGHT;
+            }
+        }
+    }
+
+    matches
 }
 
 /// Which panel currently receives keyboard input.
@@ -1193,14 +1275,13 @@ impl App {
             None => return,
         };
 
-        for (block_start, text) in tab.view.text_blocks() {
-            for (i, line) in text.lines.iter().enumerate() {
-                let line_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-                if line_text.to_lowercase().contains(&query_lower) {
-                    tab.doc_search.match_lines.push(block_start + i as u32);
-                }
-            }
-        }
+        let match_lines = collect_match_lines(
+            &tab.view.rendered,
+            &tab.view.table_layouts,
+            &self.mermaid_cache,
+            &query_lower,
+        );
+        tab.doc_search.match_lines = match_lines;
 
         if let Some(&line) = tab.doc_search.match_lines.first() {
             tab.view.scroll_offset = line;
@@ -1413,5 +1494,194 @@ impl App {
             self.mermaid_cache
                 .ensure_queued(id, &source, self.picker.as_ref(), &tx, in_tmux);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::markdown::{MermaidBlockId, TableBlock, TableBlockId};
+    use crate::mermaid::MermaidEntry;
+    use crate::ui::markdown_view::TableLayout;
+    use ratatui::text::{Line, Span, Text};
+
+    fn make_text_block(lines: &[&str]) -> DocBlock {
+        let text_lines: Vec<Line<'static>> = lines
+            .iter()
+            .map(|l| Line::from(Span::raw(l.to_string())))
+            .collect();
+        DocBlock::Text(Text::from(text_lines))
+    }
+
+    fn make_table_block(id: u64, headers: &[&str], rows: &[&[&str]]) -> DocBlock {
+        let h: Vec<String> = headers.iter().map(|s| s.to_string()).collect();
+        let r: Vec<Vec<String>> = rows
+            .iter()
+            .map(|row| row.iter().map(|s| s.to_string()).collect())
+            .collect();
+        let num_cols = h.len();
+        let natural_widths = vec![10usize; num_cols];
+        DocBlock::Table(TableBlock {
+            id: TableBlockId(id),
+            headers: h,
+            rows: r,
+            alignments: vec![pulldown_cmark::Alignment::None; num_cols],
+            natural_widths,
+            rendered_height: 4,
+        })
+    }
+
+    fn make_cached_layout(lines: &[&str]) -> TableLayout {
+        let text_lines: Vec<Line<'static>> = lines
+            .iter()
+            .map(|l| Line::from(Span::raw(l.to_string())))
+            .collect();
+        TableLayout {
+            text: Text::from(text_lines),
+        }
+    }
+
+    fn empty_mermaid_cache() -> MermaidCache {
+        MermaidCache::new()
+    }
+
+    fn source_only_cache(id: u64) -> MermaidCache {
+        let mut cache = MermaidCache::new();
+        cache.insert(
+            MermaidBlockId(id),
+            MermaidEntry::SourceOnly("test".to_string()),
+        );
+        cache
+    }
+
+    fn ready_cache(id: u64) -> MermaidCache {
+        // We can't build a StatefulProtocol in tests, so we use Failed as a
+        // stand-in for "showing as image" — which would normally suppress search.
+        // For the Ready variant specifically we use Failed to confirm the negative
+        // (Failed does show source). Use a separate test for the suppression path.
+        let mut cache = MermaidCache::new();
+        cache.insert(
+            MermaidBlockId(id),
+            MermaidEntry::Failed("irrelevant".to_string()),
+        );
+        cache
+    }
+
+    #[test]
+    fn collect_matches_text_block() {
+        let blocks = vec![make_text_block(&["hello world", "no match", "world again"])];
+        let layouts = HashMap::new();
+        let cache = empty_mermaid_cache();
+        let result = collect_match_lines(&blocks, &layouts, &cache, "world");
+        assert_eq!(result, vec![0, 2]);
+    }
+
+    #[test]
+    fn collect_matches_table_with_layout_cache() {
+        let blocks = vec![
+            make_text_block(&["intro"]),
+            make_table_block(1, &["Header"], &[&["alpha"], &["beta needle"]]),
+        ];
+        let mut layouts = HashMap::new();
+        layouts.insert(
+            TableBlockId(1),
+            make_cached_layout(&[
+                "┌──────┐",
+                "│ Header │",
+                "├──────┤",
+                "│ alpha  │",
+                "│ beta needle │",
+                "└──────┘",
+            ]),
+        );
+        let cache = empty_mermaid_cache();
+        let result = collect_match_lines(&blocks, &layouts, &cache, "needle");
+        // text block has 1 line (offset 0); table starts at offset 1.
+        // "beta needle" is at layout index 4, so absolute = 1 + 4 = 5.
+        assert_eq!(result, vec![5]);
+    }
+
+    #[test]
+    fn collect_matches_table_fallback_no_layout() {
+        let blocks = vec![make_table_block(
+            2,
+            &["Col"],
+            &[&["findme"], &["nothing"]],
+        )];
+        let layouts = HashMap::new();
+        let cache = empty_mermaid_cache();
+        let result = collect_match_lines(&blocks, &layouts, &cache, "findme");
+        // Fallback: header row is at row_offset=1, data rows follow.
+        // "findme" is the first data row → row_offset = 2 → absolute = 0+2 = 2.
+        assert_eq!(result, vec![2]);
+    }
+
+    #[test]
+    fn collect_matches_mermaid_source_only() {
+        let source = "graph LR\n    A --> needle\n    B --> C";
+        let mermaid_id = MermaidBlockId(99);
+        let blocks = vec![make_text_block(&["before"]), DocBlock::Mermaid {
+            id: mermaid_id,
+            source: source.to_string(),
+        }];
+        let cache = source_only_cache(99);
+        let layouts = HashMap::new();
+        let result = collect_match_lines(&blocks, &layouts, &cache, "needle");
+        // text block: 1 line (offset 0). mermaid starts at offset 1.
+        // "A --> needle" is source line index 1, so absolute = 1 + 1 = 2.
+        assert_eq!(result, vec![2]);
+    }
+
+    #[test]
+    fn collect_matches_mermaid_failed_shows_source() {
+        let mermaid_id = MermaidBlockId(42);
+        let blocks = vec![DocBlock::Mermaid {
+            id: mermaid_id,
+            source: "graph LR\n    find_this".to_string(),
+        }];
+        let cache = ready_cache(42);
+        let layouts = HashMap::new();
+        let result = collect_match_lines(&blocks, &layouts, &cache, "find_this");
+        assert_eq!(result, vec![1]);
+    }
+
+    #[test]
+    fn collect_matches_mermaid_absent_shows_source() {
+        let mermaid_id = MermaidBlockId(7);
+        let blocks = vec![DocBlock::Mermaid {
+            id: mermaid_id,
+            source: "sequenceDiagram\n    A ->> match_me: call".to_string(),
+        }];
+        let layouts = HashMap::new();
+        let cache = empty_mermaid_cache();
+        let result = collect_match_lines(&blocks, &layouts, &cache, "match_me");
+        assert_eq!(result, vec![1]);
+    }
+
+    #[test]
+    fn collect_matches_absolute_offsets_across_blocks() {
+        let blocks = vec![
+            make_text_block(&["line0", "line1", "line2"]),
+            make_table_block(5, &["H"], &[&["row0"], &["row1 target"]]),
+            make_text_block(&["after"]),
+        ];
+        let mut layouts = HashMap::new();
+        layouts.insert(
+            TableBlockId(5),
+            make_cached_layout(&[
+                "┌─┐",
+                "│H│",
+                "├─┤",
+                "│row0│",
+                "│row1 target│",
+                "└─┘",
+            ]),
+        );
+        let cache = empty_mermaid_cache();
+        let result = collect_match_lines(&blocks, &layouts, &cache, "target");
+        // text block: 3 lines (offsets 0–2). table starts at 3, rendered_height=4.
+        // "row1 target" is at layout index 4 → absolute = 3+4 = 7.
+        // after block starts at 3+4=7. "after" is at 7+0=7 — no match for "target".
+        assert_eq!(result, vec![7]);
     }
 }

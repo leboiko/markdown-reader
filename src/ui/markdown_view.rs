@@ -1,5 +1,5 @@
 use crate::app::App;
-use crate::markdown::{DocBlock, TableBlockId, MERMAID_BLOCK_HEIGHT};
+use crate::markdown::{DocBlock, TableBlockId};
 use crate::theme::Palette;
 use crate::ui::table_render::layout_table;
 use ratatui::{
@@ -86,27 +86,6 @@ impl MarkdownViewState {
         self.scroll_offset = self.total_lines.saturating_sub(view_height / 2);
     }
 
-    /// Iterate only `Text` blocks, yielding `(start_line, &Text)`.
-    ///
-    /// Used by doc-search, which cannot operate on binary image data.
-    pub fn text_blocks(&self) -> impl Iterator<Item = (u32, &Text<'static>)> {
-        let mut offset = 0u32;
-        self.rendered.iter().filter_map(move |block| match block {
-            DocBlock::Text(t) => {
-                let start = offset;
-                offset += t.lines.len() as u32;
-                Some((start, t))
-            }
-            DocBlock::Mermaid { .. } => {
-                offset += MERMAID_BLOCK_HEIGHT;
-                None
-            }
-            DocBlock::Table(t) => {
-                offset += t.rendered_height;
-                None
-            }
-        })
-    }
 }
 
 /// Render the markdown preview panel into `area`.
@@ -310,11 +289,18 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                                 let end = (clip_start + visible_lines)
                                     .min(cached.text.lines.len() as u32)
                                     as usize;
-                                let sliced = cached.text.lines[start..end].to_vec();
+                                let visible_text =
+                                    if let Some((query, current_line)) = &doc_search_query {
+                                        let full =
+                                            highlight_matches(&cached.text, query, *current_line, &p);
+                                        Text::from(full.lines[start..end].to_vec())
+                                    } else {
+                                        Text::from(cached.text.lines[start..end].to_vec())
+                                    };
                                 text_draws.push(TextDraw {
                                     y: rect_y,
                                     height: draw_height,
-                                    text: Text::from(sliced),
+                                    text: visible_text,
                                     first_line_number: block_start + clip_start + 1,
                                 });
                             }

@@ -45,6 +45,10 @@ impl MermaidCache {
         }
     }
 
+    pub fn get(&self, id: &MermaidBlockId) -> Option<&MermaidEntry> {
+        self.entries.get(id)
+    }
+
     pub fn get_mut(&mut self, id: &MermaidBlockId) -> Option<&mut MermaidEntry> {
         self.entries.get_mut(id)
     }
