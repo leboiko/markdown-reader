@@ -1245,29 +1245,39 @@ impl App {
         let Some(tab) = self.tabs.active_tab() else {
             return;
         };
-        let center_line = tab.view.scroll_offset + view_height / 2;
+        let viewport_start = tab.view.scroll_offset;
+        let viewport_end = viewport_start + view_height;
 
+        // Expand the first table whose range intersects the viewport. Viewport
+        // center detection would miss the common case of a table sitting at
+        // the top or bottom of the visible area with the center on surrounding
+        // prose.
         let mut block_start = 0u32;
         for doc_block in &tab.view.rendered {
-            let block_height = doc_block.height();
-            let block_end = block_start + block_height;
-            if center_line >= block_start && center_line < block_end {
-                if let crate::markdown::DocBlock::Table(table) = doc_block {
-                    let modal = TableModalState {
-                        tab_id: tab.id,
-                        h_scroll: 0,
-                        v_scroll: 0,
-                        headers: table.headers.clone(),
-                        rows: table.rows.clone(),
-                        alignments: table.alignments.clone(),
-                        natural_widths: table.natural_widths.clone(),
-                    };
-                    self.table_modal = Some(modal);
-                    self.focus = Focus::TableModal;
-                }
+            let block_end = block_start + doc_block.height();
+            let intersects = block_end > viewport_start && block_start < viewport_end;
+
+            if intersects
+                && let crate::markdown::DocBlock::Table(table) = doc_block
+            {
+                let modal = TableModalState {
+                    tab_id: tab.id,
+                    h_scroll: 0,
+                    v_scroll: 0,
+                    headers: table.headers.clone(),
+                    rows: table.rows.clone(),
+                    alignments: table.alignments.clone(),
+                    natural_widths: table.natural_widths.clone(),
+                };
+                self.table_modal = Some(modal);
+                self.focus = Focus::TableModal;
                 return;
             }
+
             block_start = block_end;
+            if block_start >= viewport_end {
+                break;
+            }
         }
     }
 
