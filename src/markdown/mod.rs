@@ -1,5 +1,7 @@
 pub mod renderer;
 
+use std::cell::Cell;
+
 use ratatui::text::{Span, Text};
 
 /// Opaque identifier for a mermaid diagram block, derived from a hash of its source.
@@ -35,6 +37,10 @@ pub struct TableBlock {
 /// Documents are modelled as a sequence of these blocks rather than a flat
 /// `Text` so that mermaid diagrams and wide tables can be handled independently
 /// of the text paragraph.
+///
+/// `DocBlock` is intentionally not `Send` because the `Mermaid` variant contains
+/// a `Cell<u32>`. All `DocBlock` values live on the main async task and are never
+/// moved to a worker thread, so this is safe.
 #[derive(Debug)]
 pub enum DocBlock {
     /// A run of styled ratatui lines.
@@ -44,6 +50,11 @@ pub enum DocBlock {
         id: MermaidBlockId,
         /// The raw mermaid source, kept so the fallback renderer can display it.
         source: String,
+        /// Current reserved height in display lines. Written by
+        /// `update_mermaid_heights` each frame from the cache, read by `height()`.
+        /// `Cell` avoids `&mut` while still allowing interior mutation during
+        /// a shared-reference iteration over the block list.
+        cell_height: Cell<u32>,
     },
     /// A parsed markdown table rendered inline with fair-share column widths.
     Table(TableBlock),
@@ -54,8 +65,19 @@ impl DocBlock {
     pub fn height(&self) -> u32 {
         match self {
             DocBlock::Text(t) => t.lines.len() as u32,
-            DocBlock::Mermaid { .. } => MERMAID_BLOCK_HEIGHT,
+            DocBlock::Mermaid { cell_height, .. } => cell_height.get(),
             DocBlock::Table(t) => t.rendered_height,
+        }
+    }
+}
+
+/// Synchronise the `cell_height` of every `Mermaid` block in `blocks` with the
+/// current cache. Call this before summing `total_lines` so scroll math reflects
+/// whatever the cache knows at the time of the draw.
+pub fn update_mermaid_heights(blocks: &[DocBlock], cache: &crate::mermaid::MermaidCache) {
+    for block in blocks {
+        if let DocBlock::Mermaid { id, source, cell_height } = block {
+            cell_height.set(cache.height(id, source));
         }
     }
 }
@@ -73,5 +95,3 @@ pub fn cell_to_string(spans: &[Span<'static>]) -> String {
     spans.iter().map(|s| s.content.as_ref()).collect()
 }
 
-/// Fixed display-line height reserved for each mermaid diagram.
-pub const MERMAID_BLOCK_HEIGHT: u32 = 20;

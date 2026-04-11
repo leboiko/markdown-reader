@@ -2,7 +2,7 @@ use crate::action::Action;
 use crate::config::Config;
 use crate::event::EventHandler;
 use crate::fs::discovery::FileEntry;
-use crate::markdown::{DocBlock, MERMAID_BLOCK_HEIGHT};
+use crate::markdown::DocBlock;
 use crate::mermaid::{MermaidCache, MermaidEntry};
 use crate::state::{AppState, TabSession};
 use crate::theme::{Palette, Theme};
@@ -83,24 +83,23 @@ pub fn collect_match_lines(
                 }
                 offset += table.rendered_height;
             }
-            DocBlock::Mermaid { id, source } => {
+            DocBlock::Mermaid { id, source, .. } => {
+                let block_height = block.height();
                 let show_as_source = match mermaid_cache.get(id) {
                     None | Some(MermaidEntry::Failed(_)) | Some(MermaidEntry::SourceOnly(_)) => {
                         true
                     }
-                    Some(MermaidEntry::Pending) | Some(MermaidEntry::Ready(_)) => false,
+                    Some(MermaidEntry::Pending) | Some(MermaidEntry::Ready { .. }) => false,
                 };
                 if show_as_source {
-                    // Only search lines that fit inside the fixed block height.
-                    // Lines past MERMAID_BLOCK_HEIGHT - 1 are not visible.
-                    let limit = (MERMAID_BLOCK_HEIGHT - 1) as usize;
+                    let limit = block_height.saturating_sub(1) as usize;
                     for (i, line) in source.lines().take(limit).enumerate() {
                         if line.to_lowercase().contains(query_lower) {
                             matches.push(offset + i as u32);
                         }
                     }
                 }
-                offset += MERMAID_BLOCK_HEIGHT;
+                offset += block_height;
             }
         }
     }
@@ -1474,7 +1473,9 @@ impl App {
             .rendered
             .iter()
             .filter_map(|b| match b {
-                crate::markdown::DocBlock::Mermaid { id, source } => Some((*id, source.clone())),
+                crate::markdown::DocBlock::Mermaid { id, source, .. } => {
+                    Some((*id, source.clone()))
+                }
                 crate::markdown::DocBlock::Text(_) | crate::markdown::DocBlock::Table(_) => None,
             })
             .collect();
@@ -1497,7 +1498,9 @@ impl App {
             .iter()
             .flat_map(|t| t.view.rendered.iter())
             .filter_map(|b| match b {
-                crate::markdown::DocBlock::Mermaid { id, source } => Some((*id, source.clone())),
+                crate::markdown::DocBlock::Mermaid { id, source, .. } => {
+                    Some((*id, source.clone()))
+                }
                 crate::markdown::DocBlock::Text(_) | crate::markdown::DocBlock::Table(_) => None,
             })
             .collect();
@@ -1513,8 +1516,9 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
     use crate::markdown::{CellSpans, MermaidBlockId, TableBlock, TableBlockId};
-    use crate::mermaid::MermaidEntry;
+    use crate::mermaid::{DEFAULT_MERMAID_HEIGHT, MermaidEntry};
     use crate::ui::markdown_view::TableLayout;
     use ratatui::text::{Line, Span, Text};
 
@@ -1640,6 +1644,7 @@ mod tests {
         let blocks = vec![make_text_block(&["before"]), DocBlock::Mermaid {
             id: mermaid_id,
             source: source.to_string(),
+            cell_height: Cell::new(DEFAULT_MERMAID_HEIGHT),
         }];
         let cache = source_only_cache(99);
         let layouts = HashMap::new();
@@ -1655,6 +1660,7 @@ mod tests {
         let blocks = vec![DocBlock::Mermaid {
             id: mermaid_id,
             source: "graph LR\n    find_this".to_string(),
+            cell_height: Cell::new(DEFAULT_MERMAID_HEIGHT),
         }];
         let cache = ready_cache(42);
         let layouts = HashMap::new();
@@ -1668,6 +1674,7 @@ mod tests {
         let blocks = vec![DocBlock::Mermaid {
             id: mermaid_id,
             source: "sequenceDiagram\n    A ->> match_me: call".to_string(),
+            cell_height: Cell::new(DEFAULT_MERMAID_HEIGHT),
         }];
         let layouts = HashMap::new();
         let cache = empty_mermaid_cache();

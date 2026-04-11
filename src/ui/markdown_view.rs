@@ -1,5 +1,5 @@
 use crate::app::App;
-use crate::markdown::{DocBlock, TableBlockId};
+use crate::markdown::{DocBlock, TableBlockId, update_mermaid_heights};
 use crate::theme::Palette;
 use crate::ui::table_render::layout_table;
 use ratatui::{
@@ -172,6 +172,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                 }
             }
 
+            update_mermaid_heights(&tab.view.rendered, &app.mermaid_cache);
             tab.view.total_lines = tab.view.rendered.iter().map(|b| b.height()).sum();
             let max_scroll = tab.view.total_lines.saturating_sub(view_height / 2);
             tab.view.scroll_offset = tab.view.scroll_offset.min(max_scroll);
@@ -188,8 +189,12 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                     e.insert(TableLayout { text });
                 }
             }
-            // Recompute total_lines in case any table heights were just populated.
+            // Sync mermaid heights from cache (no-op when nothing has changed).
+            update_mermaid_heights(&tab.view.rendered, &app.mermaid_cache);
+            // Recompute total_lines in case any table or mermaid heights changed.
             tab.view.total_lines = tab.view.rendered.iter().map(|b| b.height()).sum();
+            let max_scroll = tab.view.total_lines.saturating_sub(view_height / 2);
+            tab.view.scroll_offset = tab.view.scroll_offset.min(max_scroll);
         }
     }
 
@@ -278,7 +283,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                                 first_line_number: block_start + clip_start + 1,
                             });
                         }
-                        DocBlock::Mermaid { id, source } => {
+                        DocBlock::Mermaid { id, source, .. } => {
                             let fully_visible = clip_start == 0
                                 && visible_lines == block_height
                                 && draw_height as u32 == block_height;
@@ -381,7 +386,7 @@ fn draw_mermaid_block(
         None | Some(MermaidEntry::Pending) => {
             render_mermaid_placeholder(f, rect, "rendering\u{2026}", p);
         }
-        Some(MermaidEntry::Ready(protocol)) => {
+        Some(MermaidEntry::Ready { protocol, .. }) => {
             if fully_visible {
                 use ratatui::widgets::Clear;
                 use ratatui_image::{Resize, StatefulImage};

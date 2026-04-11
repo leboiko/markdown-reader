@@ -6,7 +6,10 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
 };
+use std::cell::Cell;
+
 use crate::markdown::{CellSpans, DocBlock, MermaidBlockId, TableBlock, TableBlockId, cell_display_width, cell_to_string};
+use crate::mermaid::DEFAULT_MERMAID_HEIGHT;
 use crate::theme::Palette;
 
 /// Render a markdown string into a sequence of [`DocBlock`] values.
@@ -380,7 +383,11 @@ impl MdRenderer {
         self.code_block_content.clear();
 
         let id = MermaidBlockId(hash_str(&source));
-        self.blocks.push(DocBlock::Mermaid { id, source });
+        self.blocks.push(DocBlock::Mermaid {
+            id,
+            source,
+            cell_height: Cell::new(DEFAULT_MERMAID_HEIGHT),
+        });
         // Blank line after the diagram (will open a new Text block).
         self.push_blank_line();
     }
