@@ -1,4 +1,5 @@
 use crate::app::{App, TableModalState};
+use crate::markdown::CellSpans;
 use crate::theme::Palette;
 use pulldown_cmark::Alignment;
 use ratatui::{
@@ -8,7 +9,7 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, Borders, Clear, Paragraph},
 };
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Render the table modal overlay.
 pub fn draw(f: &mut Frame, app: &App) {
@@ -47,7 +48,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     // Reserve 1 line for the footer.
     let content_height = inner.height.saturating_sub(1) as usize;
 
-    // Render the table at natural widths, computing wrapped row heights.
+    // Render the table at natural widths with span-aware word-wrap.
     let rendered = render_modal_table(state, p);
 
     // Apply v_scroll: skip rows of rendered content.
@@ -145,7 +146,7 @@ fn render_modal_table(state: &TableModalState, p: &Palette) -> Text<'static> {
 
 /// Wrap all cells in a row and emit one `Line` per visual sub-row.
 fn emit_wrapped_row(
-    cells: &[String],
+    cells: &[CellSpans],
     col_widths: &[usize],
     alignments: &[Alignment],
     border_style: Style,
@@ -153,11 +154,11 @@ fn emit_wrapped_row(
     num_cols: usize,
     out: &mut Vec<Line<'static>>,
 ) {
-    let wrapped: Vec<Vec<String>> = (0..num_cols)
+    let wrapped: Vec<Vec<CellSpans>> = (0..num_cols)
         .map(|i| {
-            let text = cells.get(i).map(|s| s.as_str()).unwrap_or("");
+            let spans = cells.get(i).map(|s| s.as_slice()).unwrap_or(&[]);
             let w = col_widths.get(i).copied().unwrap_or(1).max(1);
-            wrap_cell(text, w)
+            wrap_cell_spans(spans, w)
         })
         .collect();
 
@@ -167,77 +168,205 @@ fn emit_wrapped_row(
         let mut spans: Vec<Span<'static>> = Vec::with_capacity(num_cols * 3 + 1);
         spans.push(Span::styled("│".to_string(), border_style));
         for (i, &w) in col_widths.iter().enumerate().take(num_cols) {
-            let cell_line = wrapped[i].get(sub).map(|s| s.as_str()).unwrap_or("");
             let alignment = alignments.get(i).copied().unwrap_or(Alignment::None);
-            let padded = modal_pad_cell(cell_line, w, alignment);
-            spans.push(Span::styled(format!(" {padded} "), cell_style));
-            spans.push(Span::styled("│".to_string(), border_style));
+            let cell_line = wrapped[i].get(sub).map(|s| s.as_slice()).unwrap_or(&[]);
+            let cell_width: usize = cell_line
+                .iter()
+                .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+                .sum();
+            let padding = w.saturating_sub(cell_width);
+
+            // Emit leading space + alignment padding + cell spans + trailing space + border.
+            match alignment {
+                Alignment::Right => {
+                    let pad_str = format!(" {}", " ".repeat(padding));
+                    spans.push(Span::styled(pad_str, cell_style));
+                    spans.extend(cell_line.iter().cloned());
+                    spans.push(Span::styled(" │".to_string(), border_style));
+                }
+                Alignment::Center => {
+                    let left = padding / 2;
+                    let right = padding - left;
+                    let pad_str = format!(" {}", " ".repeat(left));
+                    spans.push(Span::styled(pad_str, cell_style));
+                    spans.extend(cell_line.iter().cloned());
+                    let trail = format!("{} │", " ".repeat(right));
+                    spans.push(Span::styled(trail, border_style));
+                }
+                Alignment::Left | Alignment::None => {
+                    spans.push(Span::styled(" ".to_string(), cell_style));
+                    spans.extend(cell_line.iter().cloned());
+                    let trail = format!("{} │", " ".repeat(padding));
+                    spans.push(Span::styled(trail, border_style));
+                }
+            }
         }
         out.push(Line::from(spans));
     }
 }
 
-/// Greedily wrap `text` to fit within `width` display columns.
+/// A styled grapheme: a single char-sequence (may be multi-byte) with a style.
+struct StyledChar {
+    ch: char,
+    width: usize,
+    style: Style,
+}
+
+/// Greedy span-aware word-wrap of `cell` to fit within `width` display columns.
 ///
-/// Words are split on whitespace; words longer than `width` are hard-split
-/// at char boundaries using a unicode-width accumulator. Hard newlines in the
-/// source are honoured as unconditional line breaks.
+/// The algorithm:
+/// 1. Flatten the span list to a sequence of `StyledChar` values, preserving
+///    per-char style.
+/// 2. Split into whitespace-separated "words" (each word is a slice of
+///    `StyledChar`). Hard newlines in the source (`\n`) force a line break.
+/// 3. Greedily pack words onto lines; when a word doesn't fit, start a new line.
+/// 4. Words wider than `width` are hard-split at char boundaries.
+/// 5. At emit time, adjacent same-style chars are merged into a single `Span`.
 ///
-/// Always returns at least one element (possibly empty).
-pub fn wrap_cell(text: &str, width: usize) -> Vec<String> {
+/// Always returns at least one element (possibly a single empty `Vec`).
+pub fn wrap_cell_spans(cell: &[Span<'static>], width: usize) -> Vec<CellSpans> {
     if width == 0 {
-        return vec![String::new()];
+        return vec![vec![]];
     }
 
-    let mut result: Vec<String> = Vec::new();
+    // Flatten spans to styled chars.
+    let styled: Vec<StyledChar> = cell
+        .iter()
+        .flat_map(|span| {
+            span.content.chars().map(move |ch| StyledChar {
+                ch,
+                width: UnicodeWidthChar::width(ch).unwrap_or(0),
+                style: span.style,
+            })
+        })
+        .collect();
 
-    for hard_line in text.split('\n') {
-        let mut current = String::new();
-        let mut current_width = 0usize;
+    if styled.is_empty() {
+        return vec![vec![]];
+    }
 
-        for word in hard_line.split_whitespace() {
-            let word_w = UnicodeWidthStr::width(word);
+    // Split into hard lines at '\n', then into words by whitespace.
+    // Each word is a Vec<&StyledChar>.
+    let mut result: Vec<CellSpans> = Vec::new();
 
-            if current_width > 0 && current_width + 1 + word_w > width {
-                // Current line is full — flush and start a new one.
-                result.push(std::mem::take(&mut current));
-                current_width = 0;
-            }
+    // Iterate hard lines.
+    let mut line_start = 0;
+    while line_start <= styled.len() {
+        // Find the next '\n' or end of input.
+        let line_end = styled[line_start..]
+            .iter()
+            .position(|sc| sc.ch == '\n')
+            .map(|p| line_start + p)
+            .unwrap_or(styled.len());
 
-            if word_w <= width {
-                if current_width > 0 {
-                    current.push(' ');
-                    current_width += 1;
-                }
-                current.push_str(word);
-                current_width += word_w;
-            } else {
-                // Word is wider than the column — hard-split at char boundaries.
-                if current_width > 0 {
-                    result.push(std::mem::take(&mut current));
-                }
-                let mut chunk_w = 0usize;
-                for ch in word.chars() {
-                    let ch_w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
-                    if chunk_w + ch_w > width {
-                        result.push(std::mem::take(&mut current));
-                        chunk_w = 0;
-                    }
-                    current.push(ch);
-                    chunk_w += ch_w;
-                }
-                current_width = chunk_w;
-            }
+        let hard_line = &styled[line_start..line_end];
+        emit_wrapped_hard_line(hard_line, width, &mut result);
+
+        if line_end >= styled.len() {
+            break;
         }
-
-        // Flush whatever remains on this hard line.
-        result.push(current);
+        line_start = line_end + 1;
     }
 
     if result.is_empty() {
-        result.push(String::new());
+        result.push(vec![]);
     }
     result
+}
+
+/// Wrap a single hard line (no embedded newlines) and push output lines to `out`.
+///
+/// Words are whitespace-separated runs of styled chars. Words that fit on the
+/// current line are appended with a space separator. Words wider than `width`
+/// are hard-split at char boundaries.
+fn emit_wrapped_hard_line(chars: &[StyledChar], width: usize, out: &mut Vec<CellSpans>) {
+    // Collect whitespace-separated words as index ranges into `chars`.
+    let mut words: Vec<&[StyledChar]> = Vec::new();
+    let mut word_start: Option<usize> = None;
+    for (i, sc) in chars.iter().enumerate() {
+        if sc.ch.is_whitespace() {
+            if let Some(start) = word_start.take() {
+                words.push(&chars[start..i]);
+            }
+        } else if word_start.is_none() {
+            word_start = Some(i);
+        }
+    }
+    if let Some(start) = word_start {
+        words.push(&chars[start..]);
+    }
+
+    if words.is_empty() {
+        out.push(vec![]);
+        return;
+    }
+
+    // Each output line is built as an owned Vec of (char, style).
+    // Using owned tuples avoids borrow complexity with the mutable accumulator.
+    let mut line_buf: Vec<(char, Style)> = Vec::new();
+    let mut line_w = 0usize;
+
+    let flush = |buf: &mut Vec<(char, Style)>, out: &mut Vec<CellSpans>| {
+        out.push(merge_char_style_pairs(buf));
+        buf.clear();
+    };
+
+    for word in &words {
+        let word_w: usize = word.iter().map(|sc| sc.width).sum();
+
+        if word_w <= width {
+            if line_w > 0 && line_w + 1 + word_w > width {
+                flush(&mut line_buf, out);
+                line_w = 0;
+            }
+            if line_w > 0 {
+                let space_style = word.first().map(|sc| sc.style).unwrap_or_default();
+                line_buf.push((' ', space_style));
+                line_w += 1;
+            }
+            for sc in *word {
+                line_buf.push((sc.ch, sc.style));
+            }
+            line_w += word_w;
+        } else {
+            // Word wider than column — hard-split at char boundaries.
+            if line_w > 0 {
+                flush(&mut line_buf, out);
+            }
+            let mut chunk_w = 0usize;
+            for sc in *word {
+                if chunk_w + sc.width > width {
+                    flush(&mut line_buf, out);
+                    chunk_w = 0;
+                }
+                line_buf.push((sc.ch, sc.style));
+                chunk_w += sc.width;
+            }
+            line_w = chunk_w;
+        }
+    }
+
+    if !line_buf.is_empty() {
+        out.push(merge_char_style_pairs(&line_buf));
+    }
+}
+
+/// Merge a sequence of `(char, Style)` pairs into a `CellSpans`, grouping
+/// adjacent same-style chars into single `Span` values.
+fn merge_char_style_pairs(pairs: &[(char, Style)]) -> CellSpans {
+    let mut spans: CellSpans = Vec::new();
+    for &(ch, style) in pairs {
+        if let Some(last) = spans.last_mut()
+            && last.style == style
+        {
+            let mut s = last.content.to_string();
+            s.push(ch);
+            *last = Span::styled(s, style);
+        } else {
+            spans.push(Span::styled(ch.to_string(), style));
+        }
+    }
+    spans
 }
 
 fn modal_border_line(
@@ -260,21 +389,6 @@ fn modal_border_line(
     }
     s.push(right);
     Line::from(Span::styled(s, style))
-}
-
-/// Pad a cell line to exactly `width` display columns (no truncation in the modal).
-fn modal_pad_cell(text: &str, width: usize, alignment: Alignment) -> String {
-    let display_width = UnicodeWidthStr::width(text);
-    let padding = width.saturating_sub(display_width);
-    match alignment {
-        Alignment::Right => format!("{}{}", " ".repeat(padding), text),
-        Alignment::Center => {
-            let left = padding / 2;
-            let right = padding - left;
-            format!("{}{}{}", " ".repeat(left), text, " ".repeat(right))
-        }
-        Alignment::Left | Alignment::None => format!("{}{}", text, " ".repeat(padding)),
-    }
 }
 
 /// Extract the visible horizontal slice `[h_scroll, h_scroll + visible_width)` from a line.
@@ -309,10 +423,10 @@ pub fn slice_row(row: &str, h_scroll: usize, visible_width: usize) -> String {
     // Walk through the row accumulating display columns.
     let mut col = 0usize;
     let mut result = String::with_capacity(visible_width + 4);
-    let mut skipped_half = false; // replaced a cut double-width char with space
+    let mut skipped_half = false;
 
     for ch in row.chars() {
-        let ch_w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        let ch_w = UnicodeWidthChar::width(ch).unwrap_or(0);
 
         if col + ch_w <= h_scroll {
             col += ch_w;
@@ -329,7 +443,7 @@ pub fn slice_row(row: &str, h_scroll: usize, visible_width: usize) -> String {
 
         let used = result
             .chars()
-            .map(|c| unicode_width::UnicodeWidthChar::width(c).unwrap_or(0))
+            .map(|c| UnicodeWidthChar::width(c).unwrap_or(0))
             .sum::<usize>();
 
         if used + ch_w > visible_width {
@@ -366,74 +480,111 @@ pub fn max_h_scroll(state: &TableModalState, visible_width: u16) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::style::Color;
 
-    // ── wrap_cell tests ─────────────────────────────────────────────────────
+    fn plain(s: &str) -> CellSpans {
+        vec![Span::raw(s.to_string())]
+    }
+
+    fn styled_span(s: &str, style: Style) -> Span<'static> {
+        Span::styled(s.to_string(), style)
+    }
+
+    fn spans_text(spans: &CellSpans) -> String {
+        spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    fn lines_text(lines: &[CellSpans]) -> Vec<String> {
+        lines.iter().map(spans_text).collect()
+    }
+
+    // ── wrap_cell_spans tests ────────────────────────────────────────────────
 
     #[test]
-    fn wrap_cell_short_fits() {
-        assert_eq!(wrap_cell("hello", 20), vec!["hello"]);
+    fn wrap_spans_short_fits_single_line() {
+        let cell = plain("hello world");
+        let result = wrap_cell_spans(&cell, 20);
+        assert_eq!(result.len(), 1);
+        assert_eq!(spans_text(&result[0]), "hello world");
     }
 
     #[test]
-    fn wrap_cell_long_wraps_on_spaces() {
-        let result = wrap_cell("one two three four five", 10);
-        assert!(result.len() > 1, "should produce multiple lines");
+    fn wrap_spans_long_wraps_on_word_boundary() {
+        let cell = plain("one two three four five");
+        let result = wrap_cell_spans(&cell, 10);
+        assert!(result.len() > 1, "should produce multiple lines: {result:?}");
         for line in &result {
-            assert!(
-                UnicodeWidthStr::width(line.as_str()) <= 10,
-                "line too wide: {line:?}"
-            );
+            let w: usize = line
+                .iter()
+                .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+                .sum();
+            assert!(w <= 10, "line too wide: {w}");
         }
-        // All words must appear in the output.
-        let joined = result.join(" ");
+        let joined = lines_text(&result).join(" ");
         assert!(joined.contains("one"));
         assert!(joined.contains("five"));
     }
 
     #[test]
-    fn wrap_cell_word_longer_than_width_hard_splits() {
-        let result = wrap_cell("abcdefghij", 4);
-        // "abcdefghij" (10 chars) with width=4 should split into 3 chunks.
-        assert!(result.len() >= 2, "long word must be hard-split: {result:?}");
+    fn wrap_spans_style_preserved_across_wrap() {
+        let bold = Style::default().add_modifier(Modifier::BOLD);
+        let cell: CellSpans = vec![
+            styled_span("bold-word ", bold),
+            Span::raw("plain continues with more words"),
+        ];
+        let result = wrap_cell_spans(&cell, 12);
+        assert!(result.len() > 1, "should wrap: {result:?}");
+        let first_line = &result[0];
+        let has_bold = first_line.iter().any(|s| s.style == bold);
+        assert!(has_bold, "first line should contain bold span: {first_line:?}");
+    }
+
+    #[test]
+    fn wrap_spans_bold_then_plain_splits_in_plain() {
+        let bold = Style::default().fg(Color::Red);
+        let cell: CellSpans = vec![
+            styled_span("Bold", bold),
+            Span::raw(" plain-text-here"),
+        ];
+        let result = wrap_cell_spans(&cell, 8);
+        assert!(result.len() > 1, "should produce multiple lines: {result:?}");
+        let first_text = spans_text(&result[0]);
+        assert!(first_text.contains("Bold"), "first line should have bold: {first_text}");
+    }
+
+    #[test]
+    fn wrap_spans_word_longer_than_width_hard_splits() {
+        let cell = plain("abcdefghij");
+        let result = wrap_cell_spans(&cell, 4);
+        assert!(result.len() >= 2, "long word must hard-split: {result:?}");
         for line in &result {
-            assert!(
-                UnicodeWidthStr::width(line.as_str()) <= 4,
-                "hard-split chunk too wide: {line:?}"
-            );
+            let w: usize = line
+                .iter()
+                .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+                .sum();
+            assert!(w <= 4, "hard-split chunk too wide: {w}");
         }
+        let all_text: String = result.iter().flat_map(|l| l.iter()).map(|s| s.content.as_ref()).collect();
+        assert_eq!(all_text, "abcdefghij");
     }
 
     #[test]
-    fn wrap_cell_empty_string() {
-        assert_eq!(wrap_cell("", 10), vec![""]);
+    fn wrap_spans_empty_cell_single_empty_line() {
+        let result = wrap_cell_spans(&[], 10);
+        assert_eq!(result.len(), 1);
+        assert!(result[0].is_empty());
     }
 
     #[test]
-    fn wrap_cell_unicode_double_width() {
-        // Each CJK char is 2 display columns; width=6 fits exactly 3.
-        let result = wrap_cell("\u{4e2d}\u{6587}\u{5185}\u{5bb9}\u{6d4b}\u{8bd5}", 6);
-        for line in &result {
-            let w = UnicodeWidthStr::width(line.as_str());
-            assert!(w <= 6, "CJK line too wide: {w} > 6, line={line:?}");
-        }
-    }
-
-    #[test]
-    fn wrap_cell_hard_newline_honored() {
-        let result = wrap_cell("line one\nline two", 40);
+    fn wrap_spans_hard_newline_honored() {
+        let cell: CellSpans = vec![Span::raw("line one\nline two".to_string())];
+        let result = wrap_cell_spans(&cell, 40);
         assert_eq!(result.len(), 2);
-        assert_eq!(result[0], "line one");
-        assert_eq!(result[1], "line two");
+        assert_eq!(spans_text(&result[0]), "line one");
+        assert_eq!(spans_text(&result[1]), "line two");
     }
 
-    #[test]
-    fn wrap_cell_whitespace_only() {
-        // Whitespace-only collapses: split_whitespace yields nothing → one empty line.
-        let result = wrap_cell("   ", 10);
-        assert_eq!(result, vec![""]);
-    }
-
-    // ── slice_row tests ─────────────────────────────────────────────────────
+    // ── slice_row tests ──────────────────────────────────────────────────────
 
     #[test]
     fn slice_row_ascii_mid_column() {
@@ -455,10 +606,7 @@ mod tests {
 
     #[test]
     fn slice_row_double_width_straddle() {
-        // "AB" + Japanese double-width "ア" (2 cols) + "CD"
-        // Positions: A=0, B=1, ア=2-3, C=4, D=5
         let row = "AB\u{30A2}CD";
-        // h_scroll=3 cuts ア in half — expect a replacement space then "CD"
         let result = slice_row(row, 3, 5);
         assert!(
             result.starts_with(' '),

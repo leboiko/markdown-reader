@@ -134,8 +134,8 @@ pub struct TableModalState {
     pub tab_id: crate::ui::tabs::TabId,
     pub h_scroll: u16,
     pub v_scroll: u16,
-    pub headers: Vec<String>,
-    pub rows: Vec<Vec<String>>,
+    pub headers: Vec<crate::markdown::CellSpans>,
+    pub rows: Vec<Vec<crate::markdown::CellSpans>>,
     pub alignments: Vec<pulldown_cmark::Alignment>,
     pub natural_widths: Vec<usize>,
 }
@@ -1357,16 +1357,8 @@ impl App {
                     tab_id: tab.id,
                     h_scroll: 0,
                     v_scroll: 0,
-                    headers: table
-                        .headers
-                        .iter()
-                        .map(|c| crate::markdown::cell_to_string(c))
-                        .collect(),
-                    rows: table
-                        .rows
-                        .iter()
-                        .map(|r| r.iter().map(|c| crate::markdown::cell_to_string(c)).collect())
-                        .collect(),
+                    headers: table.headers.clone(),
+                    rows: table.rows.clone(),
                     alignments: table.alignments.clone(),
                     natural_widths: table.natural_widths.clone(),
                 };
