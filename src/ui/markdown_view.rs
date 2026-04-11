@@ -51,6 +51,13 @@ impl MarkdownViewState {
         self.file_name = file_name;
         self.current_path = Some(path);
         self.scroll_offset = 0;
+        // Invalidate table layout cache. The fresh DocBlock::Table values carry
+        // a pessimistic rendered_height that only becomes accurate once the
+        // draw loop runs layout_table; forcing a rebuild keeps the hint line
+        // and doc-search line numbers in sync after re-renders (e.g. on theme
+        // change, live reload, or session restore).
+        self.layout_width = 0;
+        self.table_layouts.clear();
     }
 
     pub fn scroll_up(&mut self, n: u16, _view_height: u32) {
