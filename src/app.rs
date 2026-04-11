@@ -439,10 +439,6 @@ impl App {
         let (mut events, tx) = EventHandler::new();
         self.action_tx = Some(tx.clone());
 
-        // Queue renders for any tabs that were restored from session before
-        // action_tx was available.
-        self.queue_mermaid_for_all_tabs();
-
         let root_clone = self.root.clone();
         let _watcher = crate::fs::watcher::spawn_watcher(&root_clone, tx.clone());
 
@@ -1126,7 +1122,6 @@ impl App {
             tab.view.load(path.clone(), name, content, &palette);
         }
 
-        self.queue_mermaid_for_active_tab();
         self.focus = Focus::Viewer;
     }
 
@@ -1168,7 +1163,20 @@ impl App {
             tab.view.scroll_offset = scroll.min(tab.view.total_lines.saturating_sub(1));
         }
 
-        self.queue_mermaid_for_all_tabs();
+        // Drop cache entries whose source changed. New DocBlock::Mermaid values
+        // get fresh ids derived from their content hash, so old cache entries
+        // become permanently stale after a reload.
+        let alive: std::collections::HashSet<crate::markdown::MermaidBlockId> = self
+            .tabs
+            .tabs
+            .iter()
+            .flat_map(|t| t.view.rendered.iter())
+            .filter_map(|b| match b {
+                crate::markdown::DocBlock::Mermaid { id, .. } => Some(*id),
+                _ => None,
+            })
+            .collect();
+        self.mermaid_cache.retain(&alive);
     }
 
     // ── Search ───────────────────────────────────────────────────────────────
@@ -1457,60 +1465,6 @@ impl App {
         }
     }
 
-    // ── Mermaid ──────────────────────────────────────────────────────────────
-
-    /// Queue background renders for all mermaid diagrams in the active tab.
-    fn queue_mermaid_for_active_tab(&mut self) {
-        let Some(tx) = self.action_tx.clone() else {
-            return;
-        };
-        let Some(tab) = self.tabs.active_tab() else {
-            return;
-        };
-
-        let diagrams: Vec<(crate::markdown::MermaidBlockId, String)> = tab
-            .view
-            .rendered
-            .iter()
-            .filter_map(|b| match b {
-                crate::markdown::DocBlock::Mermaid { id, source, .. } => {
-                    Some((*id, source.clone()))
-                }
-                crate::markdown::DocBlock::Text(_) | crate::markdown::DocBlock::Table(_) => None,
-            })
-            .collect();
-
-        let in_tmux = std::env::var("TMUX").is_ok();
-        for (id, source) in diagrams {
-            self.mermaid_cache
-                .ensure_queued(id, &source, self.picker.as_ref(), &tx, in_tmux);
-        }
-    }
-
-    fn queue_mermaid_for_all_tabs(&mut self) {
-        let Some(tx) = self.action_tx.clone() else {
-            return;
-        };
-
-        let diagrams: Vec<(crate::markdown::MermaidBlockId, String)> = self
-            .tabs
-            .tabs
-            .iter()
-            .flat_map(|t| t.view.rendered.iter())
-            .filter_map(|b| match b {
-                crate::markdown::DocBlock::Mermaid { id, source, .. } => {
-                    Some((*id, source.clone()))
-                }
-                crate::markdown::DocBlock::Text(_) | crate::markdown::DocBlock::Table(_) => None,
-            })
-            .collect();
-
-        let in_tmux = std::env::var("TMUX").is_ok();
-        for (id, source) in diagrams {
-            self.mermaid_cache
-                .ensure_queued(id, &source, self.picker.as_ref(), &tx, in_tmux);
-        }
-    }
 }
 
 #[cfg(test)]

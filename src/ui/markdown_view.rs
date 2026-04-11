@@ -1,6 +1,11 @@
 use crate::app::App;
 use crate::markdown::{DocBlock, TableBlockId, update_mermaid_heights};
 use crate::theme::Palette;
+
+/// How many display lines above and below the viewport to prefetch mermaid
+/// renders. Large enough that normal scrolling rarely hits an unrendered
+/// placeholder; small enough that unused diagrams don't waste CPU.
+const LAZY_RENDER_LOOKAHEAD: u32 = 50;
 use crate::ui::table_render::layout_table;
 use ratatui::{
     Frame,
@@ -218,6 +223,11 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
     // intersect [scroll_offset, scroll_offset + view_height).
     let viewport_end = scroll_offset + view_height;
 
+    // Mermaid blocks within this extended window are queued for rendering even
+    // if not yet visible, so that scrolling rarely hits an unrendered placeholder.
+    let lookahead_start = scroll_offset.saturating_sub(LAZY_RENDER_LOOKAHEAD);
+    let lookahead_end = viewport_end + LAZY_RENDER_LOOKAHEAD;
+
     // We can't hold a borrow into `app.tabs` while also accessing
     // `app.mermaid_cache`, so we collect rendering instructions first.
     struct TextDraw {
@@ -236,6 +246,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
 
     let mut text_draws: Vec<TextDraw> = Vec::new();
     let mut mermaid_draws: Vec<MermaidDraw> = Vec::new();
+    let mut mermaid_to_queue: Vec<(crate::markdown::MermaidBlockId, String)> = Vec::new();
 
     {
         let tab = app.tabs.active_tab().unwrap();
@@ -244,6 +255,14 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
         for doc_block in &tab.view.rendered {
             let block_height = doc_block.height();
             let block_end = block_start + block_height;
+
+            // Queue mermaid blocks within the lookahead window.
+            if let DocBlock::Mermaid { id, source, .. } = doc_block
+                && block_end > lookahead_start
+                && block_start < lookahead_end
+            {
+                mermaid_to_queue.push((*id, source.clone()));
+            }
 
             if block_end > scroll_offset && block_start < viewport_end {
                 // Lines within this block that are visible.
@@ -328,9 +347,26 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
             }
 
             block_start = block_end;
-            if block_start >= viewport_end {
+            if block_start >= lookahead_end {
                 break;
             }
+        }
+    }
+
+    // Queue any mermaid diagrams in the lookahead window that haven't been
+    // rendered yet. This is the only site that calls ensure_queued — rendering
+    // is fully lazy and driven by viewport proximity.
+    if let Some(tx) = &app.action_tx {
+        let in_tmux = std::env::var("TMUX").is_ok();
+        let tx = tx.clone();
+        for (id, source) in mermaid_to_queue {
+            app.mermaid_cache.ensure_queued(
+                id,
+                &source,
+                app.picker.as_ref(),
+                &tx,
+                in_tmux,
+            );
         }
     }
 
@@ -383,7 +419,10 @@ fn draw_mermaid_block(
     let entry = app.mermaid_cache.get_mut(&id);
 
     match entry {
-        None | Some(MermaidEntry::Pending) => {
+        None => {
+            render_mermaid_placeholder(f, rect, "mermaid diagram", p);
+        }
+        Some(MermaidEntry::Pending) => {
             render_mermaid_placeholder(f, rect, "rendering\u{2026}", p);
         }
         Some(MermaidEntry::Ready { protocol, .. }) => {

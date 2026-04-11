@@ -142,6 +142,13 @@ impl MermaidCache {
         true
     }
 
+    /// Drop all entries whose id is not in `alive`.
+    ///
+    /// Call after a live reload so stale entries from superseded diagrams don't
+    /// accumulate in the cache indefinitely.
+    pub fn retain(&mut self, alive: &std::collections::HashSet<MermaidBlockId>) {
+        self.entries.retain(|id, _| alive.contains(id));
+    }
 }
 
 /// CPU-bound: render mermaid source → SVG → DynamicImage → StatefulProtocol.
@@ -365,4 +372,23 @@ mod tests {
         assert_eq!(h, MAX_MERMAID_HEIGHT);
     }
 
+    #[test]
+    fn cache_retain_drops_stale_entries() {
+        let mut cache = MermaidCache::new();
+        let id1 = MermaidBlockId(10);
+        let id2 = MermaidBlockId(20);
+        let id3 = MermaidBlockId(30);
+        cache.insert(id1, MermaidEntry::Pending);
+        cache.insert(id2, MermaidEntry::Pending);
+        cache.insert(id3, MermaidEntry::Pending);
+
+        let mut alive = std::collections::HashSet::new();
+        alive.insert(id1);
+        alive.insert(id3);
+        cache.retain(&alive);
+
+        assert!(cache.get(&id1).is_some());
+        assert!(cache.get(&id2).is_none());
+        assert!(cache.get(&id3).is_some());
+    }
 }
