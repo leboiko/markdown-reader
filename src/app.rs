@@ -296,7 +296,9 @@ impl App {
         let entries = FileEntry::discover(&root);
         let mut tree = FileTreeState::default();
         tree.rebuild(entries);
-        tree.git_status = git_status::collect(&root);
+        // Git status is populated asynchronously via `refresh_git_status` once the
+        // event loop starts (so action_tx is available).  Starting with an empty map
+        // means the tree renders immediately without blocking on `git` subprocess I/O.
 
         let picker = crate::mermaid::create_picker();
 
@@ -507,6 +509,11 @@ impl App {
     ) -> Result<()> {
         let (mut events, tx) = EventHandler::new();
         self.action_tx = Some(tx.clone());
+
+        // Populate git status on a background thread now that action_tx is set.
+        // This avoids blocking `App::new` (which runs on the tokio thread) on a
+        // potentially slow `git status` subprocess call.
+        self.refresh_git_status();
 
         let root_clone = self.root.clone();
         let _watcher = crate::fs::watcher::spawn_watcher(&root_clone, tx.clone());

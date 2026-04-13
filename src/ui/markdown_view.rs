@@ -249,6 +249,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                 }
             }
 
+            // Width changed — all block heights may have shifted; always recompute.
             update_mermaid_heights(&tab.view.rendered, &app.mermaid_cache);
             tab.view.total_lines = tab.view.rendered.iter().map(|b| b.height()).sum();
             tab.view.recompute_positions();
@@ -256,6 +257,8 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
             tab.view.scroll_offset = tab.view.scroll_offset.min(max_scroll);
         } else {
             // Populate cache for any tables not yet laid out (e.g. first draw).
+            // Track whether any new table was added so we know to recompute positions.
+            let mut layout_changed = false;
             for doc_block in &mut tab.view.rendered {
                 if let DocBlock::Table(table) = doc_block
                     && let std::collections::hash_map::Entry::Vacant(e) =
@@ -264,16 +267,20 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                     let (text, height, _was_truncated) = layout_table(table, effective_width, &p);
                     table.rendered_height = height;
                     e.insert(TableLayout { text });
+                    layout_changed = true;
                 }
             }
-            // Sync mermaid heights from cache (no-op when nothing has changed).
-            update_mermaid_heights(&tab.view.rendered, &app.mermaid_cache);
-            // Recompute total_lines and link/anchor positions in case any
-            // table or mermaid heights changed.
-            tab.view.total_lines = tab.view.rendered.iter().map(|b| b.height()).sum();
-            tab.view.recompute_positions();
-            let max_scroll = tab.view.total_lines.saturating_sub(view_height / 2);
-            tab.view.scroll_offset = tab.view.scroll_offset.min(max_scroll);
+            // update_mermaid_heights returns true when any block's height changed.
+            // Only recompute positions (O(blocks)) when something actually moved —
+            // calling it unconditionally every frame was the source of UI freezes on
+            // large documents.
+            let mermaid_changed = update_mermaid_heights(&tab.view.rendered, &app.mermaid_cache);
+            if layout_changed || mermaid_changed {
+                tab.view.total_lines = tab.view.rendered.iter().map(|b| b.height()).sum();
+                tab.view.recompute_positions();
+                let max_scroll = tab.view.total_lines.saturating_sub(view_height / 2);
+                tab.view.scroll_offset = tab.view.scroll_offset.min(max_scroll);
+            }
         }
     }
 

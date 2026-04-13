@@ -103,7 +103,11 @@ impl DocBlock {
 /// Synchronise the `cell_height` of every `Mermaid` block in `blocks` with the
 /// current cache. Call this before summing `total_lines` so scroll math reflects
 /// whatever the cache knows at the time of the draw.
-pub fn update_mermaid_heights(blocks: &[DocBlock], cache: &crate::mermaid::MermaidCache) {
+///
+/// Returns `true` when at least one block's height changed, allowing callers to
+/// skip expensive downstream work (like `recompute_positions`) when nothing moved.
+pub fn update_mermaid_heights(blocks: &[DocBlock], cache: &crate::mermaid::MermaidCache) -> bool {
+    let mut changed = false;
     for block in blocks {
         if let DocBlock::Mermaid {
             id,
@@ -111,9 +115,14 @@ pub fn update_mermaid_heights(blocks: &[DocBlock], cache: &crate::mermaid::Merma
             cell_height,
         } = block
         {
-            cell_height.set(cache.height(id, source));
+            let new_h = cache.height(id, source);
+            if new_h != cell_height.get() {
+                cell_height.set(new_h);
+                changed = true;
+            }
         }
     }
+    changed
 }
 
 /// Convert a heading's visible text to a GitHub-style anchor slug.
