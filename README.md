@@ -65,13 +65,26 @@ drawn on the left of the viewer content when enabled.
   tabs preserves each tab's find state independently.
 - **Go to line** — `:` opens a prompt; type a line number, Enter jumps.
   Clamped to document bounds and aligned with the gutter numbering.
-- **Mouse support** — click tabs to activate, click file tree items to
-  open, scroll the viewer or tree with the wheel.
+- **Mouse support** — click tabs to activate, click `×` to close, click
+  file tree items to open, click internal links to jump, scroll the viewer
+  or tree with the wheel.
+- **Link navigation** — click an internal `#anchor` link to scroll to the
+  matching heading, or press `f` to open a link picker listing every
+  anchor in the document for keyboard navigation.
+- **Copy to clipboard** — press `y` in the tree to copy the selected
+  file's full path or filename to the system clipboard via OSC 52.
+- **Git status colors** — new/untracked files appear in green, modified
+  files in yellow, with the entire ancestor directory chain colored so
+  changed subtrees are easy to spot at a glance.
+- **Configurable tree position** — place the file tree on the left
+  (default) or right side of the viewer via the settings modal.
 - **Rendered markdown preview** — headings, lists, code blocks, tables,
   links, blockquotes, task lists, and more, styled from the active theme.
 - **Live file watching** — the tree and open tabs reload when files change
-  on disk, preserving per-tab scroll positions.
+  on disk, preserving per-tab scroll positions. All I/O is async so the
+  UI never freezes.
 - **Respects .gitignore** — uses the `ignore` crate to skip ignored files.
+  Dotfile directories (`.planning`, `.github`, etc.) are included.
 
 ## Installation
 
@@ -115,7 +128,8 @@ markdown-reader --help
 ```
 
 Once inside the TUI, press `?` at any time for the keyboard help overlay.
-Press `c` to open the settings modal (themes and line numbers). Press `q`
+Press `c` to open the settings modal (themes, line numbers, tree
+position). Press `q`
 to quit — the current tabs and scroll positions are saved before exit, so
 reopening the same directory resumes where you left off.
 
@@ -147,6 +161,7 @@ reopening the same directory resumes where you left off.
 | `Ctrl+f` | Find in document |
 | `n` / `N` | Next / previous match |
 | `:` | Go to line |
+| `f` | Open anchor link picker (jump to a heading) |
 | `Enter` | Expand the first visible table into the modal viewer |
 | `Tab` | Switch focus to tree |
 
@@ -199,6 +214,7 @@ is silently ignored; close an existing one first.
 | `[` | Shrink file tree |
 | `]` | Grow file tree |
 | `H` | Toggle file tree visibility |
+| `y` | Copy path or filename to clipboard |
 
 ### Search
 
@@ -217,7 +233,7 @@ is silently ignored; close an existing one first.
 
 | Key | Action |
 |---|---|
-| `c` | Open settings (theme, line numbers) |
+| `c` | Open settings (theme, line numbers, tree position) |
 | `Esc` / `c` | Close settings |
 
 ### General
@@ -320,13 +336,16 @@ it past the viewport and press `Enter` again for the next.
 
 ## Themes
 
-Six built-in themes, switchable live from the settings modal (`c`):
+Eight built-in themes (five dark, three light), switchable live from
+the settings modal (`c`):
 
 - **Default** — balanced palette that works on dark terminals.
 - **Dracula** — the classic pink/purple dark theme.
 - **Solarized Dark** — Ethan Schoonover's dark palette.
+- **Solarized Light** — Ethan Schoonover's warm cream light palette.
 - **Nord** — cool blue-based Arctic palette.
 - **Gruvbox Dark** — warm retro groove.
+- **Gruvbox Light** — warm retro light variant.
 - **GitHub Light** — bright palette for light terminals.
 
 Theme changes re-render every open tab immediately, so switching feels
@@ -347,8 +366,9 @@ app starts with defaults rather than refusing to launch.
 Fields:
 
 ```toml
-theme = "dracula"          # default | dracula | solarized_dark | nord | gruvbox_dark | github_light
+theme = "dracula"          # default | dracula | solarized_dark | solarized_light | nord | gruvbox_dark | gruvbox_light | github_light
 show_line_numbers = true
+tree_position = "left"     # left | right
 ```
 
 ### `state.toml` — per-project session
@@ -406,6 +426,8 @@ shows the default theme.
 | resvg | SVG rasterization |
 | image | Bitmap decoding and manipulation |
 | ratatui-image | Terminal image display (Kitty, Sixel, iTerm2, halfblocks) |
+| unicode-width | Display-width measurement for CJK and emoji |
+| base64 | OSC 52 clipboard encoding |
 
 ## License
 

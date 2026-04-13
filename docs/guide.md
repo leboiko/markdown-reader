@@ -225,6 +225,47 @@ press `Enter` again.
 The modal closes automatically when you switch tabs or when the
 underlying file changes and the table is removed by a live reload.
 
+## Link navigation
+
+Markdown documents often have a table of contents with internal links
+like `[Installation](#installation)`. You can follow these links two
+ways:
+
+- **Mouse click** — click on any blue underlined link in the viewer. If
+  it targets an internal `#anchor`, the viewer scrolls to the matching
+  heading with two lines of context above it. External URLs are ignored.
+- **Link picker** — press `f` in the viewer to open a centered popup
+  listing every internal `#` anchor in the document. Navigate with
+  `j`/`k`, press `Enter` to jump. `Esc` or `f` again to close. This is
+  especially useful for long documents with a table of contents at the
+  top.
+
+## Copy to clipboard
+
+Press `y` in the file tree to open a small popup with two options:
+
+- **Full path** — the absolute path of the selected file or directory.
+- **Filename** — just the filename component.
+
+Navigate with `j`/`k`, press `Enter` to copy. The text is sent to
+your system clipboard via the OSC 52 escape sequence, which works in
+Ghostty, Kitty, iTerm2, WezTerm, Alacritty, and most modern
+terminals. `Esc` or `y` to cancel.
+
+## Git status colors
+
+The file tree shows git status with color:
+
+- **Green** — new or untracked files.
+- **Yellow** — modified files.
+- **Default color** — clean, committed files.
+
+The entire ancestor directory chain leading to a changed file also
+lights up, so you can spot which subtree has changes at a glance.
+Git status refreshes automatically when the file watcher detects
+changes. If the directory isn't a git repo or git isn't installed,
+all files show their default color.
+
 ## Global search
 
 Press `/` from the tree or viewer to open the global search overlay.
@@ -237,16 +278,19 @@ closes the search.
 
 ## Themes and settings
 
-Press `c` from the tree or viewer to open the settings modal. Two
+Press `c` from the tree or viewer to open the settings modal. Three
 sections:
 
-- **Theme** — pick from six built-in palettes: Default, Dracula,
-  Solarized Dark, Nord, Gruvbox Dark, GitHub Light. Highlight a theme
-  and press `Enter` to apply. Every open tab re-renders immediately
-  with the new colors.
+- **Theme** — pick from eight built-in palettes: Default, Dracula,
+  Solarized Dark, Solarized Light, Nord, Gruvbox Dark, Gruvbox Light,
+  GitHub Light. Highlight a theme and press `Enter` to apply. Every
+  open tab re-renders immediately with the new colors, including body
+  text and mermaid diagram backgrounds.
 - **Markdown** — toggle the line-number gutter on or off with `Enter`.
   The gutter appears on the left of the viewer with display line
   numbers aligned with what `:` and `Ctrl+f` use.
+- **Panels** — choose whether the file tree sits on the left (default)
+  or right side of the viewer. The width ratio is preserved either way.
 
 Navigate with `j`/`k` or arrows, `Enter` to apply, `Esc` or `c` to
 close the modal. All changes are persisted to disk immediately so the
