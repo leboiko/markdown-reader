@@ -61,6 +61,7 @@ fn collect_flat_paths(entries: &[FileEntry], out: &mut Vec<PathBuf>) {
 fn collect_entries(dir: &Path, entries: &mut Vec<FileEntry>) {
     let walker = ignore::WalkBuilder::new(dir)
         .max_depth(Some(1))
+        .hidden(false)
         .sort_by_file_name(|a, b| a.cmp(b))
         .build();
 
