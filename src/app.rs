@@ -404,8 +404,17 @@ impl App {
         }
     }
 
-    /// Save all open tabs and the active index to disk.
+    /// Blocking session save used on quit to ensure data reaches disk before
+    /// the process exits.
     fn save_session(&mut self) {
+        let Some((mut state, root, tab_sessions, active_idx)) = self.session_snapshot() else {
+            return;
+        };
+        state.update_session(&root, tab_sessions, active_idx);
+    }
+
+    /// Build the data needed for a session write without mutating `self`.
+    fn session_snapshot(&self) -> Option<(AppState, PathBuf, Vec<TabSession>, usize)> {
         let tab_sessions: Vec<TabSession> = self
             .tabs
             .tabs
@@ -419,22 +428,25 @@ impl App {
             .collect();
 
         if tab_sessions.is_empty() {
-            return;
+            return None;
         }
 
         let active_idx = self.tabs.active_index().unwrap_or(0);
-        let root = self.root.clone();
-        self.app_state
-            .update_session(&root, tab_sessions, active_idx);
+        Some((
+            self.app_state.clone(),
+            self.root.clone(),
+            tab_sessions,
+            active_idx,
+        ))
     }
 
-    /// Persist the current config settings.
+    /// Persist the current config settings on a background thread (fire-and-forget).
     fn persist_config(&self) {
-        Config {
+        let config = Config {
             theme: self.theme,
             show_line_numbers: self.show_line_numbers,
-        }
-        .save();
+        };
+        tokio::task::spawn_blocking(move || config.save());
     }
 
     // ── Event loop ───────────────────────────────────────────────────────────
