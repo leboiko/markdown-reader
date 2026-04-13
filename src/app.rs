@@ -572,6 +572,13 @@ impl App {
                     self.search.selected_index = 0;
                 }
             }
+            Action::FileLoaded {
+                path,
+                content,
+                new_tab,
+            } => {
+                self.apply_file_loaded(path, content, new_tab);
+            }
         }
     }
 
@@ -1118,29 +1125,61 @@ impl App {
     ///
     /// `new_tab == true` pushes a new tab (or focuses an existing one with the
     /// same path). `new_tab == false` replaces the active tab's content.
+    ///
+    /// If the file is already open the switch is instantaneous (no I/O).
+    /// Otherwise the read is dispatched to a background thread and the result
+    /// arrives as [`Action::FileLoaded`].
     pub fn open_or_focus(&mut self, path: PathBuf, new_tab: bool) {
         if path.is_dir() {
             return;
         }
 
-        let Ok(content) = std::fs::read_to_string(&path) else {
+        // If the tab already exists, activating it requires no disk I/O.
+        let (_, outcome) = self.tabs.open_or_focus(&path, new_tab);
+        if matches!(outcome, OpenOutcome::Focused) {
+            self.focus = Focus::Viewer;
+            return;
+        }
+
+        let Some(tx) = self.action_tx.clone() else {
             return;
         };
 
+        tokio::task::spawn_blocking(move || {
+            let Ok(content) = std::fs::read_to_string(&path) else {
+                return;
+            };
+            let _ = tx.send(Action::FileLoaded {
+                path,
+                content,
+                new_tab,
+            });
+        });
+
+        self.focus = Focus::Viewer;
+    }
+
+    /// Apply a completed async file load: populate the tab that was reserved
+    /// by [`open_or_focus`].
+    fn apply_file_loaded(&mut self, path: PathBuf, content: String, new_tab: bool) {
         let name = path
             .file_name()
             .unwrap_or_default()
             .to_string_lossy()
             .to_string();
 
+        // Re-run the dedup check. If the same file was opened a second time
+        // before this result arrived, `open_or_focus` will have already focused
+        // the tab; we only need to load content for Opened/Replaced outcomes.
         let (_, outcome) = self.tabs.open_or_focus(&path, new_tab);
         if matches!(outcome, OpenOutcome::Opened | OpenOutcome::Replaced) {
             let palette = self.palette;
-            let tab = self.tabs.active_tab_mut().unwrap();
+            let tab = self.tabs.active_tab_mut().expect("tab just opened");
             tab.view.load(path.clone(), name, content, &palette);
         }
 
         self.focus = Focus::Viewer;
+        self.expand_and_select(&path);
     }
 
     fn open_selected_file(&mut self, new_tab: bool) {
@@ -1282,30 +1321,23 @@ impl App {
     }
 
     fn confirm_search(&mut self) {
-        if let Some(result) = self.search.results.get(self.search.selected_index).cloned()
-            && let Ok(content) = std::fs::read_to_string(&result.path)
-        {
-            let path = result.path.clone();
-            let name = result.name;
-            let result_path = result.path;
+        let Some(result) = self.search.results.get(self.search.selected_index).cloned() else {
+            return;
+        };
 
-            let (_, outcome) = self.tabs.open_or_focus(&path, true);
-            if matches!(outcome, OpenOutcome::Opened | OpenOutcome::Replaced) {
-                let palette = self.palette;
-                let tab = self.tabs.active_tab_mut().unwrap();
-                tab.view.load(path.clone(), name, content, &palette);
-            }
+        // Close the search overlay immediately so the UI is not frozen waiting
+        // for the read. The file content arrives via Action::FileLoaded.
+        self.search.active = false;
+        self.focus = Focus::Viewer;
 
-            self.search.active = false;
-            self.focus = Focus::Viewer;
-
-            for (i, item) in self.tree.flat_items.iter().enumerate() {
-                if item.path == result_path {
-                    self.tree.list_state.select(Some(i));
-                    break;
-                }
+        for (i, item) in self.tree.flat_items.iter().enumerate() {
+            if item.path == result.path {
+                self.tree.list_state.select(Some(i));
+                break;
             }
         }
+
+        self.open_or_focus(result.path, true);
     }
 
     fn shrink_tree(&mut self) {

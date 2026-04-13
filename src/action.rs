@@ -89,4 +89,14 @@ pub enum Action {
         generation: u64,
         results: Vec<SearchResult>,
     },
+
+    /// A file was loaded asynchronously and is ready to be opened in a tab.
+    FileLoaded {
+        /// Absolute path that was read.
+        path: PathBuf,
+        /// Raw text content.
+        content: String,
+        /// `true` → open in a new tab; `false` → replace the active tab.
+        new_tab: bool,
+    },
 }
