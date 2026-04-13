@@ -437,11 +437,11 @@ fn draw_mermaid_block(
         }
         Some(MermaidEntry::Ready { protocol, .. }) => {
             if fully_visible {
-                use ratatui::widgets::Clear;
                 use ratatui_image::{Resize, StatefulImage};
-                // Clear the full rect so the padding band around the image
-                // doesn't show stale content left by previous frames.
-                f.render_widget(Clear, rect);
+                f.render_widget(
+                    Block::default().style(Style::default().bg(p.background)),
+                    rect,
+                );
                 let padded = padded_rect(rect, 4, 1);
                 let image = StatefulImage::new().resize(Resize::Fit(None));
                 f.render_stateful_widget(image, padded, protocol.as_mut());
