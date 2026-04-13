@@ -116,6 +116,16 @@ impl MermaidCache {
             return false;
         }
 
+        // Diagram types with known upstream rendering issues fall back to
+        // showing source. See github.com/1jehuang/mermaid-rs-renderer/issues/67
+        if has_limited_rendering(source) {
+            self.entries.insert(
+                id,
+                MermaidEntry::SourceOnly("diagram type has limited rendering, showing source".into()),
+            );
+            return false;
+        }
+
         let Some(picker) = picker else {
             let reason = if in_tmux {
                 TMUX_DISABLED_REASON.to_string()
@@ -267,6 +277,11 @@ pub fn create_picker() -> Option<Picker> {
 
 /// The reason graphics are unavailable in a tmux session.
 pub const TMUX_DISABLED_REASON: &str = "disable tmux for graphics";
+
+fn has_limited_rendering(source: &str) -> bool {
+    let t = source.trim_start();
+    t.starts_with("stateDiagram")
+}
 
 #[cfg(test)]
 mod tests {
