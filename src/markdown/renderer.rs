@@ -90,7 +90,7 @@ impl MdRenderer {
             lines: Vec::new(),
             blocks: Vec::new(),
             current_spans: Vec::new(),
-            style_stack: vec![Style::default()],
+            style_stack: vec![Style::default().fg(palette.foreground)],
             list_depth: 0,
             list_counters: Vec::new(),
             in_code_block: false,
