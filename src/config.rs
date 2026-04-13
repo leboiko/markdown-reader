@@ -8,6 +8,15 @@ use crate::theme::Theme;
 const APP_NAME: &str = "markdown-reader";
 const CONFIG_FILE: &str = "config.toml";
 
+/// Which side of the viewer the file-tree panel is rendered on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TreePosition {
+    #[default]
+    Left,
+    Right,
+}
+
 /// All persisted user settings.
 ///
 /// `#[serde(default)]` on every field ensures that config files written by
@@ -18,6 +27,8 @@ pub struct Config {
     pub theme: Theme,
     #[serde(default)]
     pub show_line_numbers: bool,
+    #[serde(default)]
+    pub tree_position: TreePosition,
 }
 
 impl Config {

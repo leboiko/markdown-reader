@@ -7,6 +7,7 @@ use ratatui::{
 };
 
 use crate::app::ConfigPopupState;
+use crate::config::TreePosition;
 use crate::theme::{Palette, Theme};
 
 const ACTIVE_BULLET: &str = "●";
@@ -25,12 +26,13 @@ pub fn render_config_popup(
     state: &ConfigPopupState,
     theme: Theme,
     show_line_numbers: bool,
+    tree_position: TreePosition,
     palette: &Palette,
 ) {
-    let area = centered_rect(46, 15, f.area());
+    let area = centered_rect(46, 18, f.area());
     f.render_widget(Clear, area);
 
-    let lines = build_lines(state, theme, show_line_numbers, palette);
+    let lines = build_lines(state, theme, show_line_numbers, tree_position, palette);
 
     let block = Block::default()
         .title(" Settings ")
@@ -45,6 +47,7 @@ fn build_lines<'a>(
     state: &ConfigPopupState,
     theme: Theme,
     show_line_numbers: bool,
+    tree_position: TreePosition,
     palette: &Palette,
 ) -> Vec<Line<'a>> {
     let section_style = Style::new()
@@ -87,7 +90,6 @@ fn build_lines<'a>(
         Span::styled("  ", text_style),
         Span::styled(ConfigPopupState::SECTIONS[1].0, section_style),
     ]));
-    // Single toggle: show line numbers.
     lines.push(option_line(
         row == state.cursor,
         show_line_numbers,
@@ -98,8 +100,34 @@ fn build_lines<'a>(
         dim_style,
     ));
     row += 1;
-    // Suppress "unused" warning — row is intentionally incremented for each
-    // option so the layout stays consistent if more options are added.
+
+    lines.push(Line::from(""));
+
+    // --- Panels section ---
+    lines.push(Line::from(vec![
+        Span::styled("  ", text_style),
+        Span::styled(ConfigPopupState::SECTIONS[2].0, section_style),
+    ]));
+    lines.push(option_line(
+        row == state.cursor,
+        tree_position == TreePosition::Left,
+        "Tree left",
+        cursor_style,
+        active_style,
+        text_style,
+        dim_style,
+    ));
+    row += 1;
+    lines.push(option_line(
+        row == state.cursor,
+        tree_position == TreePosition::Right,
+        "Tree right",
+        cursor_style,
+        active_style,
+        text_style,
+        dim_style,
+    ));
+    row += 1;
     let _ = row;
 
     lines.push(Line::from(""));

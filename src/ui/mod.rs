@@ -13,6 +13,7 @@ pub mod table_render;
 pub mod tabs;
 
 use crate::app::{App, Focus};
+use crate::config::TreePosition;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout},
@@ -66,8 +67,13 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             ])
             .split(outer_chunks[0]);
 
-        let tree_area = main_chunks[0];
-        let viewer_col = main_chunks[1];
+        let (tree_idx, viewer_idx) = match app.tree_position {
+            TreePosition::Left => (0, 1),
+            TreePosition::Right => (1, 0),
+        };
+
+        let tree_area = main_chunks[tree_idx];
+        let viewer_col = main_chunks[viewer_idx];
 
         file_tree::draw(f, app, tree_area, app.focus == Focus::Tree);
         app.tree_area_rect = Some(tree_area);
@@ -122,6 +128,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             &popup_state,
             app.theme,
             app.show_line_numbers,
+            app.tree_position,
             &app.palette,
         );
     }

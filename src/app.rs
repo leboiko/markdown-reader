@@ -1,5 +1,5 @@
 use crate::action::Action;
-use crate::config::Config;
+use crate::config::{Config, TreePosition};
 use crate::event::EventHandler;
 use crate::fs::discovery::FileEntry;
 use crate::markdown::DocBlock;
@@ -155,8 +155,8 @@ impl ConfigPopupState {
     /// Ordered sections: `(label, option count)`.
     pub const SECTIONS: &'static [(&'static str, usize)] = &[
         ("Theme", Theme::ALL.len()),
-        // "Markdown" section has one toggle: show_line_numbers.
         ("Markdown", 1),
+        ("Panels", 2),
     ];
 
     pub fn total_rows() -> usize {
@@ -222,6 +222,8 @@ pub struct App {
     pub palette: Palette,
     /// Whether to show line numbers in the viewer.
     pub show_line_numbers: bool,
+    /// Which side of the screen the file-tree panel appears on.
+    pub tree_position: TreePosition,
     /// Persisted sessions (loaded once on startup, written on file open and quit).
     pub app_state: AppState,
     /// Sender injected into components that need to produce actions.
@@ -284,6 +286,7 @@ impl App {
             theme: config.theme,
             palette,
             show_line_numbers: config.show_line_numbers,
+            tree_position: config.tree_position,
             app_state,
             action_tx: None,
             pending_chord: None,
@@ -445,6 +448,7 @@ impl App {
         let config = Config {
             theme: self.theme,
             show_line_numbers: self.show_line_numbers,
+            tree_position: self.tree_position,
         };
         tokio::task::spawn_blocking(move || config.save());
     }
@@ -767,8 +771,17 @@ impl App {
             self.palette = Palette::from_theme(theme);
             self.rerender_all_tabs();
             self.persist_config();
-        } else {
+        } else if cursor == theme_count {
             self.show_line_numbers = !self.show_line_numbers;
+            self.persist_config();
+        } else {
+            // Panels section: index 0 = Tree left, index 1 = Tree right.
+            let panels_cursor = cursor - theme_count - 1;
+            self.tree_position = if panels_cursor == 0 {
+                TreePosition::Left
+            } else {
+                TreePosition::Right
+            };
             self.persist_config();
         }
     }

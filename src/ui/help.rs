@@ -60,6 +60,7 @@ pub fn draw(f: &mut Frame, app: &App) {
         shortcut_line("[", "Shrink file tree", key_style, desc_style),
         shortcut_line("]", "Grow file tree", key_style, desc_style),
         shortcut_line("H", "Toggle file tree", key_style, desc_style),
+        shortcut_line("y", "Copy path/filename", key_style, desc_style),
         Line::from(""),
         Line::from(Span::styled("── Search ──", dim_style)),
         shortcut_line("/", "Open search", key_style, desc_style),
@@ -70,7 +71,7 @@ pub fn draw(f: &mut Frame, app: &App) {
         Line::from(Span::styled("── Settings ──", dim_style)),
         shortcut_line(
             "c",
-            "Open settings (theme, line numbers)",
+            "Open settings (theme, line numbers, panels)",
             key_style,
             desc_style,
         ),
