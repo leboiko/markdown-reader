@@ -253,38 +253,38 @@ impl Palette {
             },
             Theme::GithubLight => Self {
                 // GitHub Light: https://primer.style/primitives/colors
-                background: Color::Rgb(255, 255, 255), // canvas.default
-                foreground: Color::Rgb(31, 35, 40),    // fg.default
-                dim: Color::Rgb(101, 109, 118),        // fg.muted
-                border: Color::Rgb(208, 215, 222),     // border.default
-                border_focused: Color::Rgb(9, 105, 218), // accent.fg
-                accent: Color::Rgb(9, 105, 218),       // accent.fg
-                accent_alt: Color::Rgb(130, 80, 0),    // attention.fg
-                selection_bg: Color::Rgb(9, 105, 218), // accent.fg
-                selection_fg: Color::Rgb(255, 255, 255),
+                background: Color::Rgb(255, 255, 255),   // canvas.default   #ffffff
+                foreground: Color::Rgb(31, 35, 40),      // fg.default        #1f2328
+                dim: Color::Rgb(101, 109, 118),          // fg.muted          #656d76
+                border: Color::Rgb(208, 215, 222),       // border.default    #d0d7de
+                border_focused: Color::Rgb(9, 105, 218), // accent.fg         #0969da
+                accent: Color::Rgb(9, 105, 218),         // accent.fg         #0969da
+                accent_alt: Color::Rgb(154, 103, 0),     // attention.fg      #9a6700
+                selection_bg: Color::Rgb(221, 244, 255), // accent.subtle     #ddf4ff
+                selection_fg: Color::Rgb(9, 105, 218),   // accent.fg on subtle bg
                 title: Color::Rgb(31, 35, 40),
-                h1: Color::Rgb(9, 105, 218), // blue
-                h2: Color::Rgb(130, 80, 0),  // attention
-                h3: Color::Rgb(26, 127, 55), // success
+                h1: Color::Rgb(9, 105, 218),             // accent.fg         #0969da
+                h2: Color::Rgb(154, 103, 0),             // attention.fg      #9a6700
+                h3: Color::Rgb(26, 127, 55),             // success.fg        #1a7f37
                 heading_other: Color::Rgb(31, 35, 40),
-                inline_code: Color::Rgb(207, 34, 46), // danger.fg
+                inline_code: Color::Rgb(207, 34, 46),    // danger.fg         #cf222e
                 code_fg: Color::Rgb(31, 35, 40),
-                code_bg: Color::Rgb(246, 248, 250), // canvas.subtle
-                code_border: Color::Rgb(208, 215, 222),
-                link: Color::Rgb(9, 105, 218),
-                list_marker: Color::Rgb(130, 80, 0),
-                task_marker: Color::Rgb(26, 127, 55),
+                code_bg: Color::Rgb(246, 248, 250),      // canvas.subtle     #f6f8fa
+                code_border: Color::Rgb(208, 215, 222),  // border.default    #d0d7de
+                link: Color::Rgb(9, 105, 218),           // accent.fg         #0969da
+                list_marker: Color::Rgb(154, 103, 0),    // attention.fg      #9a6700
+                task_marker: Color::Rgb(26, 127, 55),    // success.fg        #1a7f37
                 block_quote_fg: Color::Rgb(101, 109, 118),
                 block_quote_border: Color::Rgb(208, 215, 222),
                 table_header: Color::Rgb(9, 105, 218),
                 table_border: Color::Rgb(208, 215, 222),
-                search_match_bg: Color::Rgb(255, 218, 9), // severe.emphasis nearby
-                current_match_bg: Color::Rgb(255, 143, 0),
+                search_match_bg: Color::Rgb(255, 211, 61), // attention.emphasis #ffd33d
+                current_match_bg: Color::Rgb(255, 143, 0), // severe.emphasis   #ff8f00
                 match_fg: Color::Rgb(31, 35, 40),
                 gutter: Color::Rgb(101, 109, 118),
-                status_bar_bg: Color::Rgb(246, 248, 250),
+                status_bar_bg: Color::Rgb(246, 248, 250), // canvas.subtle     #f6f8fa
                 status_bar_fg: Color::Rgb(101, 109, 118),
-                help_bg: Color::Rgb(246, 248, 250),
+                help_bg: Color::Rgb(246, 248, 250),       // canvas.subtle     #f6f8fa
             },
         }
     }
