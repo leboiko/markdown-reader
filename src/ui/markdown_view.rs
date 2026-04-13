@@ -304,9 +304,15 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                             });
                         }
                         DocBlock::Mermaid { id, source, .. } => {
-                            let fully_visible = clip_start == 0
-                                && visible_lines == block_height
-                                && draw_height as u32 == block_height;
+                            // Render the image when the block is as visible as
+                            // it can get: fully visible for small blocks, or
+                            // filling the viewport for blocks taller than the
+                            // viewport. Show a placeholder only while the block
+                            // is entering/exiting the viewport edges.
+                            let max_renderable =
+                                block_height.min(inner.height as u32);
+                            let fully_visible = visible_lines >= max_renderable
+                                && draw_height as u32 >= max_renderable;
                             mermaid_draws.push(MermaidDraw {
                                 y: rect_y,
                                 height: draw_height,
