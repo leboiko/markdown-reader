@@ -4,6 +4,7 @@ pub mod doc_search_bar;
 pub mod file_tree;
 pub mod goto_line_bar;
 pub mod help;
+pub mod link_picker;
 pub mod markdown_view;
 pub mod search_bar;
 pub mod status_bar;
@@ -133,6 +134,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         tab_picker::draw(f, app);
     }
 
+    if app.link_picker.is_some() {
+        link_picker::draw(f, app);
+    }
+
     if app.table_modal.is_some() {
         table_modal::draw(f, app);
     }
@@ -166,5 +171,6 @@ fn is_viewer_focused(focus: Focus) -> bool {
             | Focus::TabPicker
             | Focus::TableModal
             | Focus::CopyMenu
+            | Focus::LinkPicker
     )
 }

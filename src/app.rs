@@ -9,6 +9,7 @@ use crate::theme::{Palette, Theme};
 use crate::ui::file_tree::FileTreeState;
 use crate::ui::markdown_view::TableLayout;
 use crate::ui::search_bar::{SearchMode, SearchResult, SearchState};
+use crate::ui::link_picker::{LinkPickerItem, LinkPickerState};
 use crate::ui::tab_picker::TabPickerState;
 use crate::ui::tabs::{OpenOutcome, Tabs};
 use anyhow::Result;
@@ -141,6 +142,8 @@ pub enum Focus {
     TableModal,
     /// Copy path/filename menu popup.
     CopyMenu,
+    /// Internal-link anchor picker (opened with `f`).
+    LinkPicker,
 }
 
 /// State for the copy-path popup opened with `y` in the tree.
@@ -261,6 +264,8 @@ pub struct App {
     pub tab_picker_rects: Vec<(crate::ui::tabs::TabId, ratatui::layout::Rect)>,
     /// Tab picker overlay state; `None` when the picker is closed.
     pub tab_picker: Option<TabPickerState>,
+    /// Link picker overlay state; `None` when the picker is closed.
+    pub link_picker: Option<LinkPickerState>,
     /// Cached area of the file-tree panel for mouse hit-testing.
     pub tree_area_rect: Option<ratatui::layout::Rect>,
     /// Cached area of the viewer panel for mouse hit-testing.
@@ -319,6 +324,7 @@ impl App {
             tab_bar_rects: Vec::new(),
             tab_picker_rects: Vec::new(),
             tab_picker: None,
+            link_picker: None,
             tree_area_rect: None,
             viewer_area_rect: None,
             mermaid_cache: MermaidCache::new(),
@@ -779,6 +785,48 @@ impl App {
         }
     }
 
+    /// Build the link picker from the active tab's internal `#anchor` links,
+    /// deduplicated by anchor, and open it.
+    fn open_link_picker(&mut self) {
+        let Some(tab) = self.tabs.active_tab() else {
+            return;
+        };
+
+        // Collect unique anchors preserving first-occurrence order.
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut items: Vec<LinkPickerItem> = Vec::new();
+
+        for link in &tab.view.links {
+            if !link.url.starts_with('#') {
+                continue;
+            }
+            let anchor = &link.url[1..];
+            if !seen.insert(anchor.to_string()) {
+                continue;
+            }
+            let target_line = tab
+                .view
+                .heading_anchors
+                .iter()
+                .find(|a| a.anchor == anchor)
+                .map(|a| a.line);
+            if let Some(target_line) = target_line {
+                items.push(LinkPickerItem {
+                    text: link.text.clone(),
+                    anchor: anchor.to_string(),
+                    target_line,
+                });
+            }
+        }
+
+        if items.is_empty() {
+            return;
+        }
+
+        self.link_picker = Some(LinkPickerState { cursor: 0, items });
+        self.focus = Focus::LinkPicker;
+    }
+
     fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) {
         if self.show_help {
             self.show_help = false;
@@ -814,6 +862,12 @@ impl App {
             Focus::TabPicker => {
                 crate::ui::tab_picker::handle_key(self, code);
                 if self.tab_picker.is_none() {
+                    self.focus = Focus::Viewer;
+                }
+            }
+            Focus::LinkPicker => {
+                crate::ui::link_picker::handle_key(self, code);
+                if self.link_picker.is_none() {
                     self.focus = Focus::Viewer;
                 }
             }
@@ -1116,6 +1170,9 @@ impl App {
                     ds.current_match = 0;
                 }
                 self.focus = Focus::DocSearch;
+            }
+            KeyCode::Char('f') => {
+                self.open_link_picker();
             }
             KeyCode::Char('n') => self.doc_search_next(),
             KeyCode::Char('N') => self.doc_search_prev(),

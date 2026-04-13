@@ -38,6 +38,7 @@ pub fn draw(f: &mut Frame, app: &App) {
         shortcut_line("Enter", "Expand table under cursor", key_style, desc_style),
         shortcut_line("Ctrl+f", "Find in document", key_style, desc_style),
         shortcut_line("n / N", "Next / prev match", key_style, desc_style),
+        shortcut_line("f", "Open anchor link picker", key_style, desc_style),
         shortcut_line(":", "Go to line", key_style, desc_style),
         Line::from(""),
         Line::from(Span::styled("── Table modal ──", dim_style)),

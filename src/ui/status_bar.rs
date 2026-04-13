@@ -21,6 +21,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         Focus::TabPicker => "TABS",
         Focus::TableModal => "TABLE",
         Focus::CopyMenu => "COPY",
+        Focus::LinkPicker => "LINKS",
     };
 
     let tab_count = app.tabs.len();
@@ -52,7 +53,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         Span::styled(file_info, Style::default().fg(p.status_bar_fg)),
         Span::raw("  "),
         Span::styled(
-            " Tab:panel  t:new-tab  T:picker  x:close-tab  /:search  c:settings  q:quit  ?:help ",
+            " Tab:panel  t:new-tab  T:picker  x:close-tab  f:links  /:search  c:settings  q:quit  ?:help ",
             Style::default().fg(p.dim),
         ),
     ]);
