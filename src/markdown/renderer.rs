@@ -484,6 +484,7 @@ impl MdRenderer {
             .max(20);
         let inner_width = max_width + 1;
 
+        self.push_blank_line();
         self.lines.push(Line::from(Span::styled(
             format!("╭{}╮", "─".repeat(inner_width + 1)),
             border_style,
