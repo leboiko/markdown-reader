@@ -40,6 +40,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     app.tree_area_rect = None;
     app.viewer_area_rect = None;
     app.tab_bar_rects.clear();
+    app.tab_close_rects.clear();
     app.tab_picker_rects.clear();
 
     let outer_chunks = Layout::default()

@@ -258,6 +258,7 @@ pub struct App {
     pub pending_chord: Option<char>,
     /// Per-tab rects in the tab bar, populated during each draw for mouse hit-testing.
     pub tab_bar_rects: Vec<(crate::ui::tabs::TabId, ratatui::layout::Rect)>,
+    pub tab_close_rects: Vec<(crate::ui::tabs::TabId, ratatui::layout::Rect)>,
     /// Per-row rects in the tab picker overlay for mouse hit-testing.
     pub tab_picker_rects: Vec<(crate::ui::tabs::TabId, ratatui::layout::Rect)>,
     /// Tab picker overlay state; `None` when the picker is closed.
@@ -321,6 +322,7 @@ impl App {
             action_tx: None,
             pending_chord: None,
             tab_bar_rects: Vec::new(),
+            tab_close_rects: Vec::new(),
             tab_picker_rects: Vec::new(),
             tab_picker: None,
             link_picker: None,
@@ -655,7 +657,22 @@ impl App {
                     return;
                 }
 
-                // Tab bar click.
+                // Tab close button click (× on each tab).
+                let close_hit = self
+                    .tab_close_rects
+                    .iter()
+                    .find(|(_, rect)| contains(*rect, col, row))
+                    .map(|(id, _)| *id);
+
+                if let Some(id) = close_hit {
+                    self.tabs.close(id);
+                    if self.tabs.is_empty() {
+                        self.focus = Focus::Tree;
+                    }
+                    return;
+                }
+
+                // Tab bar click (activate).
                 let tab_hit = self
                     .tab_bar_rects
                     .iter()

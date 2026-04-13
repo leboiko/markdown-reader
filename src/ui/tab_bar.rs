@@ -78,7 +78,8 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
 
     // Determine the window of tabs that fits in `area.width`, keeping the
     // active tab visible.
-    let widths: Vec<u16> = labels.iter().map(|l| l.len() as u16).collect();
+    // +1 for the × close button after each tab label.
+    let widths: Vec<u16> = labels.iter().map(|l| l.len() as u16 + 1).collect();
     // `+K` overflow indicator occupies at most 5 cells " +32 ".
     const OVERFLOW_MAX: u16 = 5;
 
@@ -107,7 +108,18 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
 
         spans.push(Span::styled(label.clone(), style));
 
-        // Record the rect for mouse hit-testing.
+        let close_style = if i == active_idx {
+            Style::default()
+                .fg(p.dim)
+                .bg(p.accent)
+        } else {
+            Style::default().fg(p.dim).bg(p.status_bar_bg)
+        };
+        let close_label = "×";
+        let close_w = 1u16;
+        spans.push(Span::styled(close_label, close_style));
+
+        // Record the tab rect (label only) for activate click.
         app.tab_bar_rects.push((
             tab_id,
             Rect {
@@ -117,7 +129,17 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
                 height: 1,
             },
         ));
-        x_cursor += w;
+        // Record the close button rect for close click.
+        app.tab_close_rects.push((
+            tab_id,
+            Rect {
+                x: x_cursor + w,
+                y: area.y,
+                width: close_w,
+                height: 1,
+            },
+        ));
+        x_cursor += w + close_w;
     }
 
     // Overflow indicators.
