@@ -6,18 +6,27 @@ use ratatui::{
     text::{Line, Span},
     widgets::Paragraph,
 };
+use unicode_width::UnicodeWidthStr as _;
 
 /// Maximum display width for a tab's filename before truncation (cells).
 const MAX_NAME_WIDTH: usize = 20;
 /// Minimum display width for a truncated filename (cells).
 const MIN_NAME_WIDTH: usize = 6;
+/// Display width (cells) of the close button span " × ".
+const CLOSE_WIDTH: u16 = 3;
 
-/// Truncate `name` to at most `MAX_NAME_WIDTH` cells, preserving the extension.
+/// Truncate `name` to at most `MAX_NAME_WIDTH` display cells, preserving the extension.
 ///
 /// A file named `very-long-filename.md` becomes `very-lon…md` so the
 /// extension stays readable. Names shorter than the limit pass through unchanged.
+///
+/// This function measures widths using `unicode_width` so that multi-byte characters
+/// (e.g. CJK) count as their rendered cell width rather than their byte length.
 fn truncate_name(name: &str) -> String {
-    if name.len() <= MAX_NAME_WIDTH {
+    // Build the truncated string by accumulating characters until we hit the limit.
+    // This avoids byte-indexing into a UTF-8 string, which would panic on multi-byte chars.
+    let display_width = name.width();
+    if display_width <= MAX_NAME_WIDTH {
         return name.to_string();
     }
 
@@ -25,22 +34,44 @@ fn truncate_name(name: &str) -> String {
     if let Some(dot) = name.rfind('.') {
         let ext = &name[dot..]; // e.g. ".md"
         let stem = &name[..dot];
-        // We need stem_len + "…" + ext.len() <= MAX_NAME_WIDTH
-        // (with a floor of MIN_NAME_WIDTH total).
-        let available_stem = MAX_NAME_WIDTH.saturating_sub(1 + ext.len()).max(1);
-        if available_stem < MIN_NAME_WIDTH.saturating_sub(ext.len()) {
-            // Extension too long — just truncate the whole name.
-            let mut s = name[..MAX_NAME_WIDTH.saturating_sub(1)].to_string();
-            s.push('…');
-            return s;
+        let ext_w = ext.width();
+        // We need stem_cells + 1 (for "…") + ext_cells <= MAX_NAME_WIDTH.
+        let available_stem = MAX_NAME_WIDTH.saturating_sub(1 + ext_w).max(1);
+        if available_stem < MIN_NAME_WIDTH.saturating_sub(ext_w) {
+            // Extension too long — truncate the whole name instead.
+            return collect_cells(name, MAX_NAME_WIDTH.saturating_sub(1)) + "…";
         }
-        let stem_part = &stem[..available_stem.min(stem.len())];
+        let stem_part = collect_cells(stem, available_stem);
         format!("{stem_part}…{ext}")
     } else {
-        let mut s = name[..MAX_NAME_WIDTH.saturating_sub(1)].to_string();
-        s.push('…');
-        s
+        collect_cells(name, MAX_NAME_WIDTH.saturating_sub(1)) + "…"
     }
+}
+
+/// Return a prefix of `s` whose total display-cell width is at most `limit`.
+///
+/// Characters are accumulated left-to-right; the first character that would
+/// push the total past `limit` is excluded.
+fn collect_cells(s: &str, limit: usize) -> String {
+    use unicode_width::UnicodeWidthChar as _;
+    let mut out = String::new();
+    let mut used = 0usize;
+    for ch in s.chars() {
+        let w = ch.width().unwrap_or(0);
+        if used + w > limit {
+            break;
+        }
+        out.push(ch);
+        used += w;
+    }
+    out
+}
+
+/// Compute the display-cell width of a label string produced by `format!(" {num}: {name} ")`.
+///
+/// Uses `unicode_width` so that multi-byte or wide characters count correctly.
+fn label_display_width(label: &str) -> u16 {
+    label.width() as u16
 }
 
 /// Render the tab bar into `area`.
@@ -78,9 +109,12 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
 
     // Determine the window of tabs that fits in `area.width`, keeping the
     // active tab visible.
-    let label_widths: Vec<u16> = labels.iter().map(|l| l.len() as u16).collect();
-    // +1 per tab for the × close button.
-    let widths: Vec<u16> = label_widths.iter().map(|w| w + 1).collect();
+    //
+    // Use unicode_width (cell count) not byte length for label widths so that
+    // filenames with multi-byte characters (e.g. CJK, …) are measured correctly.
+    let label_widths: Vec<u16> = labels.iter().map(|l| label_display_width(l)).collect();
+    // CLOSE_WIDTH cells per tab for the " × " close button.
+    let widths: Vec<u16> = label_widths.iter().map(|w| w + CLOSE_WIDTH).collect();
     // `+K` overflow indicator occupies at most 5 cells " +32 ".
     const OVERFLOW_MAX: u16 = 5;
 
@@ -89,13 +123,24 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     let hidden_before = start;
     let hidden_after = n.saturating_sub(end);
 
+    // When a " +N " overflow indicator is prepended, it occupies cells to the
+    // left of the first tab.  We must account for its width in x_cursor so that
+    // the hit-test rects stay aligned with what ratatui actually renders.
+    let overflow_before_w: u16 = if hidden_before > 0 {
+        format!(" +{hidden_before} ").width() as u16
+    } else {
+        0
+    };
+
     let mut spans: Vec<Span> = Vec::new();
-    let mut x_cursor = area.x;
+    // x_cursor tracks the next free column in terminal coordinates.
+    let mut x_cursor = area.x + overflow_before_w;
 
     // Render each visible tab as a styled span.
     for i in start..end {
         let tab_id = app.tabs.tabs[i].id;
         let label = &labels[i];
+        let lw = label_widths[i];
 
         let style = if i == active_idx {
             Style::default()
@@ -106,20 +151,20 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
             Style::default().fg(p.dim).bg(p.status_bar_bg)
         };
 
-        spans.push(Span::styled(label.clone(), style));
-
         let close_style = if i == active_idx {
-            Style::default()
-                .fg(p.dim)
-                .bg(p.accent)
+            Style::default().fg(p.dim).bg(p.accent)
         } else {
             Style::default().fg(p.dim).bg(p.status_bar_bg)
         };
-        let close_label = "×";
-        let close_w = 1u16;
+
+        // The close button is " × " (space, multiplication sign, space) so that
+        // the click target is CLOSE_WIDTH (3) cells wide instead of just 1.
+        // A 1-cell target is nearly impossible to hit with a mouse cursor.
+        let close_label = " × ";
+
+        spans.push(Span::styled(label.clone(), style));
         spans.push(Span::styled(close_label, close_style));
 
-        let lw = label_widths[i];
         // Record the tab rect (label only) for activate click.
         app.tab_bar_rects.push((
             tab_id,
@@ -130,22 +175,25 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
                 height: 1,
             },
         ));
-        // Record the close button rect (× after the label) for close click.
+        // Record the close button rect (" × ") for close click.
+        // The rect starts immediately after the label and is CLOSE_WIDTH cells wide.
         app.tab_close_rects.push((
             tab_id,
             Rect {
                 x: x_cursor + lw,
                 y: area.y,
-                width: close_w,
+                width: CLOSE_WIDTH,
                 height: 1,
             },
         ));
-        x_cursor += lw + close_w;
+        x_cursor += lw + CLOSE_WIDTH;
     }
 
-    // Overflow indicators.
+    // Overflow indicators — built as separate spans so spans are ordered left-to-right.
     if hidden_before > 0 {
-        // Rare case where active is near the right and window slides; prepend indicator.
+        // Prepend the " +N " indicator.  x_cursor was already offset by
+        // overflow_before_w above, so the tab rects recorded in the loop above
+        // are already at the correct screen positions.
         spans.insert(
             0,
             Span::styled(
