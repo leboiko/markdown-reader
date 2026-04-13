@@ -4,6 +4,30 @@ use std::cell::Cell;
 
 use ratatui::text::{Span, Text};
 
+/// Position and metadata of a hyperlink within a rendered text block.
+///
+/// `line` is 0-indexed relative to the start of the containing `DocBlock::Text`.
+/// `col_start` and `col_end` are byte-column offsets in the rendered line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkInfo {
+    pub line: u32,
+    pub col_start: u16,
+    pub col_end: u16,
+    pub url: String,
+    pub text: String,
+}
+
+/// A heading anchor within a rendered text block.
+///
+/// `anchor` is the GitHub-style slug derived from the heading text.
+/// `line` is 0-indexed within the containing `DocBlock::Text` block; it is
+/// converted to an absolute display line in `MarkdownViewState::load`.
+#[derive(Debug, Clone)]
+pub struct HeadingAnchor {
+    pub anchor: String,
+    pub line: u32,
+}
+
 /// Opaque identifier for a mermaid diagram block, derived from a hash of its source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MermaidBlockId(pub u64);
@@ -43,8 +67,13 @@ pub struct TableBlock {
 /// moved to a worker thread, so this is safe.
 #[derive(Debug)]
 pub enum DocBlock {
-    /// A run of styled ratatui lines.
-    Text(Text<'static>),
+    /// A run of styled ratatui lines, with any hyperlinks and heading anchors
+    /// found within them.
+    Text {
+        text: Text<'static>,
+        links: Vec<LinkInfo>,
+        heading_anchors: Vec<HeadingAnchor>,
+    },
     /// A reserved space for a mermaid diagram image.
     Mermaid {
         id: MermaidBlockId,
@@ -64,7 +93,7 @@ impl DocBlock {
     /// Number of display lines this block occupies.
     pub fn height(&self) -> u32 {
         match self {
-            DocBlock::Text(t) => t.lines.len() as u32,
+            DocBlock::Text { text, .. } => text.lines.len() as u32,
             DocBlock::Mermaid { cell_height, .. } => cell_height.get(),
             DocBlock::Table(t) => t.rendered_height,
         }
@@ -76,15 +105,56 @@ impl DocBlock {
 /// whatever the cache knows at the time of the draw.
 pub fn update_mermaid_heights(blocks: &[DocBlock], cache: &crate::mermaid::MermaidCache) {
     for block in blocks {
-        if let DocBlock::Mermaid {
-            id,
-            source,
-            cell_height,
-        } = block
-        {
+        if let DocBlock::Mermaid { id, source, cell_height } = block {
             cell_height.set(cache.height(id, source));
         }
     }
+}
+
+/// Convert a heading's visible text to a GitHub-style anchor slug.
+///
+/// Algorithm:
+/// 1. Lowercase the text.
+/// 2. Remove any character that is not alphanumeric, a space, or a hyphen.
+/// 3. Replace spaces with hyphens.
+/// 4. Collapse consecutive hyphens into one.
+///
+/// Non-ASCII letters pass step 2 unchanged (GitHub preserves them). Characters
+/// such as `'` and `.` are stripped. Duplicate anchors are not deduplicated
+/// here; callers that need disambiguation must track a counter themselves.
+///
+/// # Examples
+///
+/// ```
+/// # use markdown_tui_explorer::markdown::heading_to_anchor;
+/// assert_eq!(heading_to_anchor("Installation Guide"), "installation-guide");
+/// assert_eq!(heading_to_anchor("What's New?"), "whats-new");
+/// assert_eq!(heading_to_anchor("API v2.0"), "api-v20");
+/// ```
+pub fn heading_to_anchor(text: &str) -> String {
+    let lower = text.to_lowercase();
+    // Keep alphanumeric (any script), hyphens, and spaces; drop everything else.
+    let filtered: String = lower
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '-' || *c == ' ')
+        .collect();
+    // Spaces → hyphens, then collapse runs of consecutive hyphens.
+    let hyphenated = filtered.replace(' ', "-");
+    let mut slug = String::with_capacity(hyphenated.len());
+    let mut prev_hyphen = false;
+    for ch in hyphenated.chars() {
+        if ch == '-' {
+            if !prev_hyphen {
+                slug.push(ch);
+            }
+            prev_hyphen = true;
+        } else {
+            slug.push(ch);
+            prev_hyphen = false;
+        }
+    }
+    // Strip leading/trailing hyphens that may appear after filtering.
+    slug.trim_matches('-').to_string()
 }
 
 /// Return the total display-column width of a cell's spans.

@@ -9,8 +9,8 @@ use ratatui::{
 use std::cell::Cell;
 
 use crate::markdown::{
-    CellSpans, DocBlock, MermaidBlockId, TableBlock, TableBlockId, cell_display_width,
-    cell_to_string,
+    CellSpans, DocBlock, HeadingAnchor, LinkInfo, MermaidBlockId, TableBlock, TableBlockId,
+    cell_display_width, cell_to_string, heading_to_anchor,
 };
 use crate::mermaid::DEFAULT_MERMAID_HEIGHT;
 use crate::theme::Palette;
@@ -20,6 +20,11 @@ use crate::theme::Palette;
 /// Mermaid fenced code blocks produce [`DocBlock::Mermaid`] entries; all other
 /// content is grouped into [`DocBlock::Text`] runs. Consecutive text lines are
 /// merged so there is at most one `Text` block between two `Mermaid` blocks.
+///
+/// `DocBlock::Text` blocks carry embedded [`LinkInfo`] and [`HeadingAnchor`]
+/// slices whose `line` fields are relative to the block's start. Callers
+/// convert them to absolute display lines by adding the block's cumulative
+/// offset (see `MarkdownViewState::load`).
 pub fn render_markdown(content: &str, palette: &Palette) -> Vec<DocBlock> {
     let opts = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
     let parser = Parser::new_ext(content, opts);
@@ -51,6 +56,18 @@ struct MdRenderer {
     table_rows: Vec<Vec<CellSpans>>,
     table_header_row: Option<Vec<CellSpans>>,
     table_header: bool,
+    /// URL of the link currently being rendered; set on `Start(Link)`, cleared
+    /// on `TagEnd::Link` after recording the span range.
+    current_link_url: Option<String>,
+    /// Byte-column at which the current link's text begins in `current_spans`.
+    /// Measured as the sum of span content lengths before the link started.
+    link_col_start: u16,
+    /// Links collected within the current pending `Text` block (block-relative).
+    pending_links: Vec<LinkInfo>,
+    /// Accumulated text of the heading currently being rendered.
+    heading_text: String,
+    /// Heading anchors accumulated for the current pending `Text` block.
+    pending_heading_anchors: Vec<HeadingAnchor>,
     h1: Color,
     h2: Color,
     h3: Color,
@@ -88,6 +105,11 @@ impl MdRenderer {
             table_rows: Vec::new(),
             table_header_row: None,
             table_header: false,
+            current_link_url: None,
+            link_col_start: 0,
+            pending_links: Vec::new(),
+            heading_text: String::new(),
+            pending_heading_anchors: Vec::new(),
             h1: palette.h1,
             h2: palette.h2,
             h3: palette.h3,
@@ -145,11 +167,32 @@ impl MdRenderer {
     }
 
     /// Drain `self.lines` into a `DocBlock::Text` if there are any pending lines.
+    ///
+    /// Any links and heading anchors accumulated are moved into the block;
+    /// their `line` fields are already relative to this block's start.
     fn flush_text_block(&mut self) {
         if !self.lines.is_empty() {
             let lines = std::mem::take(&mut self.lines);
-            self.blocks.push(DocBlock::Text(Text::from(lines)));
+            let links = std::mem::take(&mut self.pending_links);
+            let heading_anchors = std::mem::take(&mut self.pending_heading_anchors);
+            self.blocks.push(DocBlock::Text {
+                text: Text::from(lines),
+                links,
+                heading_anchors,
+            });
         }
+    }
+
+    /// Sum of the display widths of all spans currently in `current_spans`.
+    ///
+    /// Used to compute `col_start` / `col_end` for link hit-testing. We use
+    /// char count rather than byte count because ratatui column positions are
+    /// character-based; for ASCII-only link text this is identical to byte count.
+    fn current_col_width(&self) -> u16 {
+        self.current_spans
+            .iter()
+            .map(|s| s.content.chars().count() as u16)
+            .sum()
     }
 
     fn render(mut self, parser: Parser) -> Vec<DocBlock> {
@@ -203,6 +246,7 @@ impl MdRenderer {
             Tag::Heading { level, .. } => {
                 self.in_heading = true;
                 self.heading_level = level as u8;
+                self.heading_text.clear();
                 let color = match level {
                     pulldown_cmark::HeadingLevel::H1 => self.h1,
                     pulldown_cmark::HeadingLevel::H2 => self.h2,
@@ -274,7 +318,9 @@ impl MdRenderer {
             Tag::Strikethrough => {
                 self.push_style(Style::default().add_modifier(Modifier::CROSSED_OUT));
             }
-            Tag::Link { .. } => {
+            Tag::Link { dest_url, .. } => {
+                self.link_col_start = self.current_col_width();
+                self.current_link_url = Some(dest_url.into_string());
                 self.push_style(
                     Style::default()
                         .fg(self.link)
@@ -304,9 +350,17 @@ impl MdRenderer {
         match tag {
             TagEnd::Heading(_) => {
                 self.pop_style();
+                // Record the anchor before flushing; `self.lines.len()` is the
+                // 0-based index of the line we are about to push.
+                let anchor = heading_to_anchor(&self.heading_text);
+                self.pending_heading_anchors.push(HeadingAnchor {
+                    anchor,
+                    line: self.lines.len() as u32,
+                });
                 self.flush_line();
                 self.push_blank_line();
                 self.in_heading = false;
+                self.heading_text.clear();
             }
             TagEnd::Paragraph => {
                 self.flush_line();
@@ -341,6 +395,25 @@ impl MdRenderer {
             }
             TagEnd::Link => {
                 self.pop_style();
+                if let Some(url) = self.current_link_url.take() {
+                    let col_end = self.current_col_width();
+                    // Collect the visible text from spans added since link start.
+                    let text: String = self
+                        .current_spans
+                        .iter()
+                        .map(|s| s.content.as_ref())
+                        .collect::<String>()
+                        .chars()
+                        .skip(self.link_col_start as usize)
+                        .collect();
+                    self.pending_links.push(LinkInfo {
+                        line: self.lines.len() as u32,
+                        col_start: self.link_col_start,
+                        col_end,
+                        url,
+                        text,
+                    });
+                }
             }
             TagEnd::Table => {
                 self.emit_table_block();
@@ -372,6 +445,9 @@ impl MdRenderer {
                 self.code_block_content.pop();
             }
         } else {
+            if self.in_heading {
+                self.heading_text.push_str(text);
+            }
             self.current_spans
                 .push(Span::styled(text.to_string(), self.current_style()));
         }

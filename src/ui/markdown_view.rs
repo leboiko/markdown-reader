@@ -24,6 +24,25 @@ pub struct TableLayout {
     pub text: Text<'static>,
 }
 
+/// A hyperlink with an absolute display-line position (after block offsets are applied).
+#[derive(Debug, Clone)]
+pub struct AbsoluteLink {
+    /// Absolute 0-indexed display line within the document.
+    pub line: u32,
+    pub col_start: u16,
+    pub col_end: u16,
+    pub url: String,
+    pub text: String,
+}
+
+/// A heading anchor with an absolute display-line position.
+#[derive(Debug, Clone)]
+pub struct AbsoluteAnchor {
+    pub anchor: String,
+    /// Absolute 0-indexed display line within the document.
+    pub line: u32,
+}
+
 /// Runtime state for the markdown preview panel.
 #[derive(Debug, Default)]
 pub struct MarkdownViewState {
@@ -44,6 +63,10 @@ pub struct MarkdownViewState {
     pub layout_width: u16,
     /// Per-table rendering cache keyed by `TableBlockId`.
     pub table_layouts: HashMap<TableBlockId, TableLayout>,
+    /// All hyperlinks in the document with absolute display-line positions.
+    pub links: Vec<AbsoluteLink>,
+    /// All heading anchors in the document with absolute display-line positions.
+    pub heading_anchors: Vec<AbsoluteAnchor>,
 }
 
 impl MarkdownViewState {
@@ -51,6 +74,34 @@ impl MarkdownViewState {
     pub fn load(&mut self, path: PathBuf, file_name: String, content: String, palette: &Palette) {
         let blocks = crate::markdown::renderer::render_markdown(&content, palette);
         self.total_lines = blocks.iter().map(|b| b.height()).sum();
+
+        // Walk blocks once to build absolute-line link and anchor tables.
+        let mut abs_links: Vec<AbsoluteLink> = Vec::new();
+        let mut abs_anchors: Vec<AbsoluteAnchor> = Vec::new();
+        let mut block_offset = 0u32;
+        for block in &blocks {
+            if let DocBlock::Text { links, heading_anchors, .. } = block {
+                for link in links {
+                    abs_links.push(AbsoluteLink {
+                        line: block_offset + link.line,
+                        col_start: link.col_start,
+                        col_end: link.col_end,
+                        url: link.url.clone(),
+                        text: link.text.clone(),
+                    });
+                }
+                for ha in heading_anchors {
+                    abs_anchors.push(AbsoluteAnchor {
+                        anchor: ha.anchor.clone(),
+                        line: block_offset + ha.line,
+                    });
+                }
+            }
+            block_offset += block.height();
+        }
+
+        self.links = abs_links;
+        self.heading_anchors = abs_anchors;
         self.rendered = blocks;
         self.content = content;
         self.file_name = file_name;
@@ -280,7 +331,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                         visible_lines.min((inner.y + inner.height - rect_y) as u32) as u16;
 
                     match doc_block {
-                        DocBlock::Text(text) => {
+                        DocBlock::Text { text, .. } => {
                             // Slice only the visible lines from this Text block.
                             let start = clip_start as usize;
                             let end =

@@ -59,7 +59,7 @@ pub fn collect_match_lines(
 
     for block in blocks {
         match block {
-            DocBlock::Text(text) => {
+            DocBlock::Text { text, .. } => {
                 for (i, line) in text.lines.iter().enumerate() {
                     let line_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
                     if line_text.to_lowercase().contains(query_lower) {
@@ -1674,7 +1674,11 @@ mod tests {
             .iter()
             .map(|l| Line::from(Span::raw(l.to_string())))
             .collect();
-        DocBlock::Text(Text::from(text_lines))
+        DocBlock::Text {
+            text: Text::from(text_lines),
+            links: Vec::new(),
+            heading_anchors: Vec::new(),
+        }
     }
 
     fn str_cell(s: &str) -> CellSpans {
