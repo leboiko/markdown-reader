@@ -145,7 +145,7 @@ pub fn handle_key(app: &mut App, code: crossterm::event::KeyCode) -> bool {
                 let vh = app.tabs.view_height;
                 if let Some(tab) = app.tabs.active_tab_mut() {
                     let max = tab.view.total_lines.saturating_sub(vh / 2);
-                    tab.view.scroll_offset = line.min(max);
+                    tab.view.scroll_offset = line.saturating_sub(2).min(max);
                 }
             }
             false

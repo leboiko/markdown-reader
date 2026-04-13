@@ -117,11 +117,15 @@ impl Tabs {
             return (fallback, OpenOutcome::Capped);
         }
 
-        // Push new tab.
+        // Push new tab with the path set immediately so the dedup check
+        // catches it when apply_file_loaded runs after the async read.
         let id = self.alloc_id();
         self.tabs.push(Tab {
             id,
-            view: MarkdownViewState::default(),
+            view: MarkdownViewState {
+                current_path: Some(path.clone()),
+                ..MarkdownViewState::default()
+            },
             doc_search: DocSearchState::default(),
         });
         self.set_active(id);
@@ -165,6 +169,12 @@ impl Tabs {
 
     pub fn is_empty(&self) -> bool {
         self.tabs.is_empty()
+    }
+
+    pub fn find_tab_by_path_mut(&mut self, path: &PathBuf) -> Option<&mut Tab> {
+        self.tabs
+            .iter_mut()
+            .find(|t| t.view.current_path.as_ref() == Some(path))
     }
 
     /// Activate the tab after the current one, wrapping around.

@@ -795,7 +795,9 @@ impl App {
                 let vh = self.tabs.view_height;
                 if let Some(tab) = self.tabs.active_tab_mut() {
                     let max = tab.view.total_lines.saturating_sub(vh / 2);
-                    tab.view.scroll_offset = line.min(max);
+                    // Show 2 lines of context above the heading so it doesn't
+                    // land flush at the viewport edge.
+                    tab.view.scroll_offset = line.saturating_sub(2).min(max);
                 }
             }
         }
@@ -1382,20 +1384,24 @@ impl App {
 
     /// Apply a completed async file load: populate the tab that was reserved
     /// by [`open_or_focus`].
-    fn apply_file_loaded(&mut self, path: PathBuf, content: String, new_tab: bool) {
+    fn apply_file_loaded(&mut self, path: PathBuf, content: String, _new_tab: bool) {
         let name = path
             .file_name()
             .unwrap_or_default()
             .to_string_lossy()
             .to_string();
 
-        // Re-run the dedup check. If the same file was opened a second time
-        // before this result arrived, `open_or_focus` will have already focused
-        // the tab; we only need to load content for Opened/Replaced outcomes.
-        let (_, outcome) = self.tabs.open_or_focus(&path, new_tab);
-        if matches!(outcome, OpenOutcome::Opened | OpenOutcome::Replaced) {
-            let palette = self.palette;
-            let tab = self.tabs.active_tab_mut().expect("tab just opened");
+        // Find the placeholder tab that open_or_focus reserved (it has
+        // current_path set but no content yet) and load the file into it.
+        let palette = self.palette;
+        let loaded = self
+            .tabs
+            .find_tab_by_path_mut(&path)
+            .filter(|t| t.view.content.is_empty())
+            .is_some();
+
+        if loaded {
+            let tab = self.tabs.find_tab_by_path_mut(&path).unwrap();
             tab.view.load(path.clone(), name, content, &palette);
         }
 
