@@ -679,6 +679,7 @@ impl App {
                     && contains(viewer_rect, col, row)
                 {
                     self.focus = Focus::Viewer;
+                    self.try_follow_link_click(viewer_rect, col, row);
                 }
             }
             MouseEventKind::ScrollDown => {
@@ -714,6 +715,67 @@ impl App {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// If the click coordinates land on an internal `#anchor` link, scroll to
+    /// the matching heading. External links are ignored silently.
+    ///
+    /// `viewer_rect` is the outer border rect of the viewer panel; the inner
+    /// content area starts one cell inside on each side.
+    fn try_follow_link_click(&mut self, viewer_rect: ratatui::layout::Rect, col: u16, row: u16) {
+        let Some(tab) = self.tabs.active_tab() else {
+            return;
+        };
+
+        // The content inner rect (inside the 1-cell border).
+        let inner_x = viewer_rect.x + 1;
+        let inner_y = viewer_rect.y + 1;
+
+        if row < inner_y || col < inner_x {
+            return;
+        }
+
+        let scroll_offset = tab.view.scroll_offset;
+        let clicked_line = scroll_offset + (row - inner_y) as u32;
+
+        // Subtract the gutter width when line numbers are shown. The formula
+        // matches render_text_with_gutter so click positions align with text.
+        let content_col = if self.show_line_numbers {
+            let total_lines = tab.view.total_lines.max(10);
+            let num_digits = (total_lines.ilog10() + 1).max(4) as u16;
+            let gutter_width = num_digits + 3;
+            (col - inner_x).saturating_sub(gutter_width)
+        } else {
+            col - inner_x
+        };
+
+        let anchor = tab
+            .view
+            .links
+            .iter()
+            .find(|l| {
+                l.line == clicked_line
+                    && content_col >= l.col_start
+                    && content_col < l.col_end
+                    && l.url.starts_with('#')
+            })
+            .map(|l| l.url[1..].to_string());
+
+        if let Some(anchor) = anchor {
+            let target_line = tab
+                .view
+                .heading_anchors
+                .iter()
+                .find(|a| a.anchor == anchor)
+                .map(|a| a.line);
+            if let Some(line) = target_line {
+                let vh = self.tabs.view_height;
+                if let Some(tab) = self.tabs.active_tab_mut() {
+                    let max = tab.view.total_lines.saturating_sub(vh / 2);
+                    tab.view.scroll_offset = line.min(max);
+                }
+            }
         }
     }
 

@@ -169,3 +169,89 @@ pub fn cell_display_width(spans: &[Span<'static>]) -> usize {
 pub fn cell_to_string(spans: &[Span<'static>]) -> String {
     spans.iter().map(|s| s.content.as_ref()).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::markdown::renderer::render_markdown;
+    use crate::theme::Palette;
+
+    fn palette() -> Palette {
+        Palette::from_theme(crate::theme::Theme::Default)
+    }
+
+    // ── heading_to_anchor ────────────────────────────────────────────────────
+
+    #[test]
+    fn anchor_plain_words() {
+        assert_eq!(heading_to_anchor("Installation Guide"), "installation-guide");
+    }
+
+    #[test]
+    fn anchor_apostrophe_stripped() {
+        assert_eq!(heading_to_anchor("What's New?"), "whats-new");
+    }
+
+    #[test]
+    fn anchor_dot_stripped() {
+        assert_eq!(heading_to_anchor("API v2.0"), "api-v20");
+    }
+
+    #[test]
+    fn anchor_already_lowercase() {
+        assert_eq!(heading_to_anchor("hello world"), "hello-world");
+    }
+
+    #[test]
+    fn anchor_consecutive_spaces_collapse() {
+        assert_eq!(heading_to_anchor("A  B"), "a-b");
+    }
+
+    #[test]
+    fn anchor_empty() {
+        assert_eq!(heading_to_anchor(""), "");
+    }
+
+    // ── Link info collection ─────────────────────────────────────────────────
+
+    #[test]
+    fn link_info_internal_anchor() {
+        let md = "[Installation](#installation)\n";
+        let blocks = render_markdown(md, &palette());
+        let link = match &blocks[0] {
+            DocBlock::Text { links, .. } => links.first().expect("link expected"),
+            _ => panic!("expected Text block"),
+        };
+        assert_eq!(link.url, "#installation");
+        assert_eq!(link.text, "Installation");
+        assert_eq!(link.line, 0);
+        // col_start = 0 (nothing before), col_end = len("Installation") = 12
+        assert_eq!(link.col_start, 0);
+        assert_eq!(link.col_end, 12);
+    }
+
+    #[test]
+    fn link_info_external_url_preserved() {
+        let md = "[Rust](https://rust-lang.org)\n";
+        let blocks = render_markdown(md, &palette());
+        let link = match &blocks[0] {
+            DocBlock::Text { links, .. } => links.first().expect("link expected"),
+            _ => panic!("expected Text block"),
+        };
+        assert_eq!(link.url, "https://rust-lang.org");
+    }
+
+    #[test]
+    fn heading_anchor_collected() {
+        let md = "# Installation Guide\n\nsome text\n";
+        let blocks = render_markdown(md, &palette());
+        let anchor = match &blocks[0] {
+            DocBlock::Text { heading_anchors, .. } => {
+                heading_anchors.first().expect("anchor expected")
+            }
+            _ => panic!("expected Text block"),
+        };
+        assert_eq!(anchor.anchor, "installation-guide");
+        assert_eq!(anchor.line, 0);
+    }
+}
