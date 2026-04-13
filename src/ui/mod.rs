@@ -1,4 +1,5 @@
 pub mod config_popup;
+pub mod copy_menu;
 pub mod doc_search_bar;
 pub mod file_tree;
 pub mod goto_line_bar;
@@ -132,6 +133,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             &app.palette,
         );
     }
+
+    if let Some(state) = &app.copy_menu {
+        let state = state.clone();
+        copy_menu::draw(f, &state, &app.palette);
+    }
 }
 
 /// Returns `true` when the viewer panel should render as focused.
@@ -144,5 +150,6 @@ fn is_viewer_focused(focus: Focus) -> bool {
             | Focus::GotoLine
             | Focus::TabPicker
             | Focus::TableModal
+            | Focus::CopyMenu
     )
 }

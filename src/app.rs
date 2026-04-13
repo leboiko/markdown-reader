@@ -21,6 +21,18 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// Write `text` to the system clipboard via the OSC 52 terminal escape sequence.
+///
+/// The sequence is intercepted by the terminal emulator and does not require
+/// any external clipboard daemon. It uses the BEL terminator for maximum
+/// compatibility across terminals.
+fn copy_to_clipboard(text: &str) {
+    use base64::Engine as _;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+    let osc52 = format!("\x1b]52;c;{encoded}\x07");
+    let _ = std::io::Write::write_all(&mut std::io::stdout(), osc52.as_bytes());
+}
+
 /// Returns `true` when terminal position `(col, row)` falls inside `rect`.
 fn contains(rect: Rect, col: u16, row: u16) -> bool {
     col >= rect.x && col < rect.x + rect.width && row >= rect.y && row < rect.y + rect.height
@@ -127,6 +139,17 @@ pub enum Focus {
     TabPicker,
     /// Full-screen table modal (opened with Enter on a table block).
     TableModal,
+    /// Copy path/filename menu popup.
+    CopyMenu,
+}
+
+/// State for the copy-path popup opened with `y` in the tree.
+#[derive(Debug, Clone)]
+pub struct CopyMenuState {
+    /// 0 = full path, 1 = filename only.
+    pub cursor: usize,
+    pub path: PathBuf,
+    pub name: String,
 }
 
 /// State for the full-screen table modal opened with Enter on a table block.
@@ -224,6 +247,8 @@ pub struct App {
     pub show_line_numbers: bool,
     /// Which side of the screen the file-tree panel appears on.
     pub tree_position: TreePosition,
+    /// Copy-path popup state; `None` when the popup is closed.
+    pub copy_menu: Option<CopyMenuState>,
     /// Persisted sessions (loaded once on startup, written on file open and quit).
     pub app_state: AppState,
     /// Sender injected into components that need to produce actions.
@@ -287,6 +312,7 @@ impl App {
             palette,
             show_line_numbers: config.show_line_numbers,
             tree_position: config.tree_position,
+            copy_menu: None,
             app_state,
             action_tx: None,
             pending_chord: None,
@@ -732,6 +758,7 @@ impl App {
             Focus::TableModal => {
                 self.handle_table_modal_key(code);
             }
+            Focus::CopyMenu => self.handle_copy_menu_key(code),
         }
     }
 
@@ -899,6 +926,16 @@ impl App {
                 self.pre_config_focus = Focus::Tree;
                 self.config_popup = Some(ConfigPopupState::default());
                 self.focus = Focus::Config;
+            }
+            KeyCode::Char('y') => {
+                if let Some(item) = self.tree.selected_item() {
+                    self.copy_menu = Some(CopyMenuState {
+                        cursor: 0,
+                        path: item.path.clone(),
+                        name: item.name.clone(),
+                    });
+                    self.focus = Focus::CopyMenu;
+                }
             }
             _ => {}
         }
@@ -1123,6 +1160,38 @@ impl App {
             KeyCode::Char(c) => {
                 self.search.query.push(c);
                 self.perform_search();
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_copy_menu_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                if let Some(m) = self.copy_menu.as_mut() {
+                    m.cursor = m.cursor.saturating_sub(1);
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if let Some(m) = self.copy_menu.as_mut() {
+                    m.cursor = (m.cursor + 1).min(1);
+                }
+            }
+            KeyCode::Enter => {
+                if let Some(m) = &self.copy_menu {
+                    let text = if m.cursor == 0 {
+                        m.path.to_string_lossy().to_string()
+                    } else {
+                        m.name.clone()
+                    };
+                    copy_to_clipboard(&text);
+                }
+                self.copy_menu = None;
+                self.focus = Focus::Tree;
+            }
+            KeyCode::Esc | KeyCode::Char('y') => {
+                self.copy_menu = None;
+                self.focus = Focus::Tree;
             }
             _ => {}
         }
