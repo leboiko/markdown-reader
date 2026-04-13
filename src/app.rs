@@ -2,14 +2,15 @@ use crate::action::Action;
 use crate::config::{Config, TreePosition};
 use crate::event::EventHandler;
 use crate::fs::discovery::FileEntry;
+use crate::fs::git_status;
 use crate::markdown::DocBlock;
 use crate::mermaid::{MermaidCache, MermaidEntry};
 use crate::state::{AppState, TabSession};
 use crate::theme::{Palette, Theme};
 use crate::ui::file_tree::FileTreeState;
+use crate::ui::link_picker::{LinkPickerItem, LinkPickerState};
 use crate::ui::markdown_view::TableLayout;
 use crate::ui::search_bar::{SearchMode, SearchResult, SearchState};
-use crate::ui::link_picker::{LinkPickerItem, LinkPickerState};
 use crate::ui::tab_picker::TabPickerState;
 use crate::ui::tabs::{OpenOutcome, Tabs};
 use anyhow::Result;
@@ -179,11 +180,8 @@ pub struct ConfigPopupState {
 
 impl ConfigPopupState {
     /// Ordered sections: `(label, option count)`.
-    pub const SECTIONS: &'static [(&'static str, usize)] = &[
-        ("Theme", Theme::ALL.len()),
-        ("Markdown", 1),
-        ("Panels", 2),
-    ];
+    pub const SECTIONS: &'static [(&'static str, usize)] =
+        &[("Theme", Theme::ALL.len()), ("Markdown", 1), ("Panels", 2)];
 
     pub fn total_rows() -> usize {
         Self::SECTIONS.iter().map(|(_, n)| n).sum()
@@ -297,6 +295,7 @@ impl App {
         let entries = FileEntry::discover(&root);
         let mut tree = FileTreeState::default();
         tree.rebuild(entries);
+        tree.git_status = git_status::collect(&root);
 
         let picker = crate::mermaid::create_picker();
 
@@ -485,6 +484,19 @@ impl App {
         tokio::task::spawn_blocking(move || config.save());
     }
 
+    /// Re-run `git status` on a background thread and send the result back as
+    /// [`Action::GitStatusReady`]. No-ops when `action_tx` is not yet set.
+    fn refresh_git_status(&self) {
+        let Some(tx) = self.action_tx.clone() else {
+            return;
+        };
+        let root = self.root.clone();
+        tokio::task::spawn_blocking(move || {
+            let map = git_status::collect(&root);
+            let _ = tx.send(Action::GitStatusReady(map));
+        });
+    }
+
     // ── Event loop ───────────────────────────────────────────────────────────
 
     /// Run the main event loop until the user quits.
@@ -590,6 +602,7 @@ impl App {
                 // Each changed file is read on a background thread; the result
                 // arrives as Action::FileReloaded which also handles modal cleanup.
                 self.reload_changed_tabs(&changed);
+                self.refresh_git_status();
             }
             Action::Resize(_, _) => {}
             Action::Mouse(m) => self.handle_mouse(m),
@@ -615,6 +628,9 @@ impl App {
             }
             Action::FileReloaded { path, content } => {
                 self.apply_file_reloaded(path, content);
+            }
+            Action::GitStatusReady(map) => {
+                self.tree.git_status = map;
             }
         }
     }

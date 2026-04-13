@@ -105,7 +105,12 @@ impl DocBlock {
 /// whatever the cache knows at the time of the draw.
 pub fn update_mermaid_heights(blocks: &[DocBlock], cache: &crate::mermaid::MermaidCache) {
     for block in blocks {
-        if let DocBlock::Mermaid { id, source, cell_height } = block {
+        if let DocBlock::Mermaid {
+            id,
+            source,
+            cell_height,
+        } = block
+        {
             cell_height.set(cache.height(id, source));
         }
     }
@@ -184,7 +189,10 @@ mod tests {
 
     #[test]
     fn anchor_plain_words() {
-        assert_eq!(heading_to_anchor("Installation Guide"), "installation-guide");
+        assert_eq!(
+            heading_to_anchor("Installation Guide"),
+            "installation-guide"
+        );
     }
 
     #[test]
@@ -246,9 +254,9 @@ mod tests {
         let md = "# Installation Guide\n\nsome text\n";
         let blocks = render_markdown(md, &palette());
         let anchor = match &blocks[0] {
-            DocBlock::Text { heading_anchors, .. } => {
-                heading_anchors.first().expect("anchor expected")
-            }
+            DocBlock::Text {
+                heading_anchors, ..
+            } => heading_anchors.first().expect("anchor expected"),
             _ => panic!("expected Text block"),
         };
         assert_eq!(anchor.anchor, "installation-guide");

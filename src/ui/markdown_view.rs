@@ -80,7 +80,12 @@ impl MarkdownViewState {
         let mut abs_anchors: Vec<AbsoluteAnchor> = Vec::new();
         let mut block_offset = 0u32;
         for block in &blocks {
-            if let DocBlock::Text { links, heading_anchors, .. } = block {
+            if let DocBlock::Text {
+                links,
+                heading_anchors,
+                ..
+            } = block
+            {
                 for link in links {
                     abs_links.push(AbsoluteLink {
                         line: block_offset + link.line,
@@ -360,8 +365,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                             // filling the viewport for blocks taller than the
                             // viewport. Show a placeholder only while the block
                             // is entering/exiting the viewport edges.
-                            let max_renderable =
-                                block_height.min(inner.height as u32);
+                            let max_renderable = block_height.min(inner.height as u32);
                             let fully_visible = visible_lines >= max_renderable
                                 && draw_height as u32 >= max_renderable;
                             mermaid_draws.push(MermaidDraw {

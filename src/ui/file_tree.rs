@@ -1,13 +1,14 @@
 use crate::app::App;
 use crate::fs::discovery::FileEntry;
+use crate::fs::git_status::GitFileStatus;
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Modifier, Style},
-    text::Line,
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState},
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 /// Persistent UI state for the file-tree panel.
@@ -21,6 +22,12 @@ pub struct FileTreeState {
     pub list_state: ListState,
     /// Set of directory paths that are currently expanded.
     pub expanded: HashSet<PathBuf>,
+    /// Git working-tree status, keyed by absolute path.
+    ///
+    /// Populated on startup and refreshed on `FilesChanged`. Absent entries are
+    /// treated as clean. Directories are pre-populated with `Modified` when any
+    /// descendant has changes (see `fs::git_status::collect`).
+    pub git_status: HashMap<PathBuf, GitFileStatus>,
 }
 
 /// A single visible row in the flattened file-tree list.
@@ -175,24 +182,49 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
         .iter()
         .map(|item| {
             let indent = "  ".repeat(item.depth);
-            let prefix = if item.is_dir {
-                if app.tree.expanded.contains(&item.path) {
+            let (prefix, prefix_color) = if item.is_dir {
+                let marker = if app.tree.expanded.contains(&item.path) {
                     "▼ "
                 } else {
                     "▶ "
+                };
+                (marker, p.accent)
+            } else {
+                ("  ", p.foreground)
+            };
+
+            let name_color: Color = match app.tree.git_status.get(&item.path) {
+                Some(GitFileStatus::New) => p.git_new,
+                Some(GitFileStatus::Modified) => p.git_modified,
+                None => {
+                    if item.is_dir {
+                        p.accent
+                    } else {
+                        p.foreground
+                    }
                 }
-            } else {
-                "  "
             };
-            let style = if item.is_dir {
-                Style::default().fg(p.accent).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(p.foreground)
-            };
-            ListItem::new(Line::styled(
-                format!("{indent}{prefix}{}", item.name),
-                style,
-            ))
+
+            let prefix_style = Style::default()
+                .fg(prefix_color)
+                .add_modifier(if item.is_dir {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                });
+            let name_style = Style::default()
+                .fg(name_color)
+                .add_modifier(if item.is_dir {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                });
+
+            let line = Line::from(vec![
+                Span::styled(format!("{indent}{prefix}"), prefix_style),
+                Span::styled(item.name.clone(), name_style),
+            ]);
+            ListItem::new(line)
         })
         .collect();
 

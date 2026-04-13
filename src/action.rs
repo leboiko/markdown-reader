@@ -1,7 +1,9 @@
+use crate::fs::git_status::GitFileStatus;
 use crate::markdown::MermaidBlockId;
 use crate::mermaid::MermaidEntry;
 use crate::ui::search_bar::SearchResult;
 use crossterm::event::{KeyEvent, MouseEvent};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// All actions that can be dispatched through the application event loop.
@@ -107,4 +109,7 @@ pub enum Action {
         /// Fresh text content.
         content: String,
     },
+
+    /// Background git-status scan completed; replace the tree color map.
+    GitStatusReady(HashMap<PathBuf, GitFileStatus>),
 }

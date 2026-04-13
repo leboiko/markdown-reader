@@ -71,6 +71,8 @@ pub struct Palette {
     pub status_bar_bg: Color,
     pub status_bar_fg: Color,
     pub help_bg: Color,
+    pub git_new: Color,
+    pub git_modified: Color,
 }
 
 impl Palette {
@@ -110,6 +112,8 @@ impl Palette {
                 status_bar_bg: Color::Rgb(30, 30, 30),
                 status_bar_fg: Color::Gray,
                 help_bg: Color::Rgb(20, 20, 30),
+                git_new: Color::Rgb(80, 200, 120),
+                git_modified: Color::Rgb(220, 180, 60),
             },
             Theme::Dracula => Self {
                 // Official Dracula palette: https://draculatheme.com/contribute
@@ -145,6 +149,8 @@ impl Palette {
                 status_bar_bg: Color::Rgb(40, 42, 54),
                 status_bar_fg: Color::Rgb(98, 114, 164),
                 help_bg: Color::Rgb(40, 42, 54),
+                git_new: Color::Rgb(80, 250, 123),
+                git_modified: Color::Rgb(241, 250, 140),
             },
             Theme::SolarizedDark => Self {
                 // Ethan Schoonover's Solarized Dark: https://ethanschoonover.com/solarized/
@@ -180,6 +186,8 @@ impl Palette {
                 status_bar_bg: Color::Rgb(7, 54, 66),
                 status_bar_fg: Color::Rgb(88, 110, 117),
                 help_bg: Color::Rgb(7, 54, 66),
+                git_new: Color::Rgb(133, 153, 0),
+                git_modified: Color::Rgb(181, 137, 0),
             },
             Theme::Nord => Self {
                 // Arctic, north-bluish color palette: https://www.nordtheme.com/docs/colors-and-palettes
@@ -215,6 +223,8 @@ impl Palette {
                 status_bar_bg: Color::Rgb(59, 66, 82),
                 status_bar_fg: Color::Rgb(76, 86, 106),
                 help_bg: Color::Rgb(59, 66, 82),
+                git_new: Color::Rgb(163, 190, 140),
+                git_modified: Color::Rgb(235, 203, 139),
             },
             Theme::GruvboxDark => Self {
                 // Gruvbox Dark: https://github.com/morhetz/gruvbox
@@ -250,30 +260,32 @@ impl Palette {
                 status_bar_bg: Color::Rgb(50, 48, 47),
                 status_bar_fg: Color::Rgb(146, 131, 116),
                 help_bg: Color::Rgb(50, 48, 47),
+                git_new: Color::Rgb(184, 187, 38),
+                git_modified: Color::Rgb(250, 189, 47),
             },
             Theme::GithubLight => Self {
                 // GitHub Light: https://primer.style/primitives/colors
-                background: Color::Rgb(255, 255, 255),   // canvas.default   #ffffff
-                foreground: Color::Rgb(31, 35, 40),      // fg.default        #1f2328
-                dim: Color::Rgb(101, 109, 118),          // fg.muted          #656d76
-                border: Color::Rgb(208, 215, 222),       // border.default    #d0d7de
+                background: Color::Rgb(255, 255, 255), // canvas.default   #ffffff
+                foreground: Color::Rgb(31, 35, 40),    // fg.default        #1f2328
+                dim: Color::Rgb(101, 109, 118),        // fg.muted          #656d76
+                border: Color::Rgb(208, 215, 222),     // border.default    #d0d7de
                 border_focused: Color::Rgb(9, 105, 218), // accent.fg         #0969da
-                accent: Color::Rgb(9, 105, 218),         // accent.fg         #0969da
-                accent_alt: Color::Rgb(154, 103, 0),     // attention.fg      #9a6700
+                accent: Color::Rgb(9, 105, 218),       // accent.fg         #0969da
+                accent_alt: Color::Rgb(154, 103, 0),   // attention.fg      #9a6700
                 selection_bg: Color::Rgb(221, 244, 255), // accent.subtle     #ddf4ff
-                selection_fg: Color::Rgb(9, 105, 218),   // accent.fg on subtle bg
+                selection_fg: Color::Rgb(9, 105, 218), // accent.fg on subtle bg
                 title: Color::Rgb(31, 35, 40),
-                h1: Color::Rgb(9, 105, 218),             // accent.fg         #0969da
-                h2: Color::Rgb(154, 103, 0),             // attention.fg      #9a6700
-                h3: Color::Rgb(26, 127, 55),             // success.fg        #1a7f37
+                h1: Color::Rgb(9, 105, 218), // accent.fg         #0969da
+                h2: Color::Rgb(154, 103, 0), // attention.fg      #9a6700
+                h3: Color::Rgb(26, 127, 55), // success.fg        #1a7f37
                 heading_other: Color::Rgb(31, 35, 40),
-                inline_code: Color::Rgb(207, 34, 46),    // danger.fg         #cf222e
+                inline_code: Color::Rgb(207, 34, 46), // danger.fg         #cf222e
                 code_fg: Color::Rgb(31, 35, 40),
-                code_bg: Color::Rgb(246, 248, 250),      // canvas.subtle     #f6f8fa
-                code_border: Color::Rgb(208, 215, 222),  // border.default    #d0d7de
-                link: Color::Rgb(9, 105, 218),           // accent.fg         #0969da
-                list_marker: Color::Rgb(154, 103, 0),    // attention.fg      #9a6700
-                task_marker: Color::Rgb(26, 127, 55),    // success.fg        #1a7f37
+                code_bg: Color::Rgb(246, 248, 250), // canvas.subtle     #f6f8fa
+                code_border: Color::Rgb(208, 215, 222), // border.default    #d0d7de
+                link: Color::Rgb(9, 105, 218),      // accent.fg         #0969da
+                list_marker: Color::Rgb(154, 103, 0), // attention.fg      #9a6700
+                task_marker: Color::Rgb(26, 127, 55), // success.fg        #1a7f37
                 block_quote_fg: Color::Rgb(101, 109, 118),
                 block_quote_border: Color::Rgb(208, 215, 222),
                 table_header: Color::Rgb(9, 105, 218),
@@ -284,7 +296,9 @@ impl Palette {
                 gutter: Color::Rgb(101, 109, 118),
                 status_bar_bg: Color::Rgb(246, 248, 250), // canvas.subtle     #f6f8fa
                 status_bar_fg: Color::Rgb(101, 109, 118),
-                help_bg: Color::Rgb(246, 248, 250),       // canvas.subtle     #f6f8fa
+                help_bg: Color::Rgb(246, 248, 250), // canvas.subtle     #f6f8fa
+                git_new: Color::Rgb(26, 127, 55),   // success.fg        #1a7f37
+                git_modified: Color::Rgb(154, 103, 0), // attention.fg      #9a6700
             },
         }
     }

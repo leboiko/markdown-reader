@@ -121,7 +121,9 @@ impl MermaidCache {
         if has_limited_rendering(source) {
             self.entries.insert(
                 id,
-                MermaidEntry::SourceOnly("diagram type has limited rendering, showing source".into()),
+                MermaidEntry::SourceOnly(
+                    "diagram type has limited rendering, showing source".into(),
+                ),
             );
             return false;
         }
