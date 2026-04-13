@@ -60,11 +60,16 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
         markdown_view::draw(f, app, viewer_area, is_viewer_focused(app.focus));
     } else {
+        let (first_pct, second_pct) = match app.tree_position {
+            TreePosition::Left => (app.tree_width_pct, 100 - app.tree_width_pct),
+            TreePosition::Right => (100 - app.tree_width_pct, app.tree_width_pct),
+        };
+
         let main_chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Percentage(app.tree_width_pct),
-                Constraint::Percentage(100 - app.tree_width_pct),
+                Constraint::Percentage(first_pct),
+                Constraint::Percentage(second_pct),
             ])
             .split(outer_chunks[0]);
 
