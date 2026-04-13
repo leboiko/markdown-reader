@@ -9,7 +9,7 @@ use crate::state::{AppState, TabSession};
 use crate::theme::{Palette, Theme};
 use crate::ui::file_tree::FileTreeState;
 use crate::ui::link_picker::{LinkPickerItem, LinkPickerState};
-use crate::ui::markdown_view::TableLayout;
+use crate::ui::markdown_view::{TableLayout, visual_row_to_logical_line};
 use crate::ui::search_bar::{SearchMode, SearchResult, SearchState};
 use crate::ui::tab_picker::TabPickerState;
 use crate::ui::tabs::{OpenOutcome, Tabs};
@@ -759,7 +759,7 @@ impl App {
         }
 
         let scroll_offset = tab.view.scroll_offset;
-        let clicked_line = scroll_offset + (row - inner_y) as u32;
+        let visual_row = (row - inner_y) as u32;
 
         // Subtract the gutter width when line numbers are shown. The formula
         // matches render_text_with_gutter so click positions align with text.
@@ -771,6 +771,19 @@ impl App {
         } else {
             col - inner_x
         };
+
+        // `layout_width` is the text content width (excluding the gutter).
+        // `Paragraph::wrap` wraps at this width, so logical lines that are
+        // wider than `layout_width` occupy multiple visual rows. We must
+        // account for this wrapping to convert the clicked visual row back to
+        // the correct logical document line.
+        let content_width = tab.view.layout_width;
+        let clicked_line = visual_row_to_logical_line(
+            &tab.view.rendered,
+            scroll_offset,
+            visual_row,
+            content_width,
+        );
 
         let anchor = tab
             .view
@@ -822,17 +835,12 @@ impl App {
             if !seen.insert(anchor.to_string()) {
                 continue;
             }
-            let target_line = tab
-                .view
-                .heading_anchors
-                .iter()
-                .find(|a| a.anchor == anchor)
-                .map(|a| a.line);
-            if let Some(target_line) = target_line {
+            // Only include links that resolve to a known heading anchor.
+            let has_target = tab.view.heading_anchors.iter().any(|a| a.anchor == anchor);
+            if has_target {
                 items.push(LinkPickerItem {
                     text: link.text.clone(),
                     anchor: anchor.to_string(),
-                    target_line,
                 });
             }
         }

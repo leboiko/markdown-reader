@@ -262,4 +262,176 @@ mod tests {
         assert_eq!(anchor.anchor, "installation-guide");
         assert_eq!(anchor.line, 0);
     }
+
+    /// Compute absolute anchor positions using the same logic as
+    /// `MarkdownViewState::recompute_positions`.
+    fn absolute_anchor_positions(blocks: &[DocBlock]) -> Vec<(String, u32)> {
+        let mut result = Vec::new();
+        let mut offset = 0u32;
+        for block in blocks {
+            if let DocBlock::Text {
+                heading_anchors, ..
+            } = block
+            {
+                for ha in heading_anchors {
+                    result.push((ha.anchor.clone(), offset + ha.line));
+                }
+            }
+            offset += block.height();
+        }
+        result
+    }
+
+    /// Compute the ACTUAL display line of each heading by scanning every
+    /// rendered line for the heading prefix characters used by the renderer.
+    fn actual_heading_lines(blocks: &[DocBlock]) -> Vec<(String, u32)> {
+        let mut result = Vec::new();
+        let mut abs_line = 0u32;
+        for block in blocks {
+            if let DocBlock::Text { text, .. } = block {
+                for line in &text.lines {
+                    let content: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+                    // The renderer prefixes headings with "█ ", "▌ ", or "▎ ".
+                    for prefix in &["█ ", "▌ ", "▎ "] {
+                        if content.contains(prefix) {
+                            let text_after_prefix = content
+                                .split_once(prefix)
+                                .map(|(_, t)| t)
+                                .unwrap_or("")
+                                .trim();
+                            if !text_after_prefix.is_empty() {
+                                let anchor = heading_to_anchor(text_after_prefix);
+                                result.push((anchor, abs_line));
+                            }
+                            break;
+                        }
+                    }
+                    abs_line += 1;
+                }
+            } else {
+                abs_line += block.height();
+            }
+        }
+        result
+    }
+
+    /// Verify that `visual_row_to_logical_line` correctly resolves a visual row
+    /// that follows a wrapping paragraph to the expected logical line, rather
+    /// than the naive `scroll_offset + visual_row` computation.
+    ///
+    /// Without the fix the old formula (`clicked_line = scroll_offset + row`)
+    /// would return a line number shifted by the number of visual rows consumed
+    /// by line-wrapping above the clicked position, causing the wrong link to
+    /// be matched and navigation to go to the wrong heading.
+    #[test]
+    fn visual_row_wrapping_maps_to_correct_logical_line() {
+        use crate::ui::markdown_view::visual_row_to_logical_line;
+
+        // Build a document where the first paragraph is longer than
+        // content_width so it wraps. The TOC links appear after the paragraph.
+        // We use an explicit repeat so the test is independent of terminal width.
+        let long_para: String = "word ".repeat(30); // 150 chars → wraps at any realistic width
+        let md = format!(
+            "# Title\n\n{long_para}\n\n- [Section A](#section-a)\n- [Section B](#section-b)\n\n## Section A\n\nText.\n\n## Section B\n\nMore.\n",
+        );
+
+        let blocks = render_markdown(&md, &palette());
+
+        // With a content_width of 80 the long paragraph wraps to
+        // ceil(150/80) = 2 visual rows.
+        let content_width: u16 = 80;
+
+        // Logical layout of the first (only) text block:
+        //   line 0: "█ Title"
+        //   line 1: ""  (blank after heading)
+        //   line 2: long paragraph  ← wraps to 2 visual rows at width 80
+        //   line 3: ""  (blank after paragraph)
+        //   line 4: "• Section A"   link at logical line 4
+        //   line 5: "• Section B"   link at logical line 5
+        //   line 6: ""  (blank after list)
+        //   line 7: "▌ Section A"
+        //   ...
+
+        // Visual rows (scroll_offset = 0):
+        //   row 0: "█ Title"
+        //   row 1: ""
+        //   row 2: long paragraph (part 1)
+        //   row 3: long paragraph (part 2)  ← WRAP ROW
+        //   row 4: ""
+        //   row 5: "• Section A"   ← logical line 4, visual row 5
+        //   row 6: "• Section B"   ← logical line 5, visual row 6
+
+        // Naive formula: clicked visual row 5 → clicked_line = 0 + 5 = 5
+        //   → that would match "Section B" link, not "Section A"!
+        // Correct formula: visual row 5 → logical line 4 → "Section A"
+
+        let logical_line_for_section_a = visual_row_to_logical_line(&blocks, 0, 5, content_width);
+        assert_eq!(
+            logical_line_for_section_a, 4,
+            "visual row 5 should map to logical line 4 (Section A), \
+             not naive row 5 (Section B); naive formula is off by 1 wrap row"
+        );
+
+        let logical_line_for_section_b = visual_row_to_logical_line(&blocks, 0, 6, content_width);
+        assert_eq!(
+            logical_line_for_section_b, 5,
+            "visual row 6 should map to logical line 5 (Section B)"
+        );
+    }
+
+    /// Heading anchors must point to the display line that actually shows the
+    /// heading text, so that scrolling to `anchor.line` brings the heading to
+    /// the top of the viewport.
+    ///
+    /// This test renders a document with headings before and after a mermaid
+    /// diagram, a table, and a fenced code block, then asserts that every
+    /// anchor computed by `recompute_positions` matches the actual display line
+    /// where the heading text appears.
+    #[test]
+    fn anchor_positions_match_actual_heading_lines_after_special_blocks() {
+        let md = concat!(
+            "# Title\n\n",
+            "- [Section A](#section-a)\n",
+            "- [Section B](#section-b)\n",
+            "- [Section C](#section-c)\n",
+            "- [Section D](#section-d)\n\n",
+            "## Section A\n\n",
+            "Some text.\n\n",
+            "```mermaid\n",
+            "graph LR\n",
+            "    A-->B\n",
+            "```\n\n",
+            "## Section B\n\n",
+            "More text.\n\n",
+            "| Col1 | Col2 |\n",
+            "|------|------|\n",
+            "| a    | b    |\n\n",
+            "## Section C\n\n",
+            "Some code:\n\n",
+            "```rust\n",
+            "let x = 1;\n",
+            "```\n\n",
+            "## Section D\n\n",
+            "Final text.\n",
+        );
+
+        let blocks = render_markdown(md, &palette());
+
+        let recorded = absolute_anchor_positions(&blocks);
+        let actual = actual_heading_lines(&blocks);
+
+        // Every anchor we recorded must have a corresponding entry in `actual`
+        // at the same display line.
+        for (anchor, recorded_line) in &recorded {
+            let found = actual
+                .iter()
+                .find(|(a, _)| a == anchor)
+                .unwrap_or_else(|| panic!("no heading found for anchor '{anchor}'"));
+            assert_eq!(
+                *recorded_line, found.1,
+                "anchor '{anchor}': recorded line {recorded_line} != actual heading line {}",
+                found.1,
+            );
+        }
+    }
 }

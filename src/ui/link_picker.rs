@@ -7,13 +7,14 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
-/// One entry in the link picker: the visible link text, the raw `#anchor`
-/// string (without the leading `#`), and the absolute target display line.
+/// One entry in the link picker: the visible link text and the raw `#anchor`
+/// string (without the leading `#`). The target line is resolved live from
+/// `heading_anchors` at navigation time so it is always current even if block
+/// heights have changed since the picker was opened.
 #[derive(Debug, Clone)]
 pub struct LinkPickerItem {
     pub text: String,
     pub anchor: String,
-    pub target_line: u32,
 }
 
 /// State for the link-picker overlay (opened with `f` in the viewer).
@@ -135,17 +136,31 @@ pub fn handle_key(app: &mut App, code: crossterm::event::KeyCode) -> bool {
             true
         }
         crossterm::event::KeyCode::Enter => {
-            let target = app
+            // Read the anchor name from the picker item, then close the picker.
+            // We look up `target_line` live from `heading_anchors` rather than
+            // using the cached value in `LinkPickerItem`, because mermaid block
+            // heights may have changed since the picker was opened (async render
+            // completes between draws), making any pre-cached line stale.
+            let anchor = app
                 .link_picker
                 .as_ref()
                 .and_then(|p| p.items.get(p.cursor))
-                .map(|item| item.target_line);
+                .map(|item| item.anchor.clone());
             app.link_picker = None;
-            if let Some(line) = target {
-                let vh = app.tabs.view_height;
-                if let Some(tab) = app.tabs.active_tab_mut() {
-                    let max = tab.view.total_lines.saturating_sub(vh / 2);
-                    tab.view.scroll_offset = line.saturating_sub(2).min(max);
+            if let Some(anchor) = anchor {
+                let target_line = app.tabs.active_tab().and_then(|t| {
+                    t.view
+                        .heading_anchors
+                        .iter()
+                        .find(|a| a.anchor == anchor)
+                        .map(|a| a.line)
+                });
+                if let Some(line) = target_line {
+                    let vh = app.tabs.view_height;
+                    if let Some(tab) = app.tabs.active_tab_mut() {
+                        let max = tab.view.total_lines.saturating_sub(vh / 2);
+                        tab.view.scroll_offset = line.saturating_sub(2).min(max);
+                    }
                 }
             }
             false
