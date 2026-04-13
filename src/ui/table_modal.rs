@@ -116,7 +116,14 @@ fn render_modal_table(state: &TableModalState, p: &Palette) -> Text<'static> {
 
     let mut lines: Vec<Line<'static>> = Vec::new();
 
-    lines.push(modal_border_line('┌', '─', '┬', '┐', col_widths, border_style));
+    lines.push(modal_border_line(
+        '┌',
+        '─',
+        '┬',
+        '┐',
+        col_widths,
+        border_style,
+    ));
     emit_wrapped_row(
         &state.headers,
         col_widths,
@@ -126,7 +133,14 @@ fn render_modal_table(state: &TableModalState, p: &Palette) -> Text<'static> {
         num_cols,
         &mut lines,
     );
-    lines.push(modal_border_line('├', '─', '┼', '┤', col_widths, border_style));
+    lines.push(modal_border_line(
+        '├',
+        '─',
+        '┼',
+        '┤',
+        col_widths,
+        border_style,
+    ));
 
     for row in &state.rows {
         emit_wrapped_row(
@@ -140,7 +154,14 @@ fn render_modal_table(state: &TableModalState, p: &Palette) -> Text<'static> {
         );
     }
 
-    lines.push(modal_border_line('└', '─', '┴', '┘', col_widths, border_style));
+    lines.push(modal_border_line(
+        '└',
+        '─',
+        '┴',
+        '┘',
+        col_widths,
+        border_style,
+    ));
     Text::from(lines)
 }
 
@@ -512,7 +533,10 @@ mod tests {
     fn wrap_spans_long_wraps_on_word_boundary() {
         let cell = plain("one two three four five");
         let result = wrap_cell_spans(&cell, 10);
-        assert!(result.len() > 1, "should produce multiple lines: {result:?}");
+        assert!(
+            result.len() > 1,
+            "should produce multiple lines: {result:?}"
+        );
         for line in &result {
             let w: usize = line
                 .iter()
@@ -536,20 +560,26 @@ mod tests {
         assert!(result.len() > 1, "should wrap: {result:?}");
         let first_line = &result[0];
         let has_bold = first_line.iter().any(|s| s.style == bold);
-        assert!(has_bold, "first line should contain bold span: {first_line:?}");
+        assert!(
+            has_bold,
+            "first line should contain bold span: {first_line:?}"
+        );
     }
 
     #[test]
     fn wrap_spans_bold_then_plain_splits_in_plain() {
         let bold = Style::default().fg(Color::Red);
-        let cell: CellSpans = vec![
-            styled_span("Bold", bold),
-            Span::raw(" plain-text-here"),
-        ];
+        let cell: CellSpans = vec![styled_span("Bold", bold), Span::raw(" plain-text-here")];
         let result = wrap_cell_spans(&cell, 8);
-        assert!(result.len() > 1, "should produce multiple lines: {result:?}");
+        assert!(
+            result.len() > 1,
+            "should produce multiple lines: {result:?}"
+        );
         let first_text = spans_text(&result[0]);
-        assert!(first_text.contains("Bold"), "first line should have bold: {first_text}");
+        assert!(
+            first_text.contains("Bold"),
+            "first line should have bold: {first_text}"
+        );
     }
 
     #[test]
@@ -564,7 +594,11 @@ mod tests {
                 .sum();
             assert!(w <= 4, "hard-split chunk too wide: {w}");
         }
-        let all_text: String = result.iter().flat_map(|l| l.iter()).map(|s| s.content.as_ref()).collect();
+        let all_text: String = result
+            .iter()
+            .flat_map(|l| l.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
         assert_eq!(all_text, "abcdefghij");
     }
 

@@ -8,7 +8,10 @@ use ratatui::{
 };
 use std::cell::Cell;
 
-use crate::markdown::{CellSpans, DocBlock, MermaidBlockId, TableBlock, TableBlockId, cell_display_width, cell_to_string};
+use crate::markdown::{
+    CellSpans, DocBlock, MermaidBlockId, TableBlock, TableBlockId, cell_display_width,
+    cell_to_string,
+};
 use crate::mermaid::DEFAULT_MERMAID_HEIGHT;
 use crate::theme::Palette;
 

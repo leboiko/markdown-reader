@@ -97,7 +97,6 @@ impl MarkdownViewState {
     pub fn scroll_to_bottom(&mut self, view_height: u32) {
         self.scroll_offset = self.total_lines.saturating_sub(view_height / 2);
     }
-
 }
 
 /// Render the markdown preview panel into `area`.
@@ -173,7 +172,9 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                 if let DocBlock::Table(table) = doc_block {
                     let (text, height, _was_truncated) = layout_table(table, effective_width, &p);
                     table.rendered_height = height;
-                    tab.view.table_layouts.insert(table.id, TableLayout { text });
+                    tab.view
+                        .table_layouts
+                        .insert(table.id, TableLayout { text });
                 }
             }
 
@@ -188,8 +189,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                     && let std::collections::hash_map::Entry::Vacant(e) =
                         tab.view.table_layouts.entry(table.id)
                 {
-                    let (text, height, _was_truncated) =
-                        layout_table(table, effective_width, &p);
+                    let (text, height, _was_truncated) = layout_table(table, effective_width, &p);
                     table.rendered_height = height;
                     e.insert(TableLayout { text });
                 }
@@ -360,17 +360,16 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
         let in_tmux = std::env::var("TMUX").is_ok();
         let tx = tx.clone();
         for (id, source) in mermaid_to_queue {
-            app.mermaid_cache.ensure_queued(
-                id,
-                &source,
-                app.picker.as_ref(),
-                &tx,
-                in_tmux,
-            );
+            app.mermaid_cache
+                .ensure_queued(id, &source, app.picker.as_ref(), &tx, in_tmux);
         }
     }
 
-    let total_doc_lines = app.tabs.active_tab().map(|t| t.view.total_lines).unwrap_or(0);
+    let total_doc_lines = app
+        .tabs
+        .active_tab()
+        .map(|t| t.view.total_lines)
+        .unwrap_or(0);
 
     // Render text blocks.
     for td in text_draws {

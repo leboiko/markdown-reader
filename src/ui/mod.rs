@@ -1,6 +1,4 @@
 pub mod config_popup;
-pub mod table_modal;
-pub mod table_render;
 pub mod doc_search_bar;
 pub mod file_tree;
 pub mod goto_line_bar;
@@ -10,6 +8,8 @@ pub mod search_bar;
 pub mod status_bar;
 pub mod tab_bar;
 pub mod tab_picker;
+pub mod table_modal;
+pub mod table_render;
 pub mod tabs;
 
 use crate::app::{App, Focus};

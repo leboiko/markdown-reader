@@ -15,15 +15,15 @@ use crate::theme::Palette;
 /// The `was_truncated` flag is true if any column's allotted width is less
 /// than its natural width. When true, a dim hint line is appended below the
 /// bottom border, and the height includes that line.
-pub fn layout_table(table: &TableBlock, inner_width: u16, palette: &Palette) -> (Text<'static>, u32, bool) {
-    let num_cols = table.headers.len().max(
-        table
-            .rows
-            .iter()
-            .map(|r| r.len())
-            .max()
-            .unwrap_or(0),
-    );
+pub fn layout_table(
+    table: &TableBlock,
+    inner_width: u16,
+    palette: &Palette,
+) -> (Text<'static>, u32, bool) {
+    let num_cols = table
+        .headers
+        .len()
+        .max(table.rows.iter().map(|r| r.len()).max().unwrap_or(0));
 
     if num_cols == 0 {
         return (Text::from(""), 0, false);
@@ -225,7 +225,11 @@ fn span_cell_line(
 /// would exceed the budget, the current span is cut at the last char boundary
 /// that fits within `max_width - 1` columns, and a `…` span with a dim style is
 /// appended. The truncated span retains its original style up to the cut point.
-pub fn truncate_spans(spans: &[Span<'static>], max_width: usize, palette: &Palette) -> Vec<Span<'static>> {
+pub fn truncate_spans(
+    spans: &[Span<'static>],
+    max_width: usize,
+    palette: &Palette,
+) -> Vec<Span<'static>> {
     if max_width == 0 {
         return Vec::new();
     }
@@ -271,7 +275,12 @@ pub fn truncate_spans(spans: &[Span<'static>], max_width: usize, palette: &Palet
 
     // If all spans fit without hitting the budget (used == cell_w <= max_width),
     // no truncation occurred — return as-is without the ellipsis.
-    if used == spans.iter().map(|s| UnicodeWidthStr::width(s.content.as_ref())).sum::<usize>() {
+    if used
+        == spans
+            .iter()
+            .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+            .sum::<usize>()
+    {
         return out;
     }
 
@@ -356,7 +365,10 @@ mod tests {
         // Last line should be the hint
         let last = text.lines.last().unwrap();
         let hint: String = last.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(hint.contains('\u{23ce}'), "Hint line must contain the enter symbol");
+        assert!(
+            hint.contains('\u{23ce}'),
+            "Hint line must contain the enter symbol"
+        );
     }
 
     #[test]
@@ -366,7 +378,11 @@ mod tests {
         let (text, height, was_truncated) = layout_table(&table, 5, &palette());
         assert!(was_truncated);
         assert_eq!(height, 1, "Too-narrow returns exactly 1 line");
-        let line: String = text.lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        let line: String = text.lines[0]
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
         assert!(line.contains("too narrow"), "Placeholder text missing");
     }
 
@@ -382,7 +398,10 @@ mod tests {
         assert!(!was_truncated, "Wide chars fit in 20 cols");
         // Render with a very narrow terminal to trigger truncation.
         let (text2, _h2, was_truncated2) = layout_table(&table, 8, &palette());
-        assert!(was_truncated2, "Wide chars must trigger truncation in 8 cols");
+        assert!(
+            was_truncated2,
+            "Wide chars must trigger truncation in 8 cols"
+        );
         // Confirm the ellipsis is present in a data row.
         let row_line: String = text2.lines[3]
             .spans
@@ -398,11 +417,7 @@ mod tests {
 
     #[test]
     fn alignment_respected() {
-        let table = make_table(
-            &["Num"],
-            &[&["42"]],
-            &[Alignment::Right],
-        );
+        let table = make_table(&["Num"], &[&["42"]], &[Alignment::Right]);
         // Natural width of "42" is 2; render wide enough.
         let (text, _h, _trunc) = layout_table(&table, 20, &palette());
         // Data row is text.lines[3] (top, header, sep, data, bottom).

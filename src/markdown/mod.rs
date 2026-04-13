@@ -76,7 +76,12 @@ impl DocBlock {
 /// whatever the cache knows at the time of the draw.
 pub fn update_mermaid_heights(blocks: &[DocBlock], cache: &crate::mermaid::MermaidCache) {
     for block in blocks {
-        if let DocBlock::Mermaid { id, source, cell_height } = block {
+        if let DocBlock::Mermaid {
+            id,
+            source,
+            cell_height,
+        } = block
+        {
             cell_height.set(cache.height(id, source));
         }
     }
@@ -94,4 +99,3 @@ pub fn cell_display_width(spans: &[Span<'static>]) -> usize {
 pub fn cell_to_string(spans: &[Span<'static>]) -> String {
     spans.iter().map(|s| s.content.as_ref()).collect()
 }
-

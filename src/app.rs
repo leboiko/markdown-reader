@@ -18,6 +18,8 @@ use ratatui::prelude::*;
 use ratatui_image::picker::Picker;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Returns `true` when terminal position `(col, row)` falls inside `rect`.
 fn contains(rect: Rect, col: u16, row: u16) -> bool {
@@ -47,8 +49,7 @@ pub fn collect_match_lines(
         match block {
             DocBlock::Text(text) => {
                 for (i, line) in text.lines.iter().enumerate() {
-                    let line_text: String =
-                        line.spans.iter().map(|s| s.content.as_ref()).collect();
+                    let line_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
                     if line_text.to_lowercase().contains(query_lower) {
                         matches.push(offset + i as u32);
                     }
@@ -243,6 +244,12 @@ pub struct App {
     pub picker: Option<Picker>,
     /// State for the full-screen table modal; `None` when the modal is closed.
     pub table_modal: Option<TableModalState>,
+    /// Monotonically increasing counter incremented on every new content search.
+    ///
+    /// Background tasks capture the counter at spawn time and discard their
+    /// results silently when it has advanced, preventing stale results from an
+    /// older query from overwriting results from a newer one.
+    search_generation: Arc<AtomicU64>,
 }
 
 impl App {
@@ -288,6 +295,7 @@ impl App {
             mermaid_cache: MermaidCache::new(),
             picker,
             table_modal: None,
+            search_generation: Arc::new(AtomicU64::new(0)),
         };
 
         app.restore_session();
@@ -553,6 +561,16 @@ impl App {
             Action::Mouse(m) => self.handle_mouse(m),
             Action::MermaidReady(id, entry) => {
                 self.mermaid_cache.insert(id, *entry);
+            }
+            Action::SearchResults {
+                generation,
+                results,
+            } => {
+                // Discard if a newer search has already been started.
+                if self.search_generation.load(Ordering::Relaxed) == generation {
+                    self.search.results = results;
+                    self.search.selected_index = 0;
+                }
             }
         }
     }
@@ -1182,6 +1200,8 @@ impl App {
     // ── Search ───────────────────────────────────────────────────────────────
 
     fn perform_search(&mut self) {
+        // Clear stale results immediately so the UI never shows results from a
+        // superseded query while the new background task is running.
         self.search.results.clear();
         self.search.selected_index = 0;
 
@@ -1193,6 +1213,8 @@ impl App {
 
         match self.search.mode {
             SearchMode::FileName => {
+                // Filename search is O(n) over in-memory data — fast enough to
+                // run synchronously on the main thread with no perceptible delay.
                 for item in &self.tree.flat_items {
                     if !item.is_dir && item.name.to_lowercase().contains(&query_lower) {
                         self.search.results.push(SearchResult {
@@ -1205,9 +1227,30 @@ impl App {
                 }
             }
             SearchMode::Content => {
+                // Content search reads every file on disk — offload to a blocking
+                // thread so the event loop remains responsive during the scan.
+                let Some(tx) = self.action_tx.clone() else {
+                    return;
+                };
+
+                // Advance the generation counter. The spawned task captures this
+                // generation; if it has been superseded by the time it finishes
+                // it will discard its results without sending to the channel.
+                let generation = self.search_generation.fetch_add(1, Ordering::Relaxed) + 1;
+                let gen_arc = Arc::clone(&self.search_generation);
+
                 let paths = FileEntry::flat_paths(&self.tree.entries);
-                for path in paths {
-                    if let Ok(content) = std::fs::read_to_string(&path) {
+
+                tokio::task::spawn_blocking(move || {
+                    let mut results = Vec::new();
+                    for path in paths {
+                        // Bail early if a newer search has already started.
+                        if gen_arc.load(Ordering::Relaxed) != generation {
+                            return;
+                        }
+                        let Ok(content) = std::fs::read_to_string(&path) else {
+                            continue;
+                        };
                         for (i, line) in content.lines().enumerate() {
                             if line.to_lowercase().contains(&query_lower) {
                                 let name = path
@@ -1215,7 +1258,7 @@ impl App {
                                     .unwrap_or_default()
                                     .to_string_lossy()
                                     .to_string();
-                                self.search.results.push(SearchResult {
+                                results.push(SearchResult {
                                     path: path.clone(),
                                     name,
                                     line_number: Some(i + 1),
@@ -1225,7 +1268,15 @@ impl App {
                             }
                         }
                     }
-                }
+                    // Final check before sending — another keystroke may have
+                    // arrived while we were iterating the last file.
+                    if gen_arc.load(Ordering::Relaxed) == generation {
+                        let _ = tx.send(Action::SearchResults {
+                            generation,
+                            results,
+                        });
+                    }
+                });
             }
         }
     }
@@ -1350,9 +1401,7 @@ impl App {
             let block_end = block_start + doc_block.height();
             let intersects = block_end > viewport_start && block_start < viewport_end;
 
-            if intersects
-                && let crate::markdown::DocBlock::Table(table) = doc_block
-            {
+            if intersects && let crate::markdown::DocBlock::Table(table) = doc_block {
                 let modal = TableModalState {
                     tab_id: tab.id,
                     h_scroll: 0,
@@ -1456,17 +1505,16 @@ impl App {
             _ => {}
         }
     }
-
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::Cell;
     use crate::markdown::{CellSpans, MermaidBlockId, TableBlock, TableBlockId};
     use crate::mermaid::{DEFAULT_MERMAID_HEIGHT, MermaidEntry};
     use crate::ui::markdown_view::TableLayout;
     use ratatui::text::{Line, Span, Text};
+    use std::cell::Cell;
 
     fn make_text_block(lines: &[&str]) -> DocBlock {
         let text_lines: Vec<Line<'static>> = lines
@@ -1570,11 +1618,7 @@ mod tests {
 
     #[test]
     fn collect_matches_table_fallback_no_layout() {
-        let blocks = vec![make_table_block(
-            2,
-            &["Col"],
-            &[&["findme"], &["nothing"]],
-        )];
+        let blocks = vec![make_table_block(2, &["Col"], &[&["findme"], &["nothing"]])];
         let layouts = HashMap::new();
         let cache = empty_mermaid_cache();
         let result = collect_match_lines(&blocks, &layouts, &cache, "findme");
@@ -1587,11 +1631,14 @@ mod tests {
     fn collect_matches_mermaid_source_only() {
         let source = "graph LR\n    A --> needle\n    B --> C";
         let mermaid_id = MermaidBlockId(99);
-        let blocks = vec![make_text_block(&["before"]), DocBlock::Mermaid {
-            id: mermaid_id,
-            source: source.to_string(),
-            cell_height: Cell::new(DEFAULT_MERMAID_HEIGHT),
-        }];
+        let blocks = vec![
+            make_text_block(&["before"]),
+            DocBlock::Mermaid {
+                id: mermaid_id,
+                source: source.to_string(),
+                cell_height: Cell::new(DEFAULT_MERMAID_HEIGHT),
+            },
+        ];
         let cache = source_only_cache(99);
         let layouts = HashMap::new();
         let result = collect_match_lines(&blocks, &layouts, &cache, "needle");
@@ -1638,14 +1685,7 @@ mod tests {
         let mut layouts = HashMap::new();
         layouts.insert(
             TableBlockId(5),
-            make_cached_layout(&[
-                "┌─┐",
-                "│H│",
-                "├─┤",
-                "│row0│",
-                "│row1 target│",
-                "└─┘",
-            ]),
+            make_cached_layout(&["┌─┐", "│H│", "├─┤", "│row0│", "│row1 target│", "└─┘"]),
         );
         let cache = empty_mermaid_cache();
         let result = collect_match_lines(&blocks, &layouts, &cache, "target");

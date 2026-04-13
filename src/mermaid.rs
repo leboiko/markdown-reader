@@ -327,7 +327,10 @@ mod tests {
     fn cache_height_no_entry_returns_default() {
         let cache = MermaidCache::new();
         let id = MermaidBlockId(1);
-        assert_eq!(cache.height(&id, "graph LR\n    A --> B"), DEFAULT_MERMAID_HEIGHT);
+        assert_eq!(
+            cache.height(&id, "graph LR\n    A --> B"),
+            DEFAULT_MERMAID_HEIGHT
+        );
     }
 
     #[test]
@@ -345,8 +348,10 @@ mod tests {
         cache.insert(
             id,
             MermaidEntry::Ready {
-                protocol: Box::new(ratatui_image::picker::Picker::halfblocks()
-                    .new_resize_protocol(image::DynamicImage::new_rgba8(10, 10))),
+                protocol: Box::new(
+                    ratatui_image::picker::Picker::halfblocks()
+                        .new_resize_protocol(image::DynamicImage::new_rgba8(10, 10)),
+                ),
                 cell_height: 15,
             },
         );

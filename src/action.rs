@@ -1,5 +1,6 @@
 use crate::markdown::MermaidBlockId;
 use crate::mermaid::MermaidEntry;
+use crate::ui::search_bar::SearchResult;
 use crossterm::event::{KeyEvent, MouseEvent};
 use std::path::PathBuf;
 
@@ -78,4 +79,14 @@ pub enum Action {
     ///
     /// Boxed to avoid inflating every `Action` variant by the size of `MermaidEntry`.
     MermaidReady(MermaidBlockId, Box<MermaidEntry>),
+
+    /// Background content search completed; replace the search result list.
+    ///
+    /// The `generation` field matches the counter that was current when the task
+    /// was spawned. Stale results (superseded by a newer query) are dropped by
+    /// the handler before touching `SearchState`.
+    SearchResults {
+        generation: u64,
+        results: Vec<SearchResult>,
+    },
 }
