@@ -1,7 +1,7 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Flex, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
@@ -38,7 +38,8 @@ pub fn render_config_popup(
         .title(" Settings ")
         .title_style(palette.title_style())
         .borders(Borders::ALL)
-        .border_style(Style::new().fg(palette.border_focused));
+        .border_style(Style::new().fg(palette.border_focused))
+        .style(Style::default().bg(palette.help_bg));
 
     f.render_widget(Paragraph::new(lines).block(block), area);
 }
@@ -162,11 +163,7 @@ fn option_line<'a>(
         INACTIVE_BULLET
     };
     let bullet_style = if is_active { active_style } else { dim_style };
-    let label_style = if is_cursor {
-        cursor_style
-    } else {
-        Style::new().fg(Color::White)
-    };
+    let label_style = if is_cursor { cursor_style } else { text_style };
 
     Line::from(vec![
         Span::styled("  ", text_style),

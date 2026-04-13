@@ -118,7 +118,8 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .title(format!(" Search [{mode_label}] (Tab to toggle) "))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(p.accent_alt));
+        .border_style(Style::default().fg(p.accent_alt))
+        .style(Style::default().bg(p.background));
 
     let paragraph = Paragraph::new(line).block(block);
     f.render_widget(paragraph, area);

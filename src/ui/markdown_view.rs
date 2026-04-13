@@ -122,7 +122,8 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
         .title(title.as_ref())
         .title_style(p.title_style())
         .borders(Borders::ALL)
-        .border_style(border_style);
+        .border_style(border_style)
+        .style(Style::default().bg(p.background));
 
     app.tabs.view_height = area.height.saturating_sub(2) as u32;
 
@@ -466,7 +467,8 @@ fn padded_rect(rect: Rect, h: u16, v: u16) -> Rect {
 fn render_mermaid_placeholder(f: &mut Frame, rect: Rect, msg: &str, p: &Palette) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(p.border_style());
+        .border_style(p.border_style())
+        .style(Style::default().bg(p.background));
     let inner = block.inner(rect);
     f.render_widget(block, rect);
 
@@ -497,7 +499,8 @@ fn render_mermaid_source(f: &mut Frame, rect: Rect, source: &str, footer: &str, 
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(p.border_style());
+        .border_style(p.border_style())
+        .style(Style::default().bg(p.background));
     let para = Paragraph::new(Text::from(lines))
         .block(block)
         .wrap(Wrap { trim: false });

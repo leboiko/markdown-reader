@@ -63,7 +63,8 @@ pub fn draw(f: &mut Frame, state: &CopyMenuState, palette: &Palette) {
         .title(" Copy ")
         .title_style(palette.title_style())
         .borders(Borders::ALL)
-        .border_style(Style::new().fg(palette.border_focused));
+        .border_style(Style::new().fg(palette.border_focused))
+        .style(Style::default().bg(palette.help_bg));
 
     f.render_widget(Paragraph::new(lines).block(block), area);
 }

@@ -18,10 +18,20 @@ use crate::config::TreePosition;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout},
+    style::Style,
+    widgets::Block,
 };
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
+
+    // Paint every cell with the theme background before any widget renders.
+    // Without this, cells not covered by a widget keep the terminal's default
+    // background, making light themes unreadable on dark terminals.
+    f.render_widget(
+        Block::default().style(Style::default().bg(app.palette.background)),
+        area,
+    );
 
     // Clear stale rects at the start of each draw so hit-tests against the
     // previous frame's layout never fire.

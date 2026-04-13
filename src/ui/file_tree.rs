@@ -166,7 +166,8 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
         .title(" Files ")
         .title_style(p.title_style())
         .borders(Borders::ALL)
-        .border_style(border_style);
+        .border_style(border_style)
+        .style(Style::default().bg(p.background));
 
     let items: Vec<ListItem> = app
         .tree
