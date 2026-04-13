@@ -70,16 +70,15 @@ pub struct MarkdownViewState {
 }
 
 impl MarkdownViewState {
-    /// Load a file into the viewer, resetting the scroll position.
-    pub fn load(&mut self, path: PathBuf, file_name: String, content: String, palette: &Palette) {
-        let blocks = crate::markdown::renderer::render_markdown(&content, palette);
-        self.total_lines = blocks.iter().map(|b| b.height()).sum();
-
-        // Walk blocks once to build absolute-line link and anchor tables.
+    /// Recompute absolute link and heading-anchor positions from the current
+    /// block heights. Call this after any operation that changes block heights
+    /// (table layout, mermaid height update) so click targets and the link
+    /// picker stay aligned with what the user sees on screen.
+    pub fn recompute_positions(&mut self) {
         let mut abs_links: Vec<AbsoluteLink> = Vec::new();
         let mut abs_anchors: Vec<AbsoluteAnchor> = Vec::new();
         let mut block_offset = 0u32;
-        for block in &blocks {
+        for block in &self.rendered {
             if let DocBlock::Text {
                 links,
                 heading_anchors,
@@ -104,10 +103,16 @@ impl MarkdownViewState {
             }
             block_offset += block.height();
         }
-
         self.links = abs_links;
         self.heading_anchors = abs_anchors;
+    }
+
+    /// Load a file into the viewer, resetting the scroll position.
+    pub fn load(&mut self, path: PathBuf, file_name: String, content: String, palette: &Palette) {
+        let blocks = crate::markdown::renderer::render_markdown(&content, palette);
+        self.total_lines = blocks.iter().map(|b| b.height()).sum();
         self.rendered = blocks;
+        self.recompute_positions();
         self.content = content;
         self.file_name = file_name;
         self.current_path = Some(path);
@@ -237,6 +242,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
 
             update_mermaid_heights(&tab.view.rendered, &app.mermaid_cache);
             tab.view.total_lines = tab.view.rendered.iter().map(|b| b.height()).sum();
+            tab.view.recompute_positions();
             let max_scroll = tab.view.total_lines.saturating_sub(view_height / 2);
             tab.view.scroll_offset = tab.view.scroll_offset.min(max_scroll);
         } else {
@@ -253,8 +259,10 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
             }
             // Sync mermaid heights from cache (no-op when nothing has changed).
             update_mermaid_heights(&tab.view.rendered, &app.mermaid_cache);
-            // Recompute total_lines in case any table or mermaid heights changed.
+            // Recompute total_lines and link/anchor positions in case any
+            // table or mermaid heights changed.
             tab.view.total_lines = tab.view.rendered.iter().map(|b| b.height()).sum();
+            tab.view.recompute_positions();
             let max_scroll = tab.view.total_lines.saturating_sub(view_height / 2);
             tab.view.scroll_offset = tab.view.scroll_offset.min(max_scroll);
         }
