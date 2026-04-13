@@ -202,13 +202,24 @@ fn compute_cell_height(img: &DynamicImage, picker: &Picker) -> u32 {
 /// loss; the extra pixels are downscaled to the rect as needed.
 const SVG_RENDER_SCALE: f32 = 3.0;
 
-/// Rasterize an SVG string to a `DynamicImage`, replacing the SVG's default
-/// white canvas background with `bg_rgb` so diagrams blend with the active theme.
+/// Rasterize an SVG string to a `DynamicImage`, recoloring the SVG's default
+/// light palette to match the active theme. For dark themes (average luminance
+/// < 128), node fills, text, borders, and arrows are remapped to dark-friendly
+/// equivalents. The canvas background is always replaced with `bg_rgb`.
 fn svg_to_image(svg: &str, bg_rgb: (u8, u8, u8)) -> Result<DynamicImage, String> {
     let bg_hex = format!("#{:02X}{:02X}{:02X}", bg_rgb.0, bg_rgb.1, bg_rgb.2);
-    // Mermaid SVGs always start with a full-canvas <rect fill="#FFFFFF"/>.
-    // Replace only the first occurrence so node fills (#F8FAFC etc.) stay intact.
     let svg = svg.replacen("fill=\"#FFFFFF\"", &format!("fill=\"{bg_hex}\""), 1);
+
+    let is_dark = (bg_rgb.0 as u16 + bg_rgb.1 as u16 + bg_rgb.2 as u16) / 3 < 128;
+    let svg = if is_dark {
+        svg.replace("fill=\"#F8FAFC\"", "fill=\"#1e293b\"")
+            .replace("stroke=\"#94A3B8\"", "stroke=\"#64748b\"")
+            .replace("fill=\"#0F172A\"", "fill=\"#e2e8f0\"")
+            .replace("fill=\"#64748B\"", "fill=\"#94a3b8\"")
+            .replace("stroke=\"#64748B\"", "stroke=\"#94a3b8\"")
+    } else {
+        svg
+    };
 
     let opts = usvg::Options {
         fontdb: Arc::clone(font_db()),
