@@ -444,7 +444,6 @@ pub fn slice_row(row: &str, h_scroll: usize, visible_width: usize) -> String {
     // Walk through the row accumulating display columns.
     let mut col = 0usize;
     let mut result = String::with_capacity(visible_width + 4);
-    let mut skipped_half = false;
 
     for ch in row.chars() {
         let ch_w = UnicodeWidthChar::width(ch).unwrap_or(0);
@@ -458,7 +457,6 @@ pub fn slice_row(row: &str, h_scroll: usize, visible_width: usize) -> String {
             // Double-width char straddles the left edge — emit a replacement space.
             result.push(' ');
             col = h_scroll + 1;
-            skipped_half = true;
             continue;
         }
 
@@ -473,7 +471,6 @@ pub fn slice_row(row: &str, h_scroll: usize, visible_width: usize) -> String {
 
         result.push(ch);
         col += ch_w;
-        let _ = skipped_half;
     }
 
     result

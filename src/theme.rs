@@ -15,6 +15,7 @@ pub enum Theme {
 }
 
 impl Theme {
+    /// All selectable themes in display order.
     pub const ALL: &'static [Theme] = &[
         Theme::Default,
         Theme::Dracula,
@@ -24,6 +25,7 @@ impl Theme {
         Theme::GithubLight,
     ];
 
+    /// Human-readable display name for the theme.
     pub fn label(self) -> &'static str {
         match self {
             Theme::Default => "Default",
@@ -76,6 +78,7 @@ pub struct Palette {
 }
 
 impl Palette {
+    /// Construct the color palette for the given theme.
     pub fn from_theme(theme: Theme) -> Self {
         match theme {
             Theme::Default => Self {
@@ -303,18 +306,22 @@ impl Palette {
         }
     }
 
+    /// Style for unfocused panel borders.
     pub fn border_style(self) -> Style {
         Style::new().fg(self.border)
     }
 
+    /// Style for focused panel borders.
     pub fn border_focused_style(self) -> Style {
         Style::new().fg(self.border_focused)
     }
 
+    /// Bold style for widget titles.
     pub fn title_style(self) -> Style {
         Style::new().fg(self.title).add_modifier(Modifier::BOLD)
     }
 
+    /// Style for the currently selected list item.
     pub fn selected_style(self) -> Style {
         Style::new()
             .bg(self.selection_bg)
@@ -322,6 +329,7 @@ impl Palette {
             .add_modifier(Modifier::BOLD)
     }
 
+    /// Style for de-emphasized (dim) text.
     pub fn dim_style(self) -> Style {
         Style::new().fg(self.dim)
     }

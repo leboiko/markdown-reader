@@ -126,35 +126,44 @@ impl MarkdownViewState {
         self.table_layouts.clear();
     }
 
+    /// Scroll up by `n` logical lines, clamping at the top.
     pub fn scroll_up(&mut self, n: u16, _view_height: u32) {
         self.scroll_offset = self.scroll_offset.saturating_sub(n as u32);
     }
 
+    /// Scroll down by `n` logical lines, clamping so the last line stays
+    /// roughly centred in the viewport rather than disappearing off screen.
     pub fn scroll_down(&mut self, n: u16, view_height: u32) {
         let max = self.total_lines.saturating_sub(view_height / 2);
         self.scroll_offset = (self.scroll_offset + n as u32).min(max);
     }
 
+    /// Scroll up by half the viewport height.
     pub fn scroll_half_page_up(&mut self, view_height: u32) {
         self.scroll_up((view_height / 2) as u16, view_height);
     }
 
+    /// Scroll down by half the viewport height.
     pub fn scroll_half_page_down(&mut self, view_height: u32) {
         self.scroll_down((view_height / 2) as u16, view_height);
     }
 
+    /// Scroll up by the full viewport height.
     pub fn scroll_page_up(&mut self, view_height: u32) {
         self.scroll_up(view_height as u16, view_height);
     }
 
+    /// Scroll down by the full viewport height.
     pub fn scroll_page_down(&mut self, view_height: u32) {
         self.scroll_down(view_height as u16, view_height);
     }
 
+    /// Jump to the very first line of the document.
     pub fn scroll_to_top(&mut self) {
         self.scroll_offset = 0;
     }
 
+    /// Jump to the last line, keeping it centred in the viewport.
     pub fn scroll_to_bottom(&mut self, view_height: u32) {
         self.scroll_offset = self.total_lines.saturating_sub(view_height / 2);
     }
@@ -517,7 +526,7 @@ fn draw_mermaid_block(
             render_mermaid_source(f, rect, source, &footer, p);
         }
         Some(MermaidEntry::SourceOnly(reason)) => {
-            let footer = format!("[mermaid \u{2014} {}]", reason.clone());
+            let footer = format!("[mermaid \u{2014} {}]", reason);
             render_mermaid_source(f, rect, source, &footer, p);
         }
     }

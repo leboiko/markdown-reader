@@ -451,7 +451,6 @@ impl App {
     fn session_snapshot(&self) -> Option<(AppState, PathBuf, Vec<TabSession>, usize)> {
         let tab_sessions: Vec<TabSession> = self
             .tabs
-            .tabs
             .iter()
             .filter_map(|t| {
                 t.view.current_path.as_ref().map(|p| TabSession {
@@ -1440,7 +1439,7 @@ impl App {
             return;
         };
 
-        for tab in &self.tabs.tabs {
+        for tab in self.tabs.iter() {
             let Some(path) = tab.view.current_path.clone() else {
                 continue;
             };
@@ -1463,7 +1462,7 @@ impl App {
     fn apply_file_reloaded(&mut self, path: PathBuf, content: String) {
         let palette = self.palette;
 
-        for tab in &mut self.tabs.tabs {
+        for tab in self.tabs.iter_mut() {
             if tab.view.current_path.as_deref() != Some(&*path) {
                 continue;
             }

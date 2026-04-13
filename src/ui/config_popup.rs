@@ -128,8 +128,6 @@ fn build_lines<'a>(
         text_style,
         dim_style,
     ));
-    row += 1;
-    let _ = row;
 
     lines.push(Line::from(""));
 

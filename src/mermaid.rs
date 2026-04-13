@@ -55,16 +55,19 @@ pub struct MermaidCache {
 }
 
 impl MermaidCache {
+    /// Create an empty cache with no entries.
     pub fn new() -> Self {
         Self {
             entries: HashMap::new(),
         }
     }
 
+    /// Return a shared reference to the entry for `id`, if any.
     pub fn get(&self, id: &MermaidBlockId) -> Option<&MermaidEntry> {
         self.entries.get(id)
     }
 
+    /// Return a mutable reference to the entry for `id`, if any.
     pub fn get_mut(&mut self, id: &MermaidBlockId) -> Option<&mut MermaidEntry> {
         self.entries.get_mut(id)
     }
@@ -99,6 +102,7 @@ impl MermaidCache {
     ///
     /// When `picker` is `None` (graphics disabled), inserts `SourceOnly`
     /// immediately and returns `false` — no task is spawned.
+    /// Remove all cached entries.
     pub fn clear(&mut self) {
         self.entries.clear();
     }

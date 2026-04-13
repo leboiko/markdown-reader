@@ -49,6 +49,7 @@ impl Default for SearchState {
 }
 
 impl SearchState {
+    /// Show the search bar and reset all transient state.
     pub fn activate(&mut self) {
         self.active = true;
         self.query.clear();
@@ -56,6 +57,7 @@ impl SearchState {
         self.selected_index = 0;
     }
 
+    /// Toggle between file-name and content search modes.
     pub fn toggle_mode(&mut self) {
         self.mode = match self.mode {
             SearchMode::FileName => SearchMode::Content,
@@ -63,12 +65,14 @@ impl SearchState {
         };
     }
 
+    /// Advance to the next result, wrapping around to the first.
     pub fn next_result(&mut self) {
         if !self.results.is_empty() {
             self.selected_index = (self.selected_index + 1) % self.results.len();
         }
     }
 
+    /// Go back to the previous result, wrapping around to the last.
     pub fn prev_result(&mut self) {
         if !self.results.is_empty() {
             self.selected_index = if self.selected_index == 0 {

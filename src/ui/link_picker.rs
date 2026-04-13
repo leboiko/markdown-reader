@@ -25,6 +25,7 @@ pub struct LinkPickerState {
 }
 
 impl LinkPickerState {
+    /// Move the selection cursor up by one, wrapping around to the last item.
     pub fn move_up(&mut self) {
         let n = self.items.len();
         if n == 0 {
@@ -33,6 +34,7 @@ impl LinkPickerState {
         self.cursor = (self.cursor + n - 1) % n;
     }
 
+    /// Move the selection cursor down by one, wrapping around to the first item.
     pub fn move_down(&mut self) {
         let n = self.items.len();
         if n == 0 {

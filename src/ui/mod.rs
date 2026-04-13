@@ -23,6 +23,7 @@ use ratatui::{
     widgets::Block,
 };
 
+/// Render the full application UI for one frame.
 pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
 

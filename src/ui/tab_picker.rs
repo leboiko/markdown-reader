@@ -15,6 +15,7 @@ pub struct TabPickerState {
 }
 
 impl TabPickerState {
+    /// Move the cursor up by one, wrapping around to the last tab.
     pub fn move_up(&mut self, tab_count: usize) {
         if tab_count == 0 {
             return;
@@ -22,6 +23,7 @@ impl TabPickerState {
         self.cursor = (self.cursor + tab_count - 1) % tab_count;
     }
 
+    /// Move the cursor down by one, wrapping around to the first tab.
     pub fn move_down(&mut self, tab_count: usize) {
         if tab_count == 0 {
             return;
@@ -29,7 +31,7 @@ impl TabPickerState {
         self.cursor = (self.cursor + 1) % tab_count;
     }
 
-    /// Clamp the cursor into `[0, max)`. Returns the clamped value.
+    /// Clamp the cursor into `[0, max)`. A no-op when `max == 0`.
     pub fn clamp(&mut self, max: usize) {
         if max == 0 {
             self.cursor = 0;
@@ -149,11 +151,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     f.render_widget(paragraph, inner);
 
     // Record per-row rects for mouse hit-testing.
-    for (slot, (i, tab)) in app
+    for (slot, tab) in app
         .tabs
         .tabs
         .iter()
-        .enumerate()
         .skip(scroll_offset)
         .take(visible_rows)
         .enumerate()
@@ -165,7 +166,6 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             height: 1,
         };
         app.tab_picker_rects.push((tab.id, row_rect));
-        let _ = i; // silence unused warning
     }
 }
 
@@ -181,6 +181,7 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
 /// Handle a key event when the tab picker is focused.
 ///
 /// Returns `true` when the picker should remain open, `false` when it should close.
+/// `x` closes the highlighted tab; `Enter` switches to it; `Esc`/`T` dismiss the picker.
 pub fn handle_key(app: &mut App, code: crossterm::event::KeyCode) -> bool {
     let n = app.tabs.len();
 

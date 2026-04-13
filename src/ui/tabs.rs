@@ -37,6 +37,7 @@ pub struct Tabs {
 }
 
 impl Tabs {
+    /// Create an empty tab set with no active tab.
     pub fn new() -> Self {
         Self {
             tabs: Vec::new(),
@@ -77,6 +78,7 @@ impl Tabs {
         self.active.and_then(|id| self.index_of(id))
     }
 
+    /// Make `id` the active tab, recording the previous active tab for `activate_previous`.
     pub fn set_active(&mut self, id: TabId) {
         if self.active != Some(id) {
             self.previous = self.active;
@@ -167,10 +169,22 @@ impl Tabs {
         self.tabs.len()
     }
 
+    /// Iterate over all open tabs in order.
+    pub fn iter(&self) -> std::slice::Iter<'_, Tab> {
+        self.tabs.iter()
+    }
+
+    /// Iterate mutably over all open tabs in order.
+    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, Tab> {
+        self.tabs.iter_mut()
+    }
+
+    /// Return `true` when no tabs are open.
     pub fn is_empty(&self) -> bool {
         self.tabs.is_empty()
     }
 
+    /// Return a mutable reference to the tab whose `current_path` equals `path`.
     pub fn find_tab_by_path_mut(&mut self, path: &PathBuf) -> Option<&mut Tab> {
         self.tabs
             .iter_mut()
@@ -235,9 +249,8 @@ impl Tabs {
     /// Re-render every open tab with the given palette, preserving scroll offsets.
     pub fn rerender_all(&mut self, palette: &Palette) {
         for tab in &mut self.tabs {
-            if tab.view.current_path.is_some() {
+            if let Some(path) = tab.view.current_path.clone() {
                 let content = tab.view.content.clone();
-                let path = tab.view.current_path.clone().unwrap();
                 let name = tab.view.file_name.clone();
                 let scroll = tab.view.scroll_offset;
                 tab.view.load(path, name, content, palette);
