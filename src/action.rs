@@ -99,4 +99,12 @@ pub enum Action {
         /// `true` → open in a new tab; `false` → replace the active tab.
         new_tab: bool,
     },
+
+    /// A watched file was reloaded asynchronously; update all matching tabs.
+    FileReloaded {
+        /// Absolute path that was re-read.
+        path: PathBuf,
+        /// Fresh text content.
+        content: String,
+    },
 }

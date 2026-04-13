@@ -539,23 +539,9 @@ impl App {
             Action::FilesChanged(changed) => {
                 let entries = FileEntry::discover(&self.root);
                 self.tree.rebuild(entries);
+                // Each changed file is read on a background thread; the result
+                // arrives as Action::FileReloaded which also handles modal cleanup.
                 self.reload_changed_tabs(&changed);
-                // Close modal if the tab it was opened from was reloaded.
-                if let Some(modal) = &self.table_modal {
-                    let tab_id = modal.tab_id;
-                    let reloaded = self.tabs.tabs.iter().any(|t| t.id == tab_id)
-                        && changed.iter().any(|p| {
-                            self.tabs
-                                .tabs
-                                .iter()
-                                .find(|t| t.id == tab_id)
-                                .and_then(|t| t.view.current_path.as_ref())
-                                == Some(p)
-                        });
-                    if reloaded {
-                        self.close_table_modal();
-                    }
-                }
             }
             Action::Resize(_, _) => {}
             Action::Mouse(m) => self.handle_mouse(m),
@@ -578,6 +564,9 @@ impl App {
                 new_tab,
             } => {
                 self.apply_file_loaded(path, content, new_tab);
+            }
+            Action::FileReloaded { path, content } => {
+                self.apply_file_reloaded(path, content);
             }
         }
     }
@@ -1193,36 +1182,58 @@ impl App {
     ///
     /// Preserves each tab's scroll offset (clamped to the new line count).
     /// This replaces `reload_current_tab` for the `FilesChanged` handler.
+    /// Spawn a background read for each tab whose path is in `changed`.
+    ///
+    /// Each read completes asynchronously and arrives as [`Action::FileReloaded`].
     fn reload_changed_tabs(&mut self, changed: &[PathBuf]) {
         if changed.is_empty() || self.tabs.is_empty() {
             return;
         }
 
-        let palette = self.palette;
+        let Some(tx) = self.action_tx.clone() else {
+            return;
+        };
 
-        for tab in &mut self.tabs.tabs {
+        for tab in &self.tabs.tabs {
             let Some(path) = tab.view.current_path.clone() else {
                 continue;
             };
             if !changed.contains(&path) {
                 continue;
             }
-            let Ok(content) = std::fs::read_to_string(&path) else {
+            let tx = tx.clone();
+            tokio::task::spawn_blocking(move || {
+                let Ok(content) = std::fs::read_to_string(&path) else {
+                    return;
+                };
+                let _ = tx.send(Action::FileReloaded { path, content });
+            });
+        }
+    }
+
+    /// Apply a completed async file reload to every tab open on `path`.
+    ///
+    /// Preserves each tab's scroll offset (clamped to the new line count).
+    fn apply_file_reloaded(&mut self, path: PathBuf, content: String) {
+        let palette = self.palette;
+
+        for tab in &mut self.tabs.tabs {
+            if tab.view.current_path.as_deref() != Some(&*path) {
                 continue;
-            };
+            }
             let name = path
                 .file_name()
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string();
             let scroll = tab.view.scroll_offset;
-            tab.view.load(path, name, content, &palette);
+            tab.view.load(path.clone(), name, content.clone(), &palette);
             tab.view.scroll_offset = scroll.min(tab.view.total_lines.saturating_sub(1));
         }
 
-        // Drop cache entries whose source changed. New DocBlock::Mermaid values
-        // get fresh ids derived from their content hash, so old cache entries
-        // become permanently stale after a reload.
+        // Drop cache entries for mermaid blocks that no longer exist after the
+        // reload. Fresh DocBlock::Mermaid values get new ids from their content
+        // hash, making old cache entries permanently stale.
         let alive: std::collections::HashSet<crate::markdown::MermaidBlockId> = self
             .tabs
             .tabs
@@ -1234,6 +1245,19 @@ impl App {
             })
             .collect();
         self.mermaid_cache.retain(&alive);
+
+        // Close the table modal if it was open on the reloaded tab.
+        if let Some(modal) = &self.table_modal {
+            let tab_id = modal.tab_id;
+            let is_reloaded = self
+                .tabs
+                .tabs
+                .iter()
+                .any(|t| t.id == tab_id && t.view.current_path.as_deref() == Some(&*path));
+            if is_reloaded {
+                self.close_table_modal();
+            }
+        }
     }
 
     // ── Search ───────────────────────────────────────────────────────────────
