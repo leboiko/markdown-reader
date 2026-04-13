@@ -817,6 +817,9 @@ impl App {
     fn rerender_all_tabs(&mut self) {
         let palette = self.palette;
         self.tabs.rerender_all(&palette);
+        // Mermaid images have the theme background baked into their pixels,
+        // so they must re-render when the theme changes.
+        self.mermaid_cache.clear();
     }
 
     /// Commit any in-progress doc-search and switch focus back to Viewer before

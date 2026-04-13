@@ -99,6 +99,10 @@ impl MermaidCache {
     ///
     /// When `picker` is `None` (graphics disabled), inserts `SourceOnly`
     /// immediately and returns `false` — no task is spawned.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
     pub fn ensure_queued(
         &mut self,
         id: MermaidBlockId,
@@ -106,6 +110,7 @@ impl MermaidCache {
         picker: Option<&Picker>,
         action_tx: &tokio::sync::mpsc::UnboundedSender<crate::action::Action>,
         in_tmux: bool,
+        bg_rgb: (u8, u8, u8),
     ) -> bool {
         if self.entries.contains_key(&id) {
             return false;
@@ -128,7 +133,7 @@ impl MermaidCache {
         let tx = action_tx.clone();
 
         tokio::task::spawn_blocking(move || {
-            let result = render_blocking(source, &picker);
+            let result = render_blocking(source, &picker, bg_rgb);
             let entry = match result {
                 Ok((protocol, cell_height)) => MermaidEntry::Ready {
                     protocol: Box::new(protocol),
@@ -155,10 +160,14 @@ impl MermaidCache {
 ///
 /// Returns the protocol and the image's height in terminal cells, clamped to
 /// `[MIN_MERMAID_HEIGHT, MAX_MERMAID_HEIGHT]`.
-fn render_blocking(source: String, picker: &Picker) -> Result<(StatefulProtocol, u32), String> {
+fn render_blocking(
+    source: String,
+    picker: &Picker,
+    bg_rgb: (u8, u8, u8),
+) -> Result<(StatefulProtocol, u32), String> {
     let svg = mermaid_rs_renderer::render(&source).map_err(|e| format!("render error: {e}"))?;
 
-    let img = svg_to_image(&svg).map_err(|e| format!("svg rasterize: {e}"))?;
+    let img = svg_to_image(&svg, bg_rgb).map_err(|e| format!("svg rasterize: {e}"))?;
 
     let cell_height = compute_cell_height(&img, picker);
     Ok((picker.new_resize_protocol(img), cell_height))
@@ -183,13 +192,19 @@ fn compute_cell_height(img: &DynamicImage, picker: &Picker) -> u32 {
 /// loss; the extra pixels are downscaled to the rect as needed.
 const SVG_RENDER_SCALE: f32 = 3.0;
 
-/// Rasterize an SVG string to a `DynamicImage`.
-fn svg_to_image(svg: &str) -> Result<DynamicImage, String> {
+/// Rasterize an SVG string to a `DynamicImage`, replacing the SVG's default
+/// white canvas background with `bg_rgb` so diagrams blend with the active theme.
+fn svg_to_image(svg: &str, bg_rgb: (u8, u8, u8)) -> Result<DynamicImage, String> {
+    let bg_hex = format!("#{:02X}{:02X}{:02X}", bg_rgb.0, bg_rgb.1, bg_rgb.2);
+    // Mermaid SVGs always start with a full-canvas <rect fill="#FFFFFF"/>.
+    // Replace only the first occurrence so node fills (#F8FAFC etc.) stay intact.
+    let svg = svg.replacen("fill=\"#FFFFFF\"", &format!("fill=\"{bg_hex}\""), 1);
+
     let opts = usvg::Options {
         fontdb: Arc::clone(font_db()),
         ..usvg::Options::default()
     };
-    let tree = usvg::Tree::from_str(svg, &opts).map_err(|e| format!("usvg parse: {e}"))?;
+    let tree = usvg::Tree::from_str(&svg, &opts).map_err(|e| format!("usvg parse: {e}"))?;
 
     let size = tree.size();
     let width = (size.width() * SVG_RENDER_SCALE).ceil() as u32;
@@ -306,7 +321,7 @@ mod tests {
 
         for (name, src) in &diagrams {
             match mermaid_rs_renderer::render(src) {
-                Ok(svg) => match svg_to_image(&svg) {
+                Ok(svg) => match svg_to_image(&svg, (255, 255, 255)) {
                     Ok(_) => {
                         ready_count += 1;
                     }

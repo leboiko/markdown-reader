@@ -366,9 +366,13 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
     if let Some(tx) = &app.action_tx {
         let in_tmux = std::env::var("TMUX").is_ok();
         let tx = tx.clone();
+        let bg_rgb = match p.background {
+            ratatui::style::Color::Rgb(r, g, b) => (r, g, b),
+            _ => (0, 0, 0),
+        };
         for (id, source) in mermaid_to_queue {
             app.mermaid_cache
-                .ensure_queued(id, &source, app.picker.as_ref(), &tx, in_tmux);
+                .ensure_queued(id, &source, app.picker.as_ref(), &tx, in_tmux, bg_rgb);
         }
     }
 
