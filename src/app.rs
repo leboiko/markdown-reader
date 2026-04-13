@@ -605,12 +605,18 @@ impl App {
             }
             Action::SearchConfirm => self.confirm_search(),
             Action::FilesChanged(changed) => {
-                let entries = FileEntry::discover(&self.root);
-                self.tree.rebuild(entries);
-                // Each changed file is read on a background thread; the result
-                // arrives as Action::FileReloaded which also handles modal cleanup.
                 self.reload_changed_tabs(&changed);
                 self.refresh_git_status();
+                if let Some(tx) = self.action_tx.clone() {
+                    let root = self.root.clone();
+                    tokio::task::spawn_blocking(move || {
+                        let entries = FileEntry::discover(&root);
+                        let _ = tx.send(Action::TreeDiscovered(entries));
+                    });
+                }
+            }
+            Action::TreeDiscovered(entries) => {
+                self.tree.rebuild(entries);
             }
             Action::Resize(_, _) => {}
             Action::Mouse(m) => self.handle_mouse(m),

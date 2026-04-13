@@ -112,4 +112,7 @@ pub enum Action {
 
     /// Background git-status scan completed; replace the tree color map.
     GitStatusReady(HashMap<PathBuf, GitFileStatus>),
+
+    /// Background directory tree scan completed; rebuild the file tree.
+    TreeDiscovered(Vec<crate::fs::discovery::FileEntry>),
 }
