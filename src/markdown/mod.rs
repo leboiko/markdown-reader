@@ -1,3 +1,4 @@
+pub mod highlight;
 pub mod renderer;
 
 use std::cell::Cell;
@@ -188,10 +189,14 @@ pub fn cell_to_string(spans: &[Span<'static>]) -> String {
 mod tests {
     use super::*;
     use crate::markdown::renderer::render_markdown;
-    use crate::theme::Palette;
+    use crate::theme::{Palette, Theme};
 
     fn palette() -> Palette {
-        Palette::from_theme(crate::theme::Theme::Default)
+        Palette::from_theme(Theme::Default)
+    }
+
+    fn theme() -> Theme {
+        Theme::Default
     }
 
     // ── heading_to_anchor ────────────────────────────────────────────────────
@@ -234,7 +239,7 @@ mod tests {
     #[test]
     fn link_info_internal_anchor() {
         let md = "[Installation](#installation)\n";
-        let blocks = render_markdown(md, &palette());
+        let blocks = render_markdown(md, &palette(), theme());
         let link = match &blocks[0] {
             DocBlock::Text { links, .. } => links.first().expect("link expected"),
             _ => panic!("expected Text block"),
@@ -250,7 +255,7 @@ mod tests {
     #[test]
     fn link_info_external_url_preserved() {
         let md = "[Rust](https://rust-lang.org)\n";
-        let blocks = render_markdown(md, &palette());
+        let blocks = render_markdown(md, &palette(), theme());
         let link = match &blocks[0] {
             DocBlock::Text { links, .. } => links.first().expect("link expected"),
             _ => panic!("expected Text block"),
@@ -261,7 +266,7 @@ mod tests {
     #[test]
     fn heading_anchor_collected() {
         let md = "# Installation Guide\n\nsome text\n";
-        let blocks = render_markdown(md, &palette());
+        let blocks = render_markdown(md, &palette(), theme());
         let anchor = match &blocks[0] {
             DocBlock::Text {
                 heading_anchors, ..
@@ -344,7 +349,7 @@ mod tests {
             "# Title\n\n{long_para}\n\n- [Section A](#section-a)\n- [Section B](#section-b)\n\n## Section A\n\nText.\n\n## Section B\n\nMore.\n",
         );
 
-        let blocks = render_markdown(&md, &palette());
+        let blocks = render_markdown(&md, &palette(), theme());
 
         // With a content_width of 80 the long paragraph wraps to
         // ceil(150/80) = 2 visual rows.
@@ -424,7 +429,7 @@ mod tests {
             "Final text.\n",
         );
 
-        let blocks = render_markdown(md, &palette());
+        let blocks = render_markdown(md, &palette(), theme());
 
         let recorded = absolute_anchor_positions(&blocks);
         let actual = actual_heading_lines(&blocks);

@@ -275,6 +275,11 @@ pub struct App {
     pub picker: Option<Picker>,
     /// State for the full-screen table modal; `None` when the modal is closed.
     pub table_modal: Option<TableModalState>,
+    /// Cached outer rect of the table modal popup, populated each draw frame.
+    ///
+    /// Used by the mouse handler to hit-test clicks and scroll events against the
+    /// modal boundary. Cleared in `close_table_modal`.
+    pub table_modal_rect: Option<ratatui::layout::Rect>,
     /// Monotonically increasing counter incremented on every new content search.
     ///
     /// Background tasks capture the counter at spawn time and discard their
@@ -333,6 +338,7 @@ impl App {
             mermaid_cache: MermaidCache::new(),
             picker,
             table_modal: None,
+            table_modal_rect: None,
             search_generation: Arc::new(AtomicU64::new(0)),
         };
 
@@ -385,7 +391,8 @@ impl App {
             let (_, outcome) = self.tabs.open_or_focus(path, true);
             if matches!(outcome, OpenOutcome::Opened | OpenOutcome::Replaced) {
                 let tab = self.tabs.active_tab_mut().unwrap();
-                tab.view.load(path.clone(), name, content, &self.palette);
+                tab.view
+                    .load(path.clone(), name, content, &self.palette, self.theme);
                 let max_scroll = tab.view.total_lines.saturating_sub(1);
                 tab.view.scroll_offset = scroll.min(max_scroll);
             }
@@ -650,6 +657,13 @@ impl App {
     }
 
     fn handle_mouse(&mut self, m: crossterm::event::MouseEvent) {
+        // The table modal captures all mouse input while it is open.
+        // Nothing beneath the modal should react to pointer events.
+        if self.table_modal.is_some() {
+            self.handle_table_modal_mouse(m);
+            return;
+        }
+
         let col = m.column;
         let row = m.row;
 
@@ -987,7 +1001,7 @@ impl App {
     /// Re-render every open tab with the active palette, preserving scroll offsets.
     fn rerender_all_tabs(&mut self) {
         let palette = self.palette;
-        self.tabs.rerender_all(&palette);
+        self.tabs.rerender_all(&palette, self.theme);
         // Mermaid images have the theme background baked into their pixels,
         // so they must re-render when the theme changes.
         self.mermaid_cache.clear();
@@ -1005,6 +1019,7 @@ impl App {
     pub fn close_table_modal(&mut self) {
         if self.table_modal.is_some() {
             self.table_modal = None;
+            self.table_modal_rect = None;
             self.focus = Focus::Viewer;
         }
     }
@@ -1439,7 +1454,8 @@ impl App {
 
         if loaded {
             let tab = self.tabs.find_tab_by_path_mut(&path).unwrap();
-            tab.view.load(path.clone(), name, content, &palette);
+            let theme = self.theme;
+            tab.view.load(path.clone(), name, content, &palette, theme);
         }
 
         self.focus = Focus::Viewer;
@@ -1476,6 +1492,7 @@ impl App {
             if !changed.contains(&path) {
                 continue;
             }
+
             let tx = tx.clone();
             tokio::task::spawn_blocking(move || {
                 let Ok(content) = std::fs::read_to_string(&path) else {
@@ -1491,6 +1508,7 @@ impl App {
     /// Preserves each tab's scroll offset (clamped to the new line count).
     fn apply_file_reloaded(&mut self, path: PathBuf, content: String) {
         let palette = self.palette;
+        let theme = self.theme;
 
         for tab in self.tabs.iter_mut() {
             if tab.view.current_path.as_deref() != Some(&*path) {
@@ -1502,7 +1520,8 @@ impl App {
                 .to_string_lossy()
                 .to_string();
             let scroll = tab.view.scroll_offset;
-            tab.view.load(path.clone(), name, content.clone(), &palette);
+            tab.view
+                .load(path.clone(), name, content.clone(), &palette, theme);
             tab.view.scroll_offset = scroll.min(tab.view.total_lines.saturating_sub(1));
         }
 
@@ -1754,8 +1773,102 @@ impl App {
         }
     }
 
+    /// Handle a mouse event while the table modal is open.
+    ///
+    /// The modal "owns" all mouse input — events that land outside the cached
+    /// `table_modal_rect` are silently consumed (so the viewer underneath never
+    /// scrolls while the modal is visible).
+    ///
+    /// Supported gestures:
+    /// - Scroll wheel (vertical) inside the modal rect → scroll 3 rows per tick.
+    /// - `Shift` + scroll wheel → snap horizontal scroll to the prev/next column
+    ///   boundary.
+    /// - `ScrollLeft` / `ScrollRight` (trackpad horizontal swipe) → same as
+    ///   Shift-scroll-wheel.
+    /// - Left-click **outside** the modal rect → close the modal.
+    /// - Left-click **inside** the modal rect → no-op (future: cell selection).
+    /// - All other events → silently ignored.
+    fn handle_table_modal_mouse(&mut self, m: crossterm::event::MouseEvent) {
+        use crate::ui::table_modal::{max_h_scroll, next_col_boundary, prev_col_boundary};
+        use crossterm::event::{KeyModifiers, MouseButton, MouseEventKind};
+
+        let col = m.column;
+        let row = m.row;
+        let inside = self
+            .table_modal_rect
+            .map(|r| contains(r, col, row))
+            // If the rect hasn't been populated yet (first frame), treat the
+            // event as inside so we don't inadvertently close on the first click.
+            .unwrap_or(true);
+
+        // view_height is used by max_h_scroll to determine the visible horizontal
+        // extent; we reuse the viewer's stored height as an approximation.
+        let view_height = self.tabs.view_height as u16;
+
+        match m.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                if !inside {
+                    self.close_table_modal();
+                }
+                // Click inside the modal is a no-op for now.
+            }
+            MouseEventKind::ScrollDown => {
+                if !inside {
+                    return;
+                }
+                if m.modifiers.contains(KeyModifiers::SHIFT) {
+                    // Shift + scroll down → advance to next column boundary.
+                    if let Some(s) = self.table_modal.as_mut() {
+                        let max = max_h_scroll(s, view_height);
+                        s.h_scroll = next_col_boundary(&s.natural_widths, s.h_scroll, max);
+                    }
+                } else if let Some(s) = self.table_modal.as_mut() {
+                    s.v_scroll = s.v_scroll.saturating_add(3);
+                }
+            }
+            MouseEventKind::ScrollUp => {
+                if !inside {
+                    return;
+                }
+                if m.modifiers.contains(KeyModifiers::SHIFT) {
+                    // Shift + scroll up → retreat to previous column boundary.
+                    if let Some(s) = self.table_modal.as_mut() {
+                        s.h_scroll = prev_col_boundary(&s.natural_widths, s.h_scroll);
+                    }
+                } else if let Some(s) = self.table_modal.as_mut() {
+                    s.v_scroll = s.v_scroll.saturating_sub(3);
+                }
+            }
+            // Horizontal trackpad gestures (not emitted by all terminals).
+            MouseEventKind::ScrollRight => {
+                if inside && let Some(s) = self.table_modal.as_mut() {
+                    let max = max_h_scroll(s, view_height);
+                    s.h_scroll = next_col_boundary(&s.natural_widths, s.h_scroll, max);
+                }
+            }
+            MouseEventKind::ScrollLeft => {
+                if inside && let Some(s) = self.table_modal.as_mut() {
+                    s.h_scroll = prev_col_boundary(&s.natural_widths, s.h_scroll);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Handle a key press while the table modal is focused.
+    ///
+    /// Horizontal navigation snaps to column boundaries rather than advancing one
+    /// display cell at a time:
+    ///
+    /// - `h` / `Left`  — jump to the start of the previous column
+    /// - `l` / `Right` — jump to the start of the next column
+    /// - `H`           — pan left by half the modal inner width
+    /// - `L`           — pan right by half the modal inner width
+    /// - `0` / `$`     — jump to the leftmost / rightmost position
+    /// - `j`/`k`/`d`/`u`/`g`/`G` — vertical navigation (unchanged)
+    /// - `q` / `Esc` / `Enter` — close the modal
     fn handle_table_modal_key(&mut self, code: KeyCode) {
-        use crate::ui::table_modal::max_h_scroll;
+        use crate::ui::table_modal::{max_h_scroll, next_col_boundary, prev_col_boundary};
 
         if self.pending_chord.take() == Some('g') && code == KeyCode::Char('g') {
             if let Some(s) = self.table_modal.as_mut() {
@@ -1766,6 +1879,12 @@ impl App {
         }
 
         let view_height = self.tabs.view_height as u16;
+        // Derive inner width from the cached modal rect (border is 1 cell on each side).
+        // Falls back to 80 before the first draw or in tests that don't call draw.
+        let inner_width = self
+            .table_modal_rect
+            .map(|r| r.width.saturating_sub(2))
+            .unwrap_or(80);
 
         match code {
             KeyCode::Char('q') | KeyCode::Esc | KeyCode::Enter => {
@@ -1773,24 +1892,24 @@ impl App {
             }
             KeyCode::Char('h') | KeyCode::Left => {
                 if let Some(s) = self.table_modal.as_mut() {
-                    s.h_scroll = s.h_scroll.saturating_sub(1);
+                    s.h_scroll = prev_col_boundary(&s.natural_widths, s.h_scroll);
                 }
             }
             KeyCode::Char('l') | KeyCode::Right => {
                 if let Some(s) = self.table_modal.as_mut() {
                     let max = max_h_scroll(s, view_height);
-                    s.h_scroll = (s.h_scroll + 1).min(max);
+                    s.h_scroll = next_col_boundary(&s.natural_widths, s.h_scroll, max);
                 }
             }
             KeyCode::Char('H') => {
                 if let Some(s) = self.table_modal.as_mut() {
-                    s.h_scroll = s.h_scroll.saturating_sub(10);
+                    s.h_scroll = s.h_scroll.saturating_sub(inner_width / 2);
                 }
             }
             KeyCode::Char('L') => {
                 if let Some(s) = self.table_modal.as_mut() {
                     let max = max_h_scroll(s, view_height);
-                    s.h_scroll = (s.h_scroll + 10).min(max);
+                    s.h_scroll = s.h_scroll.saturating_add(inner_width / 2).min(max);
                 }
             }
             KeyCode::Char('j') | KeyCode::Down => {
@@ -1844,6 +1963,9 @@ mod tests {
     use crate::markdown::{CellSpans, MermaidBlockId, TableBlock, TableBlockId};
     use crate::mermaid::{DEFAULT_MERMAID_HEIGHT, MermaidEntry};
     use crate::ui::markdown_view::TableLayout;
+    // `MouseEvent` is not pulled in by `use super::*`; the others (KeyModifiers,
+    // MouseButton, MouseEventKind) are already in scope from the parent module.
+    use crossterm::event::MouseEvent;
     use ratatui::text::{Line, Span, Text};
     use std::cell::Cell;
 
@@ -2008,6 +2130,148 @@ mod tests {
         let cache = empty_mermaid_cache();
         let result = collect_match_lines(&blocks, &layouts, &cache, "match_me");
         assert_eq!(result, vec![1]);
+    }
+
+    // ── table modal key / mouse handler tests ───────────────────────────────
+
+    /// Build an `App` with an active `TableModalState` using the given column
+    /// widths and initial scroll positions.  Uses `"."` as the root so it runs
+    /// without a special directory.
+    fn make_app_with_modal(natural_widths: Vec<usize>, h_scroll: u16, v_scroll: u16) -> App {
+        let mut app = App::new(std::path::PathBuf::from("."));
+        app.table_modal = Some(TableModalState {
+            tab_id: crate::ui::tabs::TabId(0),
+            h_scroll,
+            v_scroll,
+            headers: vec![],
+            rows: vec![],
+            alignments: vec![],
+            natural_widths,
+        });
+        app.focus = Focus::TableModal;
+        app
+    }
+
+    #[test]
+    fn h_key_snaps_to_prev_column_boundary() {
+        // widths [10, 20, 15] → boundaries [0, 13, 36]
+        // From 17 (inside col 1 which starts at 13), h snaps back to 13.
+        let mut app = make_app_with_modal(vec![10, 20, 15], 17, 0);
+        app.handle_table_modal_key(KeyCode::Char('h'));
+        assert_eq!(app.table_modal.as_ref().unwrap().h_scroll, 13);
+    }
+
+    #[test]
+    fn l_key_snaps_to_next_column_boundary() {
+        // From 0, next boundary is 13 (start of col 1).
+        let mut app = make_app_with_modal(vec![10, 20, 15], 0, 0);
+        app.handle_table_modal_key(KeyCode::Char('l'));
+        assert_eq!(app.table_modal.as_ref().unwrap().h_scroll, 13);
+    }
+
+    #[test]
+    fn capital_h_half_page_left() {
+        // inner_width = rect.width - 2 = 42 - 2 = 40; half = 20
+        // h_scroll 50 - 20 = 30
+        let mut app = make_app_with_modal(vec![10, 20, 15], 50, 0);
+        app.table_modal_rect = Some(ratatui::layout::Rect {
+            x: 0,
+            y: 0,
+            width: 42,
+            height: 20,
+        });
+        app.handle_table_modal_key(KeyCode::Char('H'));
+        assert_eq!(app.table_modal.as_ref().unwrap().h_scroll, 30);
+    }
+
+    #[test]
+    fn scroll_wheel_in_modal_scrolls_vertically() {
+        let mut app = make_app_with_modal(vec![10, 20, 15], 0, 0);
+        // Populate the rect so the click registers as "inside".
+        app.table_modal_rect = Some(ratatui::layout::Rect {
+            x: 5,
+            y: 5,
+            width: 80,
+            height: 30,
+        });
+        let m = MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 10,
+            row: 10,
+            modifiers: KeyModifiers::empty(),
+        };
+        app.handle_table_modal_mouse(m);
+        assert_eq!(app.table_modal.as_ref().unwrap().v_scroll, 3);
+    }
+
+    #[test]
+    fn shift_scroll_in_modal_pans_column() {
+        // widths [10, 20, 15] → boundaries [0, 13, 36]; Shift+ScrollDown from 0 → 13
+        let mut app = make_app_with_modal(vec![10, 20, 15], 0, 0);
+        app.table_modal_rect = Some(ratatui::layout::Rect {
+            x: 5,
+            y: 5,
+            width: 80,
+            height: 30,
+        });
+        let m = MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 10,
+            row: 10,
+            modifiers: KeyModifiers::SHIFT,
+        };
+        app.handle_table_modal_mouse(m);
+        assert_eq!(app.table_modal.as_ref().unwrap().h_scroll, 13);
+    }
+
+    #[test]
+    fn click_outside_modal_closes_it() {
+        let mut app = make_app_with_modal(vec![10, 20, 15], 0, 0);
+        app.table_modal_rect = Some(ratatui::layout::Rect {
+            x: 10,
+            y: 10,
+            width: 60,
+            height: 20,
+        });
+        // Click at (5, 5) — outside the rect (which starts at (10, 10)).
+        let m = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 5,
+            row: 5,
+            modifiers: KeyModifiers::empty(),
+        };
+        app.handle_table_modal_mouse(m);
+        assert!(
+            app.table_modal.is_none(),
+            "modal should close on outside click"
+        );
+    }
+
+    #[test]
+    fn click_inside_modal_does_not_close_it() {
+        let mut app = make_app_with_modal(vec![10, 20, 15], 5, 2);
+        app.table_modal_rect = Some(ratatui::layout::Rect {
+            x: 10,
+            y: 10,
+            width: 60,
+            height: 20,
+        });
+        // Click at (15, 15) — inside the rect.
+        let m = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 15,
+            row: 15,
+            modifiers: KeyModifiers::empty(),
+        };
+        app.handle_table_modal_mouse(m);
+        assert!(
+            app.table_modal.is_some(),
+            "modal should stay open on inside click"
+        );
+        // Scroll must not have changed.
+        let s = app.table_modal.as_ref().unwrap();
+        assert_eq!(s.h_scroll, 5);
+        assert_eq!(s.v_scroll, 2);
     }
 
     #[test]

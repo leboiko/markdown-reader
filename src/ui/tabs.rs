@@ -246,14 +246,20 @@ impl Tabs {
         self.previous = current;
     }
 
-    /// Re-render every open tab with the given palette, preserving scroll offsets.
-    pub fn rerender_all(&mut self, palette: &Palette) {
+    /// Re-render every open tab with the given palette and theme, preserving scroll offsets.
+    ///
+    /// # Arguments
+    ///
+    /// * `palette` – color palette for the active UI theme.
+    /// * `theme` – the active UI theme; forwarded to the markdown renderer so
+    ///   fenced code blocks are highlighted with a matching syntect theme.
+    pub fn rerender_all(&mut self, palette: &Palette, theme: crate::theme::Theme) {
         for tab in &mut self.tabs {
             if let Some(path) = tab.view.current_path.clone() {
                 let content = tab.view.content.clone();
                 let name = tab.view.file_name.clone();
                 let scroll = tab.view.scroll_offset;
-                tab.view.load(path, name, content, palette);
+                tab.view.load(path, name, content, palette, theme);
                 tab.view.scroll_offset = scroll.min(tab.view.total_lines.saturating_sub(1));
             }
         }

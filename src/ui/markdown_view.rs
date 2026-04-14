@@ -108,8 +108,24 @@ impl MarkdownViewState {
     }
 
     /// Load a file into the viewer, resetting the scroll position.
-    pub fn load(&mut self, path: PathBuf, file_name: String, content: String, palette: &Palette) {
-        let blocks = crate::markdown::renderer::render_markdown(&content, palette);
+    ///
+    /// # Arguments
+    ///
+    /// * `path`      – filesystem path of the file being loaded.
+    /// * `file_name` – display name shown in the tab bar.
+    /// * `content`   – raw markdown source.
+    /// * `palette` – color palette for the active UI theme.
+    /// * `theme` – the active UI theme; forwarded to the markdown renderer
+    ///   to select the matching syntect highlighting theme for fenced code blocks.
+    pub fn load(
+        &mut self,
+        path: PathBuf,
+        file_name: String,
+        content: String,
+        palette: &Palette,
+        theme: crate::theme::Theme,
+    ) {
+        let blocks = crate::markdown::renderer::render_markdown(&content, palette, theme);
         self.total_lines = blocks.iter().map(|b| b.height()).sum();
         self.rendered = blocks;
         self.recompute_positions();

@@ -42,6 +42,25 @@ impl Theme {
             Theme::GithubLight => "GitHub Light",
         }
     }
+
+    /// Name of the bundled syntect theme to use for syntax highlighting when
+    /// this UI theme is active.
+    ///
+    /// The returned string is always a key present in
+    /// [`syntect::highlighting::ThemeSet::load_defaults`]'s output:
+    /// - `"base16-ocean.dark"`
+    /// - `"base16-eighties.dark"`
+    /// - `"InspiredGitHub"`
+    ///
+    /// The exhaustive match (no `_` wildcard) ensures the compiler forces an
+    /// update here whenever a new [`Theme`] variant is added.
+    pub fn syntax_theme_name(self) -> &'static str {
+        match self {
+            Theme::Default | Theme::SolarizedDark | Theme::Nord => "base16-ocean.dark",
+            Theme::Dracula | Theme::GruvboxDark => "base16-eighties.dark",
+            Theme::SolarizedLight | Theme::GruvboxLight | Theme::GithubLight => "InspiredGitHub",
+        }
+    }
 }
 
 /// Concrete color values for one theme, threaded through every renderer.
@@ -200,40 +219,40 @@ impl Palette {
             },
             Theme::SolarizedLight => Self {
                 // Ethan Schoonover's Solarized Light: https://ethanschoonover.com/solarized/
-                background: Color::Rgb(253, 246, 227),    // base3
-                foreground: Color::Rgb(101, 123, 131),    // base00
-                dim: Color::Rgb(147, 161, 161),           // base1
-                border: Color::Rgb(238, 232, 213),        // base2
+                background: Color::Rgb(253, 246, 227), // base3
+                foreground: Color::Rgb(101, 123, 131), // base00
+                dim: Color::Rgb(147, 161, 161),        // base1
+                border: Color::Rgb(238, 232, 213),     // base2
                 border_focused: Color::Rgb(38, 139, 210), // blue
-                accent: Color::Rgb(38, 139, 210),         // blue
-                accent_alt: Color::Rgb(181, 137, 0),      // yellow
-                selection_bg: Color::Rgb(238, 232, 213),  // base2
-                selection_fg: Color::Rgb(88, 110, 117),   // base01
-                title: Color::Rgb(88, 110, 117),          // base01
-                h1: Color::Rgb(203, 75, 22),              // orange
-                h2: Color::Rgb(38, 139, 210),             // blue
-                h3: Color::Rgb(42, 161, 152),             // cyan
-                heading_other: Color::Rgb(88, 110, 117),  // base01
-                inline_code: Color::Rgb(133, 153, 0),     // green
-                code_fg: Color::Rgb(101, 123, 131),       // base00
-                code_bg: Color::Rgb(238, 232, 213),       // base2
-                code_border: Color::Rgb(147, 161, 161),   // base1
-                link: Color::Rgb(38, 139, 210),           // blue
-                list_marker: Color::Rgb(181, 137, 0),     // yellow
-                task_marker: Color::Rgb(42, 161, 152),    // cyan
+                accent: Color::Rgb(38, 139, 210),      // blue
+                accent_alt: Color::Rgb(181, 137, 0),   // yellow
+                selection_bg: Color::Rgb(238, 232, 213), // base2
+                selection_fg: Color::Rgb(88, 110, 117), // base01
+                title: Color::Rgb(88, 110, 117),       // base01
+                h1: Color::Rgb(203, 75, 22),           // orange
+                h2: Color::Rgb(38, 139, 210),          // blue
+                h3: Color::Rgb(42, 161, 152),          // cyan
+                heading_other: Color::Rgb(88, 110, 117), // base01
+                inline_code: Color::Rgb(133, 153, 0),  // green
+                code_fg: Color::Rgb(101, 123, 131),    // base00
+                code_bg: Color::Rgb(238, 232, 213),    // base2
+                code_border: Color::Rgb(147, 161, 161), // base1
+                link: Color::Rgb(38, 139, 210),        // blue
+                list_marker: Color::Rgb(181, 137, 0),  // yellow
+                task_marker: Color::Rgb(42, 161, 152), // cyan
                 block_quote_fg: Color::Rgb(147, 161, 161),
                 block_quote_border: Color::Rgb(147, 161, 161),
-                table_header: Color::Rgb(203, 75, 22),    // orange
-                table_border: Color::Rgb(147, 161, 161),  // base1
+                table_header: Color::Rgb(203, 75, 22), // orange
+                table_border: Color::Rgb(147, 161, 161), // base1
                 search_match_bg: Color::Rgb(181, 137, 0), // yellow
                 current_match_bg: Color::Rgb(203, 75, 22), // orange
-                match_fg: Color::Rgb(253, 246, 227),      // base3
-                gutter: Color::Rgb(147, 161, 161),        // base1
+                match_fg: Color::Rgb(253, 246, 227),   // base3
+                gutter: Color::Rgb(147, 161, 161),     // base1
                 status_bar_bg: Color::Rgb(238, 232, 213), // base2
                 status_bar_fg: Color::Rgb(101, 123, 131), // base00
-                help_bg: Color::Rgb(238, 232, 213),       // base2
-                git_new: Color::Rgb(133, 153, 0),         // green
-                git_modified: Color::Rgb(181, 137, 0),    // yellow
+                help_bg: Color::Rgb(238, 232, 213),    // base2
+                git_new: Color::Rgb(133, 153, 0),      // green
+                git_modified: Color::Rgb(181, 137, 0), // yellow
             },
             Theme::Nord => Self {
                 // Arctic, north-bluish color palette: https://www.nordtheme.com/docs/colors-and-palettes
@@ -311,40 +330,40 @@ impl Palette {
             },
             Theme::GruvboxLight => Self {
                 // Gruvbox Light: https://github.com/morhetz/gruvbox
-                background: Color::Rgb(251, 241, 199),    // bg  #fbf1c7
-                foreground: Color::Rgb(60, 56, 54),       // fg  #3c3836
-                dim: Color::Rgb(146, 131, 116),           // gray #928374
-                border: Color::Rgb(213, 196, 161),        // bg2 #d5c4a1
-                border_focused: Color::Rgb(214, 93, 14),  // orange
-                accent: Color::Rgb(215, 153, 33),         // yellow #d79921
-                accent_alt: Color::Rgb(152, 151, 26),     // green #98971a
-                selection_bg: Color::Rgb(235, 219, 178),  // bg1 #ebdbb2
-                selection_fg: Color::Rgb(60, 56, 54),     // fg
+                background: Color::Rgb(251, 241, 199), // bg  #fbf1c7
+                foreground: Color::Rgb(60, 56, 54),    // fg  #3c3836
+                dim: Color::Rgb(146, 131, 116),        // gray #928374
+                border: Color::Rgb(213, 196, 161),     // bg2 #d5c4a1
+                border_focused: Color::Rgb(214, 93, 14), // orange
+                accent: Color::Rgb(215, 153, 33),      // yellow #d79921
+                accent_alt: Color::Rgb(152, 151, 26),  // green #98971a
+                selection_bg: Color::Rgb(235, 219, 178), // bg1 #ebdbb2
+                selection_fg: Color::Rgb(60, 56, 54),  // fg
                 title: Color::Rgb(60, 56, 54),
-                h1: Color::Rgb(204, 36, 29),              // red #cc241d
-                h2: Color::Rgb(215, 153, 33),             // yellow
-                h3: Color::Rgb(152, 151, 26),             // green
+                h1: Color::Rgb(204, 36, 29),  // red #cc241d
+                h2: Color::Rgb(215, 153, 33), // yellow
+                h3: Color::Rgb(152, 151, 26), // green
                 heading_other: Color::Rgb(60, 56, 54),
-                inline_code: Color::Rgb(177, 98, 134),    // purple #b16286
+                inline_code: Color::Rgb(177, 98, 134), // purple #b16286
                 code_fg: Color::Rgb(60, 56, 54),
-                code_bg: Color::Rgb(235, 219, 178),       // bg1
-                code_border: Color::Rgb(213, 196, 161),   // bg2
-                link: Color::Rgb(69, 133, 136),           // blue #458588
-                list_marker: Color::Rgb(215, 153, 33),    // yellow
-                task_marker: Color::Rgb(104, 157, 106),   // aqua #689d6a
+                code_bg: Color::Rgb(235, 219, 178),     // bg1
+                code_border: Color::Rgb(213, 196, 161), // bg2
+                link: Color::Rgb(69, 133, 136),         // blue #458588
+                list_marker: Color::Rgb(215, 153, 33),  // yellow
+                task_marker: Color::Rgb(104, 157, 106), // aqua #689d6a
                 block_quote_fg: Color::Rgb(146, 131, 116),
                 block_quote_border: Color::Rgb(213, 196, 161),
-                table_header: Color::Rgb(214, 93, 14),    // orange
-                table_border: Color::Rgb(213, 196, 161),  // bg2
+                table_header: Color::Rgb(214, 93, 14), // orange
+                table_border: Color::Rgb(213, 196, 161), // bg2
                 search_match_bg: Color::Rgb(215, 153, 33), // yellow
                 current_match_bg: Color::Rgb(214, 93, 14), // orange
-                match_fg: Color::Rgb(251, 241, 199),      // bg
-                gutter: Color::Rgb(146, 131, 116),        // gray
+                match_fg: Color::Rgb(251, 241, 199),   // bg
+                gutter: Color::Rgb(146, 131, 116),     // gray
                 status_bar_bg: Color::Rgb(235, 219, 178), // bg1
-                status_bar_fg: Color::Rgb(80, 73, 69),    // fg1 #504945
-                help_bg: Color::Rgb(235, 219, 178),       // bg1
-                git_new: Color::Rgb(152, 151, 26),        // green
-                git_modified: Color::Rgb(215, 153, 33),   // yellow
+                status_bar_fg: Color::Rgb(80, 73, 69), // fg1 #504945
+                help_bg: Color::Rgb(235, 219, 178),    // bg1
+                git_new: Color::Rgb(152, 151, 26),     // green
+                git_modified: Color::Rgb(215, 153, 33), // yellow
             },
             Theme::GithubLight => Self {
                 // GitHub Light: https://primer.style/primitives/colors

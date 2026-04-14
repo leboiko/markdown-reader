@@ -12,7 +12,10 @@ use ratatui::{
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Render the table modal overlay.
-pub fn draw(f: &mut Frame, app: &App) {
+///
+/// Caches `popup` into `app.table_modal_rect` each frame so the mouse handler
+/// can do hit-testing without re-computing the layout.
+pub fn draw(f: &mut Frame, app: &mut App) {
     let state = match &app.table_modal {
         Some(s) => s,
         None => return,
@@ -21,12 +24,14 @@ pub fn draw(f: &mut Frame, app: &App) {
 
     let area = f.area();
     let popup = centered_pct(90, 90, area);
+    // Cache for mouse hit-testing (see `handle_table_modal_mouse`).
+    app.table_modal_rect = Some(popup);
     f.render_widget(Clear, popup);
 
     let num_cols = state.natural_widths.len();
 
     let title = format!(
-        " Table  {} col{}  h/l pan  H/L pan 10  q/Esc close ",
+        " Table  {} col{}  h/l col  H/L \u{00bd}pg  q/Esc close ",
         num_cols,
         if num_cols == 1 { "" } else { "s" },
     );
@@ -81,7 +86,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     // Footer with scroll info.
     let total_rendered = rendered.lines.len();
     let footer_text = format!(
-        " row {}/{} \u{2502} col {}/{} \u{2502} j/k scroll  d/u half-page  g/G top/bot  0/$ h-pan ",
+        " row {}/{} \u{2502} col {}/{} \u{2502} j/k scroll  d/u \u{00bd}pg  g/G top/bot  0/$ h-pan  h/l col ",
         v_scroll.saturating_add(1).min(total_rendered),
         total_rendered,
         h_scroll,
@@ -495,6 +500,73 @@ pub fn max_h_scroll(state: &TableModalState, visible_width: u16) -> u16 {
     (total_table_width.saturating_sub(visible_width as usize)) as u16
 }
 
+/// Return the column-start offsets (in display columns) for each column.
+///
+/// Each column occupies `width + 3` display columns: one leading space, the
+/// cell content, one trailing space, and one border character. This matches
+/// the formula used by [`max_h_scroll`].
+///
+/// The returned slice contains one entry per column. Offset `0` is the leading
+/// outer border, so column `i` starts at `sum(widths[0..i]) + i * 3`.
+fn col_boundaries(widths: &[usize]) -> Vec<u16> {
+    let mut offsets = Vec::with_capacity(widths.len());
+    let mut acc: usize = 0;
+    for &w in widths {
+        offsets.push(acc as u16);
+        // Each column occupies: 1 leading space + w content + 1 trailing space
+        // + 1 border = w + 3 display columns.
+        acc += w + 3;
+    }
+    offsets
+}
+
+/// Snap `h_scroll` to the start of the previous column.
+///
+/// Finds the largest column-start offset strictly less than `h_scroll` and
+/// returns it. If `h_scroll` is already at or before the first boundary (0),
+/// returns 0.
+///
+/// # Examples
+///
+/// ```
+/// // widths [10, 20, 15] → boundaries [0, 13, 36]
+/// // From 17 (inside col 1, which starts at 13), previous boundary is 13.
+/// assert_eq!(prev_col_boundary(&[10, 20, 15], 17), 13);
+/// // From 13 exactly, previous boundary is 0 (start of col 0).
+/// assert_eq!(prev_col_boundary(&[10, 20, 15], 13), 0);
+/// // From 0 there is no earlier boundary — stays at 0.
+/// assert_eq!(prev_col_boundary(&[10, 20, 15], 0), 0);
+/// ```
+pub fn prev_col_boundary(widths: &[usize], h_scroll: u16) -> u16 {
+    // rfind on the sorted boundary list returns the last boundary strictly less
+    // than h_scroll, which is the start of the column we are currently inside.
+    col_boundaries(widths)
+        .into_iter()
+        .rfind(|&b| b < h_scroll)
+        .unwrap_or(0)
+}
+
+/// Snap `h_scroll` to the start of the next column, clamped to `max`.
+///
+/// Finds the smallest column-start offset strictly greater than `h_scroll` and
+/// returns it, clamped to `max`. If there is no such boundary, returns `max`.
+///
+/// # Examples
+///
+/// ```
+/// // widths [10, 20, 15] → boundaries [0, 13, 36]
+/// assert_eq!(next_col_boundary(&[10, 20, 15], 0, 100), 13);
+/// assert_eq!(next_col_boundary(&[10, 20, 15], 36, 100), 100);
+/// ```
+pub fn next_col_boundary(widths: &[usize], h_scroll: u16, max: u16) -> u16 {
+    col_boundaries(widths)
+        .into_iter()
+        // Strictly greater than current position.
+        .find(|&b| b > h_scroll)
+        .unwrap_or(max)
+        .min(max)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -650,5 +722,40 @@ mod tests {
     fn slice_row_exact_visible_width() {
         let row = "12345678";
         assert_eq!(slice_row(row, 2, 4), "3456");
+    }
+
+    // ── column boundary helper tests ─────────────────────────────────────────
+
+    /// widths [10, 20, 15] produce boundaries [0, 13, 36]:
+    ///   col 0 starts at 0
+    ///   col 1 starts at 10 + 3 = 13
+    ///   col 2 starts at 13 + 20 + 3 = 36
+    #[test]
+    fn prev_col_boundary_jumps_to_start_of_current_column() {
+        let widths = [10usize, 20, 15];
+        // From 17 (inside col 1, which starts at 13), largest boundary < 17 is 13.
+        assert_eq!(prev_col_boundary(&widths, 17), 13);
+        // From 13 exactly (on a boundary), largest boundary < 13 is 0 (start of col 0).
+        assert_eq!(prev_col_boundary(&widths, 13), 0);
+        // From 0 there is no earlier boundary — stays at 0.
+        assert_eq!(prev_col_boundary(&widths, 0), 0);
+    }
+
+    #[test]
+    fn next_col_boundary_jumps_past_current_column() {
+        let widths = [10usize, 20, 15];
+        // From 0, the next boundary is 13 (start of col 1).
+        assert_eq!(next_col_boundary(&widths, 0, 200), 13);
+        // From 36 (last boundary), no further boundary → clamp to max.
+        assert_eq!(next_col_boundary(&widths, 36, 100), 100);
+        // From 13, the next boundary is 36 (start of col 2).
+        assert_eq!(next_col_boundary(&widths, 13, 200), 36);
+    }
+
+    #[test]
+    fn boundary_helpers_handle_empty_widths() {
+        // No columns → no movement in either direction.
+        assert_eq!(prev_col_boundary(&[], 5), 0);
+        assert_eq!(next_col_boundary(&[], 5, 50), 50);
     }
 }

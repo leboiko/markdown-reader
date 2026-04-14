@@ -7,13 +7,14 @@ use ratatui::{
     text::{Line, Span, Text},
 };
 use std::cell::Cell;
+use unicode_width::UnicodeWidthStr;
 
 use crate::markdown::{
     CellSpans, DocBlock, HeadingAnchor, LinkInfo, MermaidBlockId, TableBlock, TableBlockId,
-    cell_display_width, cell_to_string, heading_to_anchor,
+    cell_display_width, cell_to_string, heading_to_anchor, highlight::highlight_code,
 };
 use crate::mermaid::DEFAULT_MERMAID_HEIGHT;
-use crate::theme::Palette;
+use crate::theme::{Palette, Theme};
 
 /// Render a markdown string into a sequence of [`DocBlock`] values.
 ///
@@ -25,10 +26,17 @@ use crate::theme::Palette;
 /// slices whose `line` fields are relative to the block's start. Callers
 /// convert them to absolute display lines by adding the block's cumulative
 /// offset (see `MarkdownViewState::load`).
-pub fn render_markdown(content: &str, palette: &Palette) -> Vec<DocBlock> {
+///
+/// # Arguments
+///
+/// * `content` – raw markdown source.
+/// * `palette` – color palette for the active UI theme.
+/// * `theme` – the active UI theme; used to select the matching syntect
+///   highlighting theme for fenced code blocks.
+pub fn render_markdown(content: &str, palette: &Palette, theme: Theme) -> Vec<DocBlock> {
     let opts = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
     let parser = Parser::new_ext(content, opts);
-    let renderer = MdRenderer::new(palette);
+    let renderer = MdRenderer::new(palette, theme);
     renderer.render(parser)
 }
 
@@ -82,10 +90,13 @@ struct MdRenderer {
     block_quote_fg: Color,
     block_quote_border: Color,
     dim: Color,
+    /// Syntect theme name corresponding to the active UI theme. Used to
+    /// resolve the correct token colors when highlighting fenced code blocks.
+    syntax_theme_name: &'static str,
 }
 
 impl MdRenderer {
-    fn new(palette: &Palette) -> Self {
+    fn new(palette: &Palette, theme: Theme) -> Self {
         Self {
             lines: Vec::new(),
             blocks: Vec::new(),
@@ -124,6 +135,7 @@ impl MdRenderer {
             block_quote_fg: palette.block_quote_fg,
             block_quote_border: palette.block_quote_border,
             dim: palette.dim,
+            syntax_theme_name: theme.syntax_theme_name(),
         }
     }
 
@@ -472,31 +484,82 @@ impl MdRenderer {
     }
 
     fn render_code_block(&mut self) {
-        let code_style = Style::default().fg(self.code_fg).bg(self.code_bg);
         let border_style = Style::default().fg(self.code_border);
 
+        // Widths are measured in display cells, not bytes, so that lines
+        // containing multi-byte characters (em dashes, CJK, emoji, …) align
+        // with the box frame drawn around them.
         let max_width = self
             .code_block_content
             .iter()
-            .map(|l| l.len())
+            .map(|l| UnicodeWidthStr::width(l.as_str()))
             .max()
             .unwrap_or(0)
             .max(20);
         let inner_width = max_width + 1;
 
+        // Join lines with newlines so syntect sees a complete source text.
+        // highlight_code returns one TokenLine per source line.
+        let source = self.code_block_content.join("\n");
+        let token_lines = highlight_code(
+            &source,
+            self.code_block_lang.as_deref(),
+            self.syntax_theme_name,
+            self.code_fg,
+            self.code_bg,
+        );
+
         self.push_blank_line();
+
+        // Top border — single styled span, unchanged from original.
         self.lines.push(Line::from(Span::styled(
             format!("╭{}╮", "─".repeat(inner_width + 1)),
             border_style,
         )));
 
-        for line in &self.code_block_content {
-            self.lines.push(Line::from(Span::styled(
-                format!("│ {:<inner_width$}│", line),
-                code_style,
-            )));
+        // One rendered line per source line.
+        // Layout per line (matching the original single-span format):
+        //   "│ " <highlighted tokens padded to inner_width> "│"
+        //
+        // The tokens together have `line.len()` visible bytes.  We pad the gap
+        // between the last token and the right border with spaces using the
+        // same background color, so the box aligns regardless of token count.
+        for (src_line, token_line) in self.code_block_content.iter().zip(token_lines.iter()) {
+            let line_width = UnicodeWidthStr::width(src_line.as_str());
+            let pad_len = inner_width.saturating_sub(line_width);
+
+            let mut spans: Vec<Span<'static>> = Vec::with_capacity(token_line.len() + 3);
+
+            // Left border + leading space (border color for `│`, code_bg for
+            // the space so it blends with the token background).
+            spans.push(Span::styled(
+                "│ ".to_string(),
+                Style::default().fg(self.code_border).bg(self.code_bg),
+            ));
+
+            // Syntax-highlighted token spans.
+            for (text, style) in token_line {
+                spans.push(Span::styled(text.clone(), *style));
+            }
+
+            // Padding to align right border.
+            if pad_len > 0 {
+                spans.push(Span::styled(
+                    " ".repeat(pad_len),
+                    Style::default().bg(self.code_bg),
+                ));
+            }
+
+            // Right border.
+            spans.push(Span::styled(
+                "│".to_string(),
+                Style::default().fg(self.code_border).bg(self.code_bg),
+            ));
+
+            self.lines.push(Line::from(spans));
         }
 
+        // Bottom border — single styled span, unchanged from original.
         self.lines.push(Line::from(Span::styled(
             format!("╰{}╯", "─".repeat(inner_width + 1)),
             border_style,
@@ -574,4 +637,185 @@ fn hash_bytes(b: &[u8]) -> u64 {
     let mut h = DefaultHasher::new();
     b.hash(&mut h);
     h.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::theme::Theme;
+
+    fn default_palette() -> Palette {
+        Palette::from_theme(Theme::Default)
+    }
+
+    /// Helper: render a fenced code block and extract all rendered lines
+    /// (including borders) from the first Text block.
+    fn render_code_block_lines(lang: &str, code: &str) -> Vec<Line<'static>> {
+        let md = format!("```{lang}\n{code}\n```\n");
+        let blocks = render_markdown(&md, &default_palette(), Theme::Default);
+        match blocks
+            .into_iter()
+            .find(|b| matches!(b, DocBlock::Text { .. }))
+        {
+            Some(DocBlock::Text { text, .. }) => text.lines,
+            _ => panic!("expected a Text block"),
+        }
+    }
+
+    /// A Rust fenced code block must produce content lines that contain more
+    /// than one span with distinct foreground colors, confirming that
+    /// highlighting was applied.
+    #[test]
+    fn rust_code_block_spans_have_distinct_colors() {
+        let lines = render_code_block_lines("rust", "let x: i32 = 42;");
+
+        // Skip blank lines and border lines; find the first content line.
+        let content_line = lines.iter().find(|l| {
+            let text: String = l.spans.iter().map(|s| s.content.as_ref()).collect();
+            text.starts_with("│ ") && !text.starts_with("│ ─") && text.contains("let")
+        });
+
+        let content_line = content_line.expect("expected a content line containing 'let'");
+        assert!(
+            content_line.spans.len() > 2,
+            "expected more than 2 spans on a highlighted Rust line, got {}",
+            content_line.spans.len(),
+        );
+
+        let colors: std::collections::HashSet<ratatui::style::Color> = content_line
+            .spans
+            .iter()
+            .filter_map(|s| s.style.fg)
+            // Exclude border spans (code_border color).
+            .filter(|c| *c != default_palette().code_border)
+            .collect();
+        assert!(
+            colors.len() > 1,
+            "expected multiple distinct token colors on a Rust line, got {colors:?}",
+        );
+    }
+
+    /// A fenced block with no language tag must produce content lines that have
+    /// a single foreground color (plain-text fallback).
+    #[test]
+    fn no_language_code_block_is_single_color() {
+        let lines = render_code_block_lines("", "hello world\nsome code");
+
+        let content_lines: Vec<&Line<'static>> = lines
+            .iter()
+            .filter(|l| {
+                let text: String = l.spans.iter().map(|s| s.content.as_ref()).collect();
+                // Content lines start with "│ " but are not box borders.
+                text.starts_with("│ ") && !text.starts_with("╭") && !text.starts_with("╰")
+            })
+            .collect();
+
+        assert!(!content_lines.is_empty(), "expected content lines");
+
+        for line in content_lines {
+            // Collect token-span colors (excluding border characters).
+            let colors: std::collections::HashSet<ratatui::style::Color> = line
+                .spans
+                .iter()
+                .filter(|s| !s.content.contains('│'))
+                .filter_map(|s| s.style.fg)
+                .collect();
+            assert!(
+                colors.len() <= 1,
+                "expected at most one token color for plain-text fallback, got {colors:?}",
+            );
+        }
+    }
+
+    /// An unknown language tag must not panic and must produce output.
+    #[test]
+    fn unknown_language_does_not_panic() {
+        let lines = render_code_block_lines("notalang", "some code here");
+        assert!(
+            !lines.is_empty(),
+            "expected rendered lines for unknown language",
+        );
+    }
+
+    /// The right border `│` must be at the same visual column position as it
+    /// would be in the old single-span rendering, for a known ASCII input.
+    ///
+    /// With `max_width = max(len("hello world"), 20) = 20` and
+    /// `inner_width = 21`, the full line is:
+    ///   "│ " + 21 chars padded + "│"  = 2 + 21 + 1 = 24 chars.
+    #[test]
+    fn right_border_aligns_at_expected_column() {
+        let lines = render_code_block_lines("", "hello world");
+
+        // Find the first content line (not blank, not top/bottom border).
+        let content_line = lines.iter().find(|l| {
+            let text: String = l.spans.iter().map(|s| s.content.as_ref()).collect();
+            text.starts_with("│ ") && !text.starts_with("╭") && !text.starts_with("╰")
+        });
+
+        let content_line = content_line.expect("expected a content line");
+
+        // Concatenate all span text to get the full rendered line.
+        let full_text: String = content_line
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+
+        // inner_width = max(11, 20) + 1 = 21; full line = "│ " + 21 chars + "│"
+        let expected_len = 2 + 21 + 1; // = 24
+        assert_eq!(
+            full_text.chars().count(),
+            expected_len,
+            "expected line length {expected_len}, got {} for line: {full_text:?}",
+            full_text.chars().count(),
+        );
+        assert!(
+            full_text.ends_with('│'),
+            "line must end with right border '│': {full_text:?}",
+        );
+    }
+
+    /// Multi-byte characters (em dash is 3 bytes / 1 display cell) must not
+    /// shift the right border: every content line in a mixed-width block must
+    /// have the same display width, measured in cells.
+    #[test]
+    fn right_border_aligns_with_multi_byte_chars() {
+        use unicode_width::UnicodeWidthStr;
+
+        // One ASCII line and one em-dash line; the ASCII line is longer in
+        // cells so it determines `max_width`.
+        let src = "hello world this is a long line\n    /// short — comment";
+        let lines = render_code_block_lines("", src);
+
+        let content_lines: Vec<&Line<'static>> = lines
+            .iter()
+            .filter(|l| {
+                let text: String = l.spans.iter().map(|s| s.content.as_ref()).collect();
+                text.starts_with("│ ") && !text.starts_with("╭") && !text.starts_with("╰")
+            })
+            .collect();
+
+        assert!(
+            content_lines.len() >= 2,
+            "expected at least two content lines, got {}",
+            content_lines.len(),
+        );
+
+        let widths: Vec<usize> = content_lines
+            .iter()
+            .map(|l| {
+                let text: String = l.spans.iter().map(|s| s.content.as_ref()).collect();
+                UnicodeWidthStr::width(text.as_str())
+            })
+            .collect();
+
+        let first = widths[0];
+        for (i, w) in widths.iter().enumerate() {
+            assert_eq!(
+                *w, first,
+                "line {i} has display width {w}, expected {first} (right border misaligned)",
+            );
+        }
+    }
 }
