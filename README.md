@@ -38,6 +38,11 @@ drawn on the left of the viewer content when enabled.
   vim-style `gt`/`gT`, jump by number (`1`–`9`, `0` for last), close with
   `x`, and use `T` for a full tab picker overlay. Duplicate opens focus the
   existing tab instead of piling up.
+- **Syntax highlighting for fenced code blocks** — rust, python, javascript,
+  go, json, bash, and many more are tokenised and colored inline via
+  [syntect](https://crates.io/crates/syntect) with a pure-Rust regex backend
+  (no C dependencies, no build-time grammars). Colors follow the active UI
+  theme.
 - **Mermaid diagram rendering** — fenced ```` ```mermaid ```` blocks are
   rasterized in pure Rust (no Node, no Chromium) and displayed inline as
   real images using the Kitty graphics protocol, Sixel, iTerm2 inline
@@ -48,8 +53,10 @@ drawn on the left of the viewer content when enabled.
   widths that always fit the viewer, with overlong cells truncated to
   `…`. When truncation happens, a `[press ⏎ to expand full table]` hint
   appears below the table. Press `Enter` anywhere a table is visible to
-  open a full-screen modal that shows every cell at natural width with
-  horizontal and vertical panning.
+  open a full-screen modal that shows every cell at natural width.
+  The modal supports column-boundary panning (`h`/`l` snap to the next
+  column, `H`/`L` half-page pan), mouse scroll wheel (plain for rows,
+  `Shift`+wheel for columns), and click-outside-to-close.
 - **Themes** — six built-in palettes (Default, Dracula, Solarized Dark,
   Nord, Gruvbox Dark, GitHub Light). Switch live from the settings modal;
   every open document re-renders with the new colors.
