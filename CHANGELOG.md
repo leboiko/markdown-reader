@@ -5,6 +5,35 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-04-15
+
+### Fixed
+- **Doc-search navigation now moves the viewer cursor.** `n`/`N` and the
+  auto-jump to the first match were mutating `scroll_offset` directly,
+  leaving `cursor_line` stranded at its old position. Press `j`/`k`
+  after `n` now moves the cursor from the match row, as expected.
+- **Cursor highlight no longer disappears over tables and mermaid
+  blocks.** The highlight code now runs for `DocBlock::Text`,
+  `DocBlock::Table`, and the source-text fallback of `DocBlock::Mermaid`
+  via a shared `patch_cursor_highlight()` helper. Mermaid blocks in
+  image mode render a 1-row background bar beneath the image so the
+  cursor is still visible around the image padding.
+- **Entering edit mode inside a table or mermaid block lands on the
+  correct source line.** `source_line_at` previously returned only the
+  block's opening line, so `i` from the middle of a 20-row table dropped
+  you on the header. Tables now track per-row source lines via a new
+  `TableBlock::row_source_lines` vector populated from
+  pulldown-cmark's `OffsetIter`. Mermaid blocks interpolate as
+  `fence + 1 + K`, clamped to the content length — same pattern code
+  blocks already use for their content rows.
+
+### Added
+- **Cursor position in the viewer status bar.** The status bar now
+  shows `(cursor_line / total_lines, percentage)` instead of the old
+  scroll-based percentage, so `d`/`u`/`gg`/`G`/`PageDown`/`PageUp`
+  navigation is reflected immediately even when the cursor stays
+  on-screen.
+
 ## [1.2.0] - 2026-04-15
 
 ### Added
