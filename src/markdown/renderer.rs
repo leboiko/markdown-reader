@@ -1,6 +1,8 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
+use std::ops::Range;
+
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use ratatui::{
     style::{Color, Modifier, Style},
@@ -27,6 +29,10 @@ use crate::theme::{Palette, Theme};
 /// convert them to absolute display lines by adding the block's cumulative
 /// offset (see `MarkdownViewState::load`).
 ///
+/// Each rendered logical line also carries a 0-indexed source line derived from
+/// pulldown-cmark's byte-offset spans, enabling the viewer cursor to map back
+/// to the exact source line when entering edit mode.
+///
 /// # Arguments
 ///
 /// * `content` – raw markdown source.
@@ -37,7 +43,34 @@ pub fn render_markdown(content: &str, palette: &Palette, theme: Theme) -> Vec<Do
     let opts = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
     let parser = Parser::new_ext(content, opts);
     let renderer = MdRenderer::new(palette, theme);
-    renderer.render(parser)
+    renderer.render(content, parser)
+}
+
+/// Pre-compute line-start byte offsets for `content`.
+///
+/// `line_boundaries[i]` is the byte offset where line `i` starts (0-indexed).
+/// There is always at least one entry: `line_boundaries[0] == 0`.
+fn build_line_boundaries(content: &str) -> Vec<usize> {
+    let mut boundaries = vec![0];
+    for (i, b) in content.as_bytes().iter().enumerate() {
+        if *b == b'\n' {
+            boundaries.push(i + 1);
+        }
+    }
+    boundaries
+}
+
+/// Given a byte offset into the source, return the 0-indexed source line.
+///
+/// Uses a binary search into the pre-computed `boundaries` slice.
+fn byte_offset_to_line(offset: usize, boundaries: &[usize]) -> u32 {
+    match boundaries.binary_search(&offset) {
+        // Exact match: the offset is itself the start of a line.
+        Ok(i) => i as u32,
+        // No exact match: `i` is the insertion point — the line that started
+        // before `offset` is at index `i - 1`.
+        Err(i) => i.saturating_sub(1) as u32,
+    }
 }
 
 // ── Internal renderer ────────────────────────────────────────────────────────
@@ -93,6 +126,25 @@ struct MdRenderer {
     /// Syntect theme name corresponding to the active UI theme. Used to
     /// resolve the correct token colors when highlighting fenced code blocks.
     syntax_theme_name: &'static str,
+
+    // ── Source-line tracking ─────────────────────────────────────────────────
+    /// Start byte offset of each source line: `line_boundaries[i]` is the byte
+    /// offset where line `i` begins. Built once from `content` at render start.
+    line_boundaries: Vec<usize>,
+    /// 0-indexed source line of the most-recently processed event.
+    /// Updated before dispatching each `(event, span)` pair.
+    current_source_line: u32,
+    /// Parallel to `self.lines` — one entry per rendered logical line.
+    /// Invariant: `current_source_lines.len() == lines.len()` after every
+    /// `flush_line` / `push_blank_line` call.
+    current_source_lines: Vec<u32>,
+    /// Byte offset of the opening fence of the current code block.
+    /// Set on `Start(Tag::CodeBlock)` from `span.start`.
+    code_block_fence_offset: Option<usize>,
+    /// 0-indexed source line where the current code block's opening fence sits.
+    code_block_start_line: u32,
+    /// 0-indexed source line where the current table's opening row sits.
+    table_start_line: u32,
 }
 
 impl MdRenderer {
@@ -136,6 +188,12 @@ impl MdRenderer {
             block_quote_border: palette.block_quote_border,
             dim: palette.dim,
             syntax_theme_name: theme.syntax_theme_name(),
+            line_boundaries: Vec::new(),
+            current_source_line: 0,
+            current_source_lines: Vec::new(),
+            code_block_fence_offset: None,
+            code_block_start_line: 0,
+            table_start_line: 0,
         }
     }
 
@@ -169,6 +227,8 @@ impl MdRenderer {
         } else {
             self.lines.push(Line::from(spans));
         }
+        // Maintain the parallel source_lines invariant.
+        self.current_source_lines.push(self.current_source_line);
     }
 
     fn push_blank_line(&mut self) {
@@ -176,22 +236,42 @@ impl MdRenderer {
             return;
         }
         self.lines.push(Line::from(""));
+        // Blank lines inherit the source line of the surrounding context.
+        self.current_source_lines.push(self.current_source_line);
     }
 
     /// Drain `self.lines` into a `DocBlock::Text` if there are any pending lines.
     ///
     /// Any links and heading anchors accumulated are moved into the block;
     /// their `line` fields are already relative to this block's start.
+    ///
+    /// Invariant: `source_lines.len() == text.lines.len()` is enforced by a
+    /// debug assertion before pushing the block.
     fn flush_text_block(&mut self) {
         if !self.lines.is_empty() {
             let lines = std::mem::take(&mut self.lines);
+            let source_lines = std::mem::take(&mut self.current_source_lines);
             let links = std::mem::take(&mut self.pending_links);
             let heading_anchors = std::mem::take(&mut self.pending_heading_anchors);
+            // In debug builds, catch any mismatch between rendered lines and
+            // their source-line annotations immediately.
+            debug_assert_eq!(
+                lines.len(),
+                source_lines.len(),
+                "source_lines length {} != lines length {}",
+                source_lines.len(),
+                lines.len(),
+            );
             self.blocks.push(DocBlock::Text {
                 text: Text::from(lines),
                 links,
                 heading_anchors,
+                source_lines,
             });
+        } else {
+            // Drop orphaned source_lines that accumulated without any matching
+            // rendered line (can happen around pure-table sections).
+            self.current_source_lines.clear();
         }
     }
 
@@ -207,10 +287,24 @@ impl MdRenderer {
             .sum()
     }
 
-    fn render(mut self, parser: Parser) -> Vec<DocBlock> {
-        for event in parser {
+    /// Drive the render loop.
+    ///
+    /// `content` is the raw markdown string; it is used to build the
+    /// `line_boundaries` table for byte-offset-to-line translation.
+    /// `parser` is the pulldown-cmark parser constructed from the same string.
+    fn render(mut self, content: &str, parser: Parser) -> Vec<DocBlock> {
+        // Build the line boundary table once.  O(n) in the source length.
+        self.line_boundaries = build_line_boundaries(content);
+
+        // Use the offset iterator so every event carries a byte-range into
+        // the original source, letting us map events back to source lines.
+        for (event, span) in parser.into_offset_iter() {
+            // Stamp the current source line from the event's start offset
+            // before dispatching.  All `lines.push` paths below inherit this.
+            self.current_source_line = byte_offset_to_line(span.start, &self.line_boundaries);
+
             match event {
-                Event::Start(tag) => self.start_tag(tag),
+                Event::Start(tag) => self.start_tag(tag, &span),
                 Event::End(tag) => self.end_tag(tag),
                 Event::Text(text) => self.handle_text(&text),
                 Event::Code(code) => {
@@ -234,6 +328,8 @@ impl MdRenderer {
                         "─".repeat(60),
                         Style::default().fg(self.dim),
                     )));
+                    // Rule line and the blank after it both map to current source line.
+                    self.current_source_lines.push(self.current_source_line);
                     self.push_blank_line();
                 }
                 Event::TaskListMarker(checked) => {
@@ -253,7 +349,7 @@ impl MdRenderer {
         self.blocks
     }
 
-    fn start_tag(&mut self, tag: Tag) {
+    fn start_tag(&mut self, tag: Tag, span: &Range<usize>) {
         match tag {
             Tag::Heading { level, .. } => {
                 self.in_heading = true;
@@ -294,6 +390,9 @@ impl MdRenderer {
                     CodeBlockKind::Indented => None,
                 };
                 self.code_block_content.clear();
+                // Record the fence's byte offset and resolve its source line.
+                self.code_block_fence_offset = Some(span.start);
+                self.code_block_start_line = byte_offset_to_line(span.start, &self.line_boundaries);
                 self.flush_line();
             }
             Tag::List(start) => {
@@ -344,6 +443,7 @@ impl MdRenderer {
                 self.table_alignments = alignments;
                 self.table_rows.clear();
                 self.table_header_row = None;
+                self.table_start_line = byte_offset_to_line(span.start, &self.line_boundaries);
                 self.flush_line();
             }
             Tag::TableHead => {
@@ -478,6 +578,8 @@ impl MdRenderer {
             id,
             source,
             cell_height: Cell::new(DEFAULT_MERMAID_HEIGHT),
+            // The fence line is the canonical source position for the block.
+            source_line: self.code_block_start_line,
         });
         // Blank line after the diagram (will open a new Text block).
         self.push_blank_line();
@@ -485,6 +587,9 @@ impl MdRenderer {
 
     fn render_code_block(&mut self) {
         let border_style = Style::default().fg(self.code_border);
+
+        // Capture the fence's source line before any mutable borrows below.
+        let code_start_line = self.code_block_start_line;
 
         // Widths are measured in display cells, not bytes, so that lines
         // containing multi-byte characters (em dashes, CJK, emoji, …) align
@@ -509,13 +614,15 @@ impl MdRenderer {
             self.code_bg,
         );
 
+        // Blank line before the box — maps to whatever was current before the block.
         self.push_blank_line();
 
-        // Top border — single styled span, unchanged from original.
+        // Top border maps to the fence line.
         self.lines.push(Line::from(Span::styled(
             format!("╭{}╮", "─".repeat(inner_width + 1)),
             border_style,
         )));
+        self.current_source_lines.push(code_start_line);
 
         // One rendered line per source line.
         // Layout per line (matching the original single-span format):
@@ -524,7 +631,12 @@ impl MdRenderer {
         // The tokens together have `line.len()` visible bytes.  We pad the gap
         // between the last token and the right border with spaces using the
         // same background color, so the box aligns regardless of token count.
-        for (src_line, token_line) in self.code_block_content.iter().zip(token_lines.iter()) {
+        for (i, (src_line, token_line)) in self
+            .code_block_content
+            .iter()
+            .zip(token_lines.iter())
+            .enumerate()
+        {
             let line_width = UnicodeWidthStr::width(src_line.as_str());
             let pad_len = inner_width.saturating_sub(line_width);
 
@@ -557,13 +669,18 @@ impl MdRenderer {
             ));
 
             self.lines.push(Line::from(spans));
+            // Content line i (0-indexed) lives one source line after the fence.
+            self.current_source_lines
+                .push(code_start_line + 1 + i as u32);
         }
 
-        // Bottom border — single styled span, unchanged from original.
+        // Bottom border maps to the line after the last content line.
+        let bottom_source_line = code_start_line + 1 + self.code_block_content.len() as u32;
         self.lines.push(Line::from(Span::styled(
             format!("╰{}╯", "─".repeat(inner_width + 1)),
             border_style,
         )));
+        self.current_source_lines.push(bottom_source_line);
 
         self.code_block_content.clear();
         self.push_blank_line();
@@ -622,6 +739,7 @@ impl MdRenderer {
             alignments,
             natural_widths,
             rendered_height,
+            source_line: self.table_start_line,
         }));
         self.push_blank_line();
     }
@@ -817,5 +935,202 @@ mod tests {
                 "line {i} has display width {w}, expected {first} (right border misaligned)",
             );
         }
+    }
+
+    // ── Phase 1: source-line plumbing tests ──────────────────────────────────
+
+    /// For every `DocBlock::Text`, `source_lines` must be the same length as
+    /// `text.lines` — the invariant enforced by `flush_text_block`.
+    #[test]
+    fn source_lines_parallel_to_text_lines() {
+        let md = "Line 1\nLine 2\n\nLine 4\n";
+        let blocks = render_markdown(md, &default_palette(), Theme::Default);
+        for block in &blocks {
+            if let DocBlock::Text {
+                text, source_lines, ..
+            } = block
+            {
+                assert_eq!(
+                    text.lines.len(),
+                    source_lines.len(),
+                    "source_lines length {} != text.lines length {}",
+                    source_lines.len(),
+                    text.lines.len(),
+                );
+            }
+        }
+    }
+
+    /// A heading on line 0 should map to source line 0.  A paragraph starting
+    /// on line 2 (after blank line) should map to source line 2.
+    #[test]
+    fn source_lines_map_paragraph_correctly() {
+        let md = "# Title\n\nParagraph text\n";
+        let blocks = render_markdown(md, &default_palette(), Theme::Default);
+        let text_block = blocks
+            .iter()
+            .find(|b| matches!(b, DocBlock::Text { .. }))
+            .expect("expected a Text block");
+        let DocBlock::Text { source_lines, .. } = text_block else {
+            panic!("expected Text block");
+        };
+        // The heading is the very first rendered line — source line 0.
+        assert_eq!(source_lines[0], 0, "heading should map to source line 0");
+        // Find the index of the rendered line containing "Paragraph".
+        let DocBlock::Text { text, .. } = text_block else {
+            panic!()
+        };
+        let para_idx = text
+            .lines
+            .iter()
+            .position(|l| l.spans.iter().any(|s| s.content.contains("Paragraph")))
+            .expect("expected a 'Paragraph' line");
+        // Paragraph starts after "# Title\n\n", i.e., on source line 2.
+        assert_eq!(
+            source_lines[para_idx], 2,
+            "paragraph should map to source line 2"
+        );
+    }
+
+    /// The top border of a code block maps to the fence line (0), each content
+    /// line maps to the fence line + 1 + its 0-based index, and the bottom
+    /// border maps to the line after the last content line.
+    #[test]
+    fn code_block_borders_map_to_fence() {
+        // Source layout:
+        //   line 0: ```rust
+        //   line 1: let x = 1;
+        //   line 2: let y = 2;
+        //   line 3: ```
+        let md = "```rust\nlet x = 1;\nlet y = 2;\n```\n";
+        let blocks = render_markdown(md, &default_palette(), Theme::Default);
+        let text_block = blocks
+            .iter()
+            .find(|b| matches!(b, DocBlock::Text { .. }))
+            .expect("expected a Text block");
+        let DocBlock::Text {
+            text, source_lines, ..
+        } = text_block
+        else {
+            panic!("expected Text block");
+        };
+
+        // Find the top border line (starts with '╭').
+        let top_idx = text
+            .lines
+            .iter()
+            .position(|l| l.spans.iter().any(|s| s.content.starts_with('╭')))
+            .expect("top border not found");
+        assert_eq!(
+            source_lines[top_idx], 0,
+            "top border should map to fence line (0)"
+        );
+
+        // Content lines immediately follow; their source lines are 1 and 2.
+        assert_eq!(
+            source_lines[top_idx + 1],
+            1,
+            "first content line should map to source line 1"
+        );
+        assert_eq!(
+            source_lines[top_idx + 2],
+            2,
+            "second content line should map to source line 2"
+        );
+
+        // Bottom border.
+        let bot_idx = text
+            .lines
+            .iter()
+            .position(|l| l.spans.iter().any(|s| s.content.starts_with('╰')))
+            .expect("bottom border not found");
+        assert_eq!(
+            source_lines[bot_idx], 3,
+            "bottom border should map to source line 3"
+        );
+    }
+
+    /// A table block's `source_line` should be 0 when the table starts at the
+    /// beginning of the document.
+    #[test]
+    fn table_captures_start_line() {
+        let md = "| A | B |\n|---|---|\n| 1 | 2 |\n";
+        let blocks = render_markdown(md, &default_palette(), Theme::Default);
+        let table = blocks
+            .iter()
+            .find(|b| matches!(b, DocBlock::Table(_)))
+            .expect("expected a Table block");
+        let DocBlock::Table(t) = table else { panic!() };
+        assert_eq!(t.source_line, 0, "table source_line should be 0");
+    }
+
+    /// A mermaid block's `source_line` should be 0 when the fence starts at
+    /// the beginning of the document.
+    #[test]
+    fn mermaid_captures_start_line() {
+        let md = "```mermaid\ngraph LR\nA-->B\n```\n";
+        let blocks = render_markdown(md, &default_palette(), Theme::Default);
+        let mermaid = blocks
+            .iter()
+            .find(|b| matches!(b, DocBlock::Mermaid { .. }))
+            .expect("expected a Mermaid block");
+        let DocBlock::Mermaid { source_line, .. } = mermaid else {
+            panic!()
+        };
+        assert_eq!(*source_line, 0, "mermaid source_line should be 0");
+    }
+
+    /// Text before a code block keeps its own source lines; the code block
+    /// content lines report source lines relative to the fence opening.
+    #[test]
+    fn text_before_code_block() {
+        // Source layout:
+        //   line 0: Intro
+        //   line 1: (blank)
+        //   line 2: ```rust
+        //   line 3: fn main() {}
+        //   line 4: ```
+        let md = "Intro\n\n```rust\nfn main() {}\n```\n";
+        let blocks = render_markdown(md, &default_palette(), Theme::Default);
+
+        // There should be exactly one Text block containing both the intro and
+        // the rendered code box (they are in the same text run).
+        let text_block = blocks
+            .iter()
+            .find(|b| matches!(b, DocBlock::Text { .. }))
+            .expect("expected a Text block");
+        let DocBlock::Text {
+            text, source_lines, ..
+        } = text_block
+        else {
+            panic!("expected Text block");
+        };
+
+        // The first rendered line is "Intro" — source line 0.
+        let intro_idx = text
+            .lines
+            .iter()
+            .position(|l| l.spans.iter().any(|s| s.content.contains("Intro")))
+            .expect("intro line not found");
+        assert_eq!(
+            source_lines[intro_idx], 0,
+            "intro should map to source line 0"
+        );
+
+        // Find the first content line inside the code box (not a border).
+        // Content lines start with "│ " and contain the source code.
+        let content_idx = text
+            .lines
+            .iter()
+            .position(|l| {
+                let joined: String = l.spans.iter().map(|s| s.content.as_ref()).collect();
+                joined.contains("fn main") || joined.contains("fn")
+            })
+            .expect("code content line not found");
+        // Content line 0 inside the box → source line 3 (fence=2, content=2+1=3).
+        assert_eq!(
+            source_lines[content_idx], 3,
+            "first code content line should map to source line 3"
+        );
     }
 }

@@ -22,6 +22,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         Focus::TableModal => "TABLE",
         Focus::CopyMenu => "COPY",
         Focus::LinkPicker => "LINKS",
+        Focus::Editor => "EDIT",
     };
 
     let tab_count = app.tabs.len();

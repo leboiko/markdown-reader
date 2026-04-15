@@ -52,6 +52,9 @@ pub struct MarkdownViewState {
     pub rendered: Vec<DocBlock>,
     /// Current scroll offset in display lines.
     pub scroll_offset: u32,
+    /// Current cursor position as an absolute rendered logical-line index.
+    /// Same coordinate space as `scroll_offset`. Defaults to 0.
+    pub cursor_line: u32,
     /// Display name shown in the panel title.
     pub file_name: String,
     /// Absolute path of the loaded file.
@@ -133,6 +136,7 @@ impl MarkdownViewState {
         self.file_name = file_name;
         self.current_path = Some(path);
         self.scroll_offset = 0;
+        self.cursor_line = 0;
         // Invalidate table layout cache. The fresh DocBlock::Table values carry
         // a pessimistic rendered_height that only becomes accurate once the
         // draw loop runs layout_table; forcing a rebuild keeps the hint line
@@ -142,46 +146,57 @@ impl MarkdownViewState {
         self.table_layouts.clear();
     }
 
-    /// Scroll up by `n` logical lines, clamping at the top.
-    pub fn scroll_up(&mut self, n: u16, _view_height: u32) {
-        self.scroll_offset = self.scroll_offset.saturating_sub(n as u32);
+    /// Move the cursor down by `n` logical lines, clamped to the last line.
+    ///
+    /// Does not update `scroll_offset`; call [`scroll_to_cursor`] afterward.
+    pub fn cursor_down(&mut self, n: u32) {
+        let max = self.total_lines.saturating_sub(1);
+        self.cursor_line = self.cursor_line.saturating_add(n).min(max);
     }
 
-    /// Scroll down by `n` logical lines, clamping so the last line stays
-    /// roughly centred in the viewport rather than disappearing off screen.
-    pub fn scroll_down(&mut self, n: u16, view_height: u32) {
-        let max = self.total_lines.saturating_sub(view_height / 2);
-        self.scroll_offset = (self.scroll_offset + n as u32).min(max);
+    /// Move the cursor up by `n` logical lines, saturating at 0.
+    ///
+    /// Does not update `scroll_offset`; call [`scroll_to_cursor`] afterward.
+    pub fn cursor_up(&mut self, n: u32) {
+        self.cursor_line = self.cursor_line.saturating_sub(n);
     }
 
-    /// Scroll up by half the viewport height.
-    pub fn scroll_half_page_up(&mut self, view_height: u32) {
-        self.scroll_up((view_height / 2) as u16, view_height);
-    }
-
-    /// Scroll down by half the viewport height.
-    pub fn scroll_half_page_down(&mut self, view_height: u32) {
-        self.scroll_down((view_height / 2) as u16, view_height);
-    }
-
-    /// Scroll up by the full viewport height.
-    pub fn scroll_page_up(&mut self, view_height: u32) {
-        self.scroll_up(view_height as u16, view_height);
-    }
-
-    /// Scroll down by the full viewport height.
-    pub fn scroll_page_down(&mut self, view_height: u32) {
-        self.scroll_down(view_height as u16, view_height);
-    }
-
-    /// Jump to the very first line of the document.
-    pub fn scroll_to_top(&mut self) {
+    /// Jump the cursor to the first line and reset the scroll to the top.
+    pub fn cursor_to_top(&mut self) {
+        self.cursor_line = 0;
         self.scroll_offset = 0;
     }
 
-    /// Jump to the last line, keeping it centred in the viewport.
-    pub fn scroll_to_bottom(&mut self, view_height: u32) {
-        self.scroll_offset = self.total_lines.saturating_sub(view_height / 2);
+    /// Jump the cursor to the last line and scroll so it is visible.
+    ///
+    /// # Arguments
+    ///
+    /// * `view_height` – visible viewport height in display lines.
+    pub fn cursor_to_bottom(&mut self, view_height: u32) {
+        self.cursor_line = self.total_lines.saturating_sub(1);
+        self.scroll_to_cursor(view_height);
+    }
+
+    /// Adjust `scroll_offset` so the cursor is visible in the viewport.
+    ///
+    /// Matches vim's default `scrolloff=0` behaviour: the scroll moves only
+    /// as much as needed to bring the cursor onto the screen.
+    ///
+    /// # Arguments
+    ///
+    /// * `view_height` – visible viewport height in display lines.
+    pub fn scroll_to_cursor(&mut self, view_height: u32) {
+        let vh = view_height.max(1);
+        if self.cursor_line < self.scroll_offset {
+            // Cursor went above the viewport top — scroll up.
+            self.scroll_offset = self.cursor_line;
+        } else if self.cursor_line >= self.scroll_offset + vh {
+            // Cursor went below the viewport bottom — scroll down.
+            self.scroll_offset = self.cursor_line.saturating_sub(vh - 1);
+        }
+        // Clamp scroll so we never show an entirely blank viewport at the end.
+        let max = self.total_lines.saturating_sub(vh / 2);
+        self.scroll_offset = self.scroll_offset.min(max);
     }
 }
 
@@ -302,6 +317,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
 
     let tab = app.tabs.active_tab().unwrap();
     let scroll_offset = tab.view.scroll_offset;
+    let cursor_line = tab.view.cursor_line;
 
     let doc_search_query =
         if !tab.doc_search.query.is_empty() && !tab.doc_search.match_lines.is_empty() {
@@ -381,7 +397,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                             let start = clip_start as usize;
                             let end =
                                 (clip_start + visible_lines).min(text.lines.len() as u32) as usize;
-                            let visible_text = if let Some((query, current_line)) =
+                            let mut visible_text = if let Some((query, current_line)) =
                                 &doc_search_query
                             {
                                 let full_text =
@@ -392,6 +408,34 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                                 let sliced_lines = text.lines[start..end].to_vec();
                                 Text::from(sliced_lines)
                             };
+
+                            // Apply cursor highlight when the viewer has focus and
+                            // the cursor falls inside this block.
+                            let block_end = block_start + block_height;
+                            if focused && cursor_line >= block_start && cursor_line < block_end {
+                                // cursor_relative is 0-indexed within the block.
+                                let cursor_relative = (cursor_line - block_start) as usize;
+                                // start == clip_start (lines before viewport are skipped).
+                                if cursor_relative >= start {
+                                    let idx_in_visible = cursor_relative - start;
+                                    if let Some(line) = visible_text.lines.get_mut(idx_in_visible) {
+                                        for span in line.spans.iter_mut() {
+                                            span.style = span
+                                                .style
+                                                .patch(Style::default().bg(p.selection_bg));
+                                        }
+                                        // Empty lines have no spans; inject a filler so the
+                                        // highlight is still visible as a colored row.
+                                        if line.spans.is_empty() {
+                                            *line = Line::from(Span::styled(
+                                                " ".to_string(),
+                                                Style::default().bg(p.selection_bg),
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+
                             text_draws.push(TextDraw {
                                 y: rect_y,
                                 height: draw_height,
@@ -841,4 +885,115 @@ pub fn visual_row_to_logical_line(
 
     // Fell off the end — return a value that won't match any link.
     u32::MAX
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::markdown::{DocBlock, HeadingAnchor, LinkInfo};
+    use ratatui::text::{Line, Span, Text};
+
+    /// Helper: build a MarkdownViewState with a given total_lines and
+    /// default scroll/cursor at 0.
+    fn view_with_lines(total: u32) -> MarkdownViewState {
+        MarkdownViewState {
+            total_lines: total,
+            ..Default::default()
+        }
+    }
+
+    // ── cursor_down / cursor_up ──────────────────────────────────────────────
+
+    /// Moving down then back up the same amount must return to line 0.
+    #[test]
+    fn cursor_down_then_up_returns_home() {
+        let mut v = view_with_lines(5);
+        v.cursor_down(3);
+        assert_eq!(v.cursor_line, 3);
+        v.cursor_up(3);
+        assert_eq!(v.cursor_line, 0);
+    }
+
+    /// Moving down more lines than the document has must clamp to the last line.
+    #[test]
+    fn cursor_down_clamps_to_last_line() {
+        let mut v = view_with_lines(3);
+        v.cursor_down(100);
+        // Last valid line index = total_lines - 1 = 2.
+        assert_eq!(v.cursor_line, 2);
+    }
+
+    // ── scroll_to_cursor ────────────────────────────────────────────────────
+
+    /// When the cursor is below the viewport, `scroll_to_cursor` scrolls just
+    /// enough to bring it to the bottom row of the viewport.
+    ///
+    /// Document: 10 lines.  view_height: 5.  scroll_offset: 0.  cursor: 7.
+    /// Expected: scroll_offset = 7 - (5 - 1) = 3.
+    #[test]
+    fn cursor_scroll_follows_when_off_screen() {
+        let mut v = view_with_lines(10);
+        v.scroll_offset = 0;
+        v.cursor_line = 7;
+        v.scroll_to_cursor(5);
+        assert_eq!(v.scroll_offset, 3);
+    }
+
+    /// When the cursor is already inside the viewport, `scroll_to_cursor` must
+    /// not change `scroll_offset`.
+    #[test]
+    fn cursor_scroll_unchanged_when_already_visible() {
+        let mut v = view_with_lines(20);
+        v.scroll_offset = 5;
+        v.cursor_line = 7;
+        v.scroll_to_cursor(10);
+        // cursor (7) is in [5, 15) — no adjustment needed.
+        assert_eq!(v.scroll_offset, 5);
+    }
+
+    // ── source_line_at ───────────────────────────────────────────────────────
+
+    fn make_text_block_with_sources(source_lines: Vec<u32>) -> DocBlock {
+        let n = source_lines.len();
+        let text_lines: Vec<Line<'static>> = (0..n)
+            .map(|i| Line::from(Span::raw(format!("line {i}"))))
+            .collect();
+        DocBlock::Text {
+            text: Text::from(text_lines),
+            links: Vec::<LinkInfo>::new(),
+            heading_anchors: Vec::<HeadingAnchor>::new(),
+            source_lines,
+        }
+    }
+
+    /// Querying each logical line in a Text block returns the expected source line.
+    #[test]
+    fn source_line_at_text_block_exact() {
+        use crate::markdown::source_line_at;
+        let block = make_text_block_with_sources(vec![0, 1, 2]);
+        let blocks = vec![block];
+        assert_eq!(source_line_at(&blocks, 0), 0);
+        assert_eq!(source_line_at(&blocks, 1), 1);
+        assert_eq!(source_line_at(&blocks, 2), 2);
+    }
+
+    /// Every logical line within a Table block must return the table's source line.
+    #[test]
+    fn source_line_at_table_block_returns_table_start() {
+        use crate::markdown::source_line_at;
+        use crate::markdown::{TableBlock, TableBlockId};
+        let block = DocBlock::Table(TableBlock {
+            id: TableBlockId(0),
+            headers: vec![],
+            rows: vec![],
+            alignments: vec![],
+            natural_widths: vec![],
+            rendered_height: 4,
+            source_line: 5,
+        });
+        let blocks = vec![block];
+        // Any row within the 4-line-tall table block should return 5.
+        assert_eq!(source_line_at(&blocks, 0), 5);
+        assert_eq!(source_line_at(&blocks, 3), 5);
+    }
 }

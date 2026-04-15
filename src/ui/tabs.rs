@@ -1,5 +1,6 @@
 use crate::app::DocSearchState;
 use crate::theme::Palette;
+use crate::ui::editor::TabEditor;
 use crate::ui::markdown_view::MarkdownViewState;
 use std::path::PathBuf;
 
@@ -19,6 +20,9 @@ pub struct Tab {
     pub view: MarkdownViewState,
     /// In-document find state is document-specific and travels with the tab.
     pub doc_search: DocSearchState,
+    /// Vim-style editor state.  `Some` while the tab is in edit mode, `None`
+    /// when viewing the rendered markdown.
+    pub editor: Option<TabEditor>,
 }
 
 /// Ordered collection of open tabs with an active-tab pointer.
@@ -129,6 +133,7 @@ impl Tabs {
                 ..MarkdownViewState::default()
             },
             doc_search: DocSearchState::default(),
+            editor: None,
         });
         self.set_active(id);
         (id, OpenOutcome::Opened)

@@ -55,6 +55,8 @@ pub struct TableBlock {
     pub natural_widths: Vec<usize>,
     /// Cached display-line height; updated lazily when the layout width changes.
     pub rendered_height: u32,
+    /// 0-indexed source line where the opening `|` row of the table appears.
+    pub source_line: u32,
 }
 
 /// A single rendered block in a document.
@@ -74,6 +76,9 @@ pub enum DocBlock {
         text: Text<'static>,
         links: Vec<LinkInfo>,
         heading_anchors: Vec<HeadingAnchor>,
+        /// Parallel to `text.lines`: 0-indexed source line for each rendered row.
+        /// `source_lines.len() == text.lines.len()` is a maintained invariant.
+        source_lines: Vec<u32>,
     },
     /// A reserved space for a mermaid diagram image.
     Mermaid {
@@ -85,6 +90,8 @@ pub enum DocBlock {
         /// `Cell` avoids `&mut` while still allowing interior mutation during
         /// a shared-reference iteration over the block list.
         cell_height: Cell<u32>,
+        /// 0-indexed source line where the opening ` ```mermaid ` fence appears.
+        source_line: u32,
     },
     /// A parsed markdown table rendered inline with fair-share column widths.
     Table(TableBlock),
@@ -114,6 +121,7 @@ pub fn update_mermaid_heights(blocks: &[DocBlock], cache: &crate::mermaid::Merma
             id,
             source,
             cell_height,
+            ..
         } = block
         {
             let new_h = cache.height(id, source);
@@ -124,6 +132,34 @@ pub fn update_mermaid_heights(blocks: &[DocBlock], cache: &crate::mermaid::Merma
         }
     }
     changed
+}
+
+/// Walk `blocks` and return the 0-indexed source line that corresponds to
+/// `logical_line` (the viewer's absolute rendered-line coordinate).
+///
+/// This is the bridge between the cursor position and the edtui editor row.
+///
+/// # Returns
+///
+/// The 0-indexed markdown source line.  Returns `0` when `logical_line` falls
+/// beyond all blocks (documents shorter than expected due to race conditions).
+pub fn source_line_at(blocks: &[DocBlock], logical_line: u32) -> u32 {
+    let mut offset = 0u32;
+    for block in blocks {
+        let h = block.height();
+        if logical_line < offset + h {
+            let local = (logical_line - offset) as usize;
+            return match block {
+                DocBlock::Text { source_lines, .. } => {
+                    source_lines.get(local).copied().unwrap_or(0)
+                }
+                DocBlock::Mermaid { source_line, .. } => *source_line,
+                DocBlock::Table(t) => t.source_line,
+            };
+        }
+        offset += h;
+    }
+    0
 }
 
 /// Convert a heading's visible text to a GitHub-style anchor slug.

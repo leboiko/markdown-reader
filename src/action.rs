@@ -115,4 +115,23 @@ pub enum Action {
 
     /// Background directory tree scan completed; rebuild the file tree.
     TreeDiscovered(Vec<crate::fs::discovery::FileEntry>),
+
+    /// An editor save completed successfully.
+    ///
+    /// `saved_content` carries the exact string that was written so the
+    /// `App` can update `tab.editor.baseline` without a second extraction.
+    FileSaved {
+        /// The path that was written.
+        path: PathBuf,
+        /// The content that was written (used to update the baseline).
+        saved_content: String,
+    },
+
+    /// An editor save failed.
+    FileSaveError {
+        /// The path that the write was attempted on.
+        path: PathBuf,
+        /// Human-readable error description.
+        error: String,
+    },
 }

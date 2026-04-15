@@ -333,6 +333,7 @@ mod tests {
             alignments: aligns,
             natural_widths,
             rendered_height: 3,
+            source_line: 0,
         }
     }
 

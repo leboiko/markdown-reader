@@ -7,6 +7,9 @@ use crate::markdown::DocBlock;
 use crate::mermaid::{MermaidCache, MermaidEntry};
 use crate::state::{AppState, TabSession};
 use crate::theme::{Palette, Theme};
+use crate::ui::editor::{
+    CommandOutcome, TabEditor, dispatch_command, extract_text, forward_key_to_edtui,
+};
 use crate::ui::file_tree::FileTreeState;
 use crate::ui::link_picker::{LinkPickerItem, LinkPickerState};
 use crate::ui::markdown_view::{TableLayout, visual_row_to_logical_line};
@@ -15,6 +18,7 @@ use crate::ui::tab_picker::TabPickerState;
 use crate::ui::tabs::{OpenOutcome, Tabs};
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
+use edtui::EditorMode;
 use ratatui::layout::Rect;
 use ratatui::prelude::*;
 use ratatui_image::picker::Picker;
@@ -22,6 +26,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
 
 /// Write `text` to the system clipboard via the OSC 52 terminal escape sequence.
 ///
@@ -145,6 +150,8 @@ pub enum Focus {
     CopyMenu,
     /// Internal-link anchor picker (opened with `f`).
     LinkPicker,
+    /// Vim-style in-place editor for the active tab's source file.
+    Editor,
 }
 
 /// State for the copy-path popup opened with `y` in the tree.
@@ -286,6 +293,12 @@ pub struct App {
     /// results silently when it has advanced, preventing stale results from an
     /// older query from overwriting results from a newer one.
     search_generation: Arc<AtomicU64>,
+    /// Records the path and wall-clock instant of the most recent self-initiated
+    /// file save, used to suppress the file-watcher reload that bounces back
+    /// within ~700 ms of our own write.
+    pub last_file_save_at: Option<(PathBuf, std::time::Instant)>,
+    /// Application-level status message shown in the editor footer or status bar.
+    pub status_message: Option<String>,
 }
 
 impl App {
@@ -340,6 +353,8 @@ impl App {
             table_modal: None,
             table_modal_rect: None,
             search_generation: Arc::new(AtomicU64::new(0)),
+            last_file_save_at: None,
+            status_message: None,
         };
 
         app.restore_session();
@@ -394,7 +409,9 @@ impl App {
                 tab.view
                     .load(path.clone(), name, content, &self.palette, self.theme);
                 let max_scroll = tab.view.total_lines.saturating_sub(1);
-                tab.view.scroll_offset = scroll.min(max_scroll);
+                let clamped = scroll.min(max_scroll);
+                tab.view.scroll_offset = clamped;
+                tab.view.cursor_line = clamped;
             }
 
             last_loaded_path = Some(path.clone());
@@ -556,36 +573,40 @@ impl App {
             Action::ScrollUp(n) => {
                 let vh = self.tabs.view_height;
                 if let Some(tab) = self.tabs.active_tab_mut() {
-                    tab.view.scroll_up(n, vh);
+                    tab.view.cursor_up(n as u32);
+                    tab.view.scroll_to_cursor(vh);
                 }
             }
             Action::ScrollDown(n) => {
                 let vh = self.tabs.view_height;
                 if let Some(tab) = self.tabs.active_tab_mut() {
-                    tab.view.scroll_down(n, vh);
+                    tab.view.cursor_down(n as u32);
+                    tab.view.scroll_to_cursor(vh);
                 }
             }
             Action::ScrollHalfPageUp => {
                 let vh = self.tabs.view_height;
                 if let Some(tab) = self.tabs.active_tab_mut() {
-                    tab.view.scroll_half_page_up(vh);
+                    tab.view.cursor_up(vh / 2);
+                    tab.view.scroll_to_cursor(vh);
                 }
             }
             Action::ScrollHalfPageDown => {
                 let vh = self.tabs.view_height;
                 if let Some(tab) = self.tabs.active_tab_mut() {
-                    tab.view.scroll_half_page_down(vh);
+                    tab.view.cursor_down(vh / 2);
+                    tab.view.scroll_to_cursor(vh);
                 }
             }
             Action::ScrollToTop => {
                 if let Some(tab) = self.tabs.active_tab_mut() {
-                    tab.view.scroll_to_top();
+                    tab.view.cursor_to_top();
                 }
             }
             Action::ScrollToBottom => {
                 let vh = self.tabs.view_height;
                 if let Some(tab) = self.tabs.active_tab_mut() {
-                    tab.view.scroll_to_bottom(vh);
+                    tab.view.cursor_to_bottom(vh);
                 }
             }
             Action::EnterSearch => {
@@ -653,6 +674,24 @@ impl App {
             Action::GitStatusReady(map) => {
                 self.tree.git_status = map;
             }
+            Action::FileSaved {
+                path,
+                saved_content,
+            } => {
+                self.apply_file_saved(path, saved_content);
+            }
+            Action::FileSaveError { path: _, error } => {
+                // For the spike: surface in the editor footer if it's open,
+                // otherwise fall back to the app-level status message.
+                let msg = format!("save error: {error}");
+                if let Some(tab) = self.tabs.active_tab_mut()
+                    && let Some(editor) = tab.editor.as_mut()
+                {
+                    editor.status_message = Some(msg);
+                } else {
+                    self.status_message = Some(msg);
+                }
+            }
         }
     }
 
@@ -661,6 +700,13 @@ impl App {
         // Nothing beneath the modal should react to pointer events.
         if self.table_modal.is_some() {
             self.handle_table_modal_mouse(m);
+            return;
+        }
+
+        // While the editor is active, mouse events are ignored entirely.
+        // The user must `:q` first to exit edit mode before interacting with
+        // the tree, tabs, or other panels via pointer.
+        if self.focus == Focus::Editor {
             return;
         }
 
@@ -753,7 +799,8 @@ impl App {
                 {
                     let vh = self.tabs.view_height;
                     if let Some(tab) = self.tabs.active_tab_mut() {
-                        tab.view.scroll_down(3, vh);
+                        tab.view.cursor_down(3);
+                        tab.view.scroll_to_cursor(vh);
                     }
                 } else if let Some(tree_rect) = self.tree_area_rect
                     && contains(tree_rect, col, row)
@@ -769,7 +816,8 @@ impl App {
                 {
                     let vh = self.tabs.view_height;
                     if let Some(tab) = self.tabs.active_tab_mut() {
-                        tab.view.scroll_up(3, vh);
+                        tab.view.cursor_up(3);
+                        tab.view.scroll_to_cursor(vh);
                     }
                 } else if let Some(tree_rect) = self.tree_area_rect
                     && contains(tree_rect, col, row)
@@ -850,9 +898,10 @@ impl App {
             if let Some(line) = target_line {
                 let vh = self.tabs.view_height;
                 if let Some(tab) = self.tabs.active_tab_mut() {
+                    // Set the cursor to the heading line itself, then scroll
+                    // so 2 lines of context appear above it.
+                    tab.view.cursor_line = line.min(tab.view.total_lines.saturating_sub(1));
                     let max = tab.view.total_lines.saturating_sub(vh / 2);
-                    // Show 2 lines of context above the heading so it doesn't
-                    // land flush at the viewport edge.
                     tab.view.scroll_offset = line.saturating_sub(2).min(max);
                 }
             }
@@ -944,6 +993,12 @@ impl App {
                 self.handle_table_modal_key(code);
             }
             Focus::CopyMenu => self.handle_copy_menu_key(code),
+            // Editor focus: key events carry the full KeyEvent; reconstruct it
+            // from code + modifiers so we can forward to edtui.
+            Focus::Editor => {
+                let key = crossterm::event::KeyEvent::new(code, modifiers);
+                self.handle_editor_key(key);
+            }
         }
     }
 
@@ -1058,7 +1113,7 @@ impl App {
         match code {
             KeyCode::Char('g') => {
                 if let Some(tab) = self.tabs.active_tab_mut() {
-                    tab.view.scroll_to_top();
+                    tab.view.cursor_to_top();
                 }
                 true
             }
@@ -1130,6 +1185,200 @@ impl App {
         }
     }
 
+    // ── Editor mode ──────────────────────────────────────────────────────────
+
+    /// Enter vim-style edit mode for the currently active tab.
+    ///
+    /// Requires the tab to have a `current_path` set (i.e., it was loaded from
+    /// disk).  Initialises a [`TabEditor`] from the tab's current rendered source
+    /// and switches focus to [`Focus::Editor`].
+    ///
+    /// The editor starts in Normal mode (matching vim's default).  The user must
+    /// press `i` inside the editor to begin inserting text.
+    pub fn enter_edit_mode(&mut self) {
+        let Some(tab) = self.tabs.active_tab_mut() else {
+            return;
+        };
+        // Only enter edit mode when we have a real path on disk.
+        if tab.view.current_path.is_none() {
+            return;
+        }
+        let content = tab.view.content.clone();
+        // Map the viewer cursor's rendered logical line to the exact source line
+        // using the block metadata stored at render time.  This is precise: code
+        // block borders and table borders are mapped to their fence / header line
+        // rather than being offset by visual border rows.
+        let target_source_line =
+            crate::markdown::source_line_at(&tab.view.rendered, tab.view.cursor_line);
+        let source_lines_total = content.split('\n').count();
+        let target_row = (target_source_line as usize).min(source_lines_total.saturating_sub(1));
+        let mut editor = TabEditor::new(content);
+        editor.state.cursor = edtui::Index2::new(target_row, 0);
+        tab.editor = Some(editor);
+        self.focus = Focus::Editor;
+    }
+
+    /// Handle a key event while [`Focus::Editor`] is active.
+    ///
+    /// Two sub-modes:
+    /// - **Command-line mode** (`editor.command_line.is_some()`): we capture chars
+    ///   ourselves to build an ex command (`:w`, `:q`, etc.).
+    /// - **Editing mode**: forward to edtui, but intercept `:` when edtui is in
+    ///   Normal mode to start command-line capture.
+    fn handle_editor_key(&mut self, key: crossterm::event::KeyEvent) {
+        // We need mutable access to both the tab's editor and `self` (for save
+        // dispatch), so extract what we need up front.
+        let Some(tab) = self.tabs.active_tab_mut() else {
+            return;
+        };
+        let Some(editor) = tab.editor.as_mut() else {
+            // Editor was unexpectedly None; snap back to Viewer.
+            self.focus = Focus::Viewer;
+            return;
+        };
+
+        if editor.command_line.is_some() {
+            // ── Command-line capture mode ────────────────────────────────────
+            match key.code {
+                KeyCode::Esc => {
+                    // Cancel command-line; return to editing.
+                    editor.command_line = None;
+                    editor.status_message = None;
+                }
+                KeyCode::Backspace => {
+                    if let Some(ref mut cmd) = editor.command_line {
+                        cmd.pop();
+                    }
+                }
+                KeyCode::Enter => {
+                    // Take the command string and dispatch it.
+                    let cmd = editor.command_line.take().unwrap_or_default();
+                    editor.status_message = None;
+                    let outcome = dispatch_command(editor, &cmd);
+                    self.apply_command_outcome(outcome);
+                }
+                KeyCode::Char(c) => {
+                    if let Some(ref mut cmd) = editor.command_line {
+                        cmd.push(c);
+                    }
+                }
+                _ => {}
+            }
+        } else {
+            // ── Editing mode ─────────────────────────────────────────────────
+            // Intercept `:` only when edtui is in Normal mode so that insert
+            // mode still inserts a literal colon (matching vim behaviour).
+            if key.code == KeyCode::Char(':') && editor.state.mode == EditorMode::Normal {
+                editor.command_line = Some(String::new());
+                editor.status_message = None;
+                return;
+            }
+            // Everything else goes to edtui.
+            forward_key_to_edtui(key, &mut editor.state);
+        }
+    }
+
+    /// Act on the outcome of an ex-command dispatch.
+    ///
+    /// Must be called *after* `dispatch_command` returns.  `self.tabs` is
+    /// fully accessible here because we're back in `&mut self` context.
+    fn apply_command_outcome(&mut self, outcome: CommandOutcome) {
+        match outcome {
+            CommandOutcome::Handled => {
+                // Nothing to do — `dispatch_command` already set any message.
+            }
+            CommandOutcome::Save => {
+                self.save_editor_content(false);
+            }
+            CommandOutcome::Close => {
+                self.close_editor();
+            }
+            CommandOutcome::SaveThenClose => {
+                self.save_editor_content(true);
+            }
+        }
+    }
+
+    /// Initiate an async write of the active tab's editor buffer to disk.
+    ///
+    /// Uses an atomic rename via `tempfile` to avoid partial writes.  On
+    /// completion, sends [`Action::FileSaved`] or [`Action::FileSaveError`].
+    ///
+    /// If `close_after_save` is `true`, the editor will be closed in the
+    /// `FileSaved` handler (`:wq` behaviour).
+    fn save_editor_content(&mut self, close_after_save: bool) {
+        let Some(tab) = self.tabs.active_tab() else {
+            return;
+        };
+        let Some(editor) = tab.editor.as_ref() else {
+            return;
+        };
+        let Some(path) = tab.view.current_path.clone() else {
+            return;
+        };
+
+        let content = extract_text(&editor.state);
+        let Some(tx) = self.action_tx.clone() else {
+            return;
+        };
+
+        // Clone path before moving into the closure so we can also store it in
+        // `last_file_save_at` below.
+        let path_for_closure = path.clone();
+        tokio::task::spawn_blocking(move || {
+            let path = path_for_closure;
+            // Create the temp file in the same directory so the rename stays
+            // on the same filesystem (required for atomic persist()).
+            let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+            let result: anyhow::Result<()> = (|| {
+                use std::io::Write as _;
+                let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
+                tmp.write_all(content.as_bytes())?;
+                tmp.flush()?;
+                tmp.persist(&path)?;
+                Ok(())
+            })();
+
+            match result {
+                Ok(()) => {
+                    let _ = tx.send(Action::FileSaved {
+                        path,
+                        saved_content: content,
+                    });
+                }
+                Err(e) => {
+                    let _ = tx.send(Action::FileSaveError {
+                        path,
+                        error: e.to_string(),
+                    });
+                }
+            }
+        });
+
+        // Record the save time immediately so the watcher grace window starts
+        // before the async task completes (conservative: avoids the race where
+        // the watcher fires before the action arrives).
+        self.last_file_save_at = Some((path, Instant::now()));
+
+        if close_after_save {
+            // Set the typed flag so the FileSaved handler knows to close the
+            // editor.  This avoids the sentinel-string anti-pattern.
+            if let Some(tab) = self.tabs.active_tab_mut()
+                && let Some(editor) = tab.editor.as_mut()
+            {
+                editor.close_after_save = true;
+            }
+        }
+    }
+
+    /// Drop the editor for the active tab and return to [`Focus::Viewer`].
+    fn close_editor(&mut self) {
+        if let Some(tab) = self.tabs.active_tab_mut() {
+            tab.editor = None;
+        }
+        self.focus = Focus::Viewer;
+    }
+
     fn handle_viewer_key(&mut self, code: KeyCode, modifiers: KeyModifiers) {
         // Resolve a pending vim `g` chord before normal dispatch.
         if self.pending_chord.take() == Some('g') && self.resolve_g_chord_viewer(code) {
@@ -1147,48 +1396,58 @@ impl App {
                     ds.match_lines.clear();
                 }
             }
+            // `i` enters vim-style edit mode for the active tab's source file.
+            KeyCode::Char('i') => {
+                self.enter_edit_mode();
+            }
             KeyCode::Char('q') => self.running = false,
             KeyCode::Char('j') | KeyCode::Down => {
                 let vh = self.tabs.view_height;
                 if let Some(tab) = self.tabs.active_tab_mut() {
-                    tab.view.scroll_down(1, vh);
+                    tab.view.cursor_down(1);
+                    tab.view.scroll_to_cursor(vh);
                 }
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 let vh = self.tabs.view_height;
                 if let Some(tab) = self.tabs.active_tab_mut() {
-                    tab.view.scroll_up(1, vh);
+                    tab.view.cursor_up(1);
+                    tab.view.scroll_to_cursor(vh);
                 }
             }
             KeyCode::Char('d') => {
                 let vh = self.tabs.view_height;
                 if let Some(tab) = self.tabs.active_tab_mut() {
-                    tab.view.scroll_half_page_down(vh);
+                    tab.view.cursor_down(vh / 2);
+                    tab.view.scroll_to_cursor(vh);
                 }
             }
             KeyCode::Char('u') => {
                 let vh = self.tabs.view_height;
                 if let Some(tab) = self.tabs.active_tab_mut() {
-                    tab.view.scroll_half_page_up(vh);
+                    tab.view.cursor_up(vh / 2);
+                    tab.view.scroll_to_cursor(vh);
                 }
             }
             KeyCode::PageDown => {
                 let vh = self.tabs.view_height;
                 if let Some(tab) = self.tabs.active_tab_mut() {
-                    tab.view.scroll_page_down(vh);
+                    tab.view.cursor_down(vh);
+                    tab.view.scroll_to_cursor(vh);
                 }
             }
             KeyCode::PageUp => {
                 let vh = self.tabs.view_height;
                 if let Some(tab) = self.tabs.active_tab_mut() {
-                    tab.view.scroll_page_up(vh);
+                    tab.view.cursor_up(vh);
+                    tab.view.scroll_to_cursor(vh);
                 }
             }
             KeyCode::Char('g') => self.pending_chord = Some('g'),
             KeyCode::Char('G') => {
                 let vh = self.tabs.view_height;
                 if let Some(tab) = self.tabs.active_tab_mut() {
-                    tab.view.scroll_to_bottom(vh);
+                    tab.view.cursor_to_bottom(vh);
                 }
             }
             KeyCode::Tab => self.focus = Focus::Tree,
@@ -1271,12 +1530,14 @@ impl App {
                 if let Ok(n) = self.goto_line.input.parse::<u32>()
                     && n > 0
                 {
+                    let vh = self.tabs.view_height;
                     let tab = self.tabs.active_tab_mut();
                     if let Some(tab) = tab
                         && tab.view.total_lines > 0
                     {
                         let max_line = tab.view.total_lines;
-                        tab.view.scroll_offset = n.min(max_line) - 1;
+                        tab.view.cursor_line = n.min(max_line) - 1;
+                        tab.view.scroll_to_cursor(vh);
                     }
                 }
                 self.goto_line.active = false;
@@ -1493,6 +1754,16 @@ impl App {
                 continue;
             }
 
+            // Suppress reloads that are the echo of our own save.  The
+            // debouncer fires up to 500 ms after the write; we guard 700 ms
+            // to include a 200 ms safety margin.
+            if let Some((ref saved_path, saved_at)) = self.last_file_save_at
+                && saved_path == &path
+                && saved_at.elapsed() < std::time::Duration::from_millis(700)
+            {
+                continue;
+            }
+
             let tx = tx.clone();
             tokio::task::spawn_blocking(move || {
                 let Ok(content) = std::fs::read_to_string(&path) else {
@@ -1552,6 +1823,62 @@ impl App {
                 self.close_table_modal();
             }
         }
+    }
+
+    /// Apply a successful editor save.
+    ///
+    /// Updates the editor baseline so dirty detection is correct, refreshes
+    /// `tab.view.content` with the saved text, and closes the editor if
+    /// `close_after_save` was set (`:wq` path).
+    fn apply_file_saved(&mut self, path: PathBuf, saved_content: String) {
+        let palette = self.palette;
+        let theme = self.theme;
+
+        // Find the tab for this path and update its editor baseline + view content.
+        for tab in self.tabs.iter_mut() {
+            if tab.view.current_path.as_ref() != Some(&path) {
+                continue;
+            }
+            // Update the rendered view so the user sees the new content when
+            // they return to viewer mode.
+            let name = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            let scroll = tab.view.scroll_offset;
+            tab.view
+                .load(path.clone(), name, saved_content.clone(), &palette, theme);
+            tab.view.scroll_offset = scroll.min(tab.view.total_lines.saturating_sub(1));
+
+            if let Some(editor) = tab.editor.as_mut() {
+                editor.baseline = saved_content.clone();
+                // Close the editor when the `:wq` path requested it.
+                let should_close = editor.close_after_save;
+                if should_close {
+                    tab.editor = None;
+                } else if let Some(ed) = tab.editor.as_mut() {
+                    ed.status_message = Some("saved".to_string());
+                }
+            }
+            break;
+        }
+
+        // If the editor was closed (`:wq`), switch focus back to viewer.
+        if let Some(tab) = self.tabs.active_tab()
+            && tab.view.current_path.as_ref() == Some(&path)
+            && tab.editor.is_none()
+        {
+            self.focus = Focus::Viewer;
+        }
+
+        self.last_file_save_at = Some((path, Instant::now()));
+
+        // Refresh git status so the file tree recolors to reflect the save
+        // (new → modified, or modified → clean if the edit was reverted).
+        // The watcher suppression above prevents a FilesChanged action from
+        // firing, which is where the refresh normally hooks in.
+        self.refresh_git_status();
     }
 
     // ── Search ───────────────────────────────────────────────────────────────
@@ -1974,10 +2301,12 @@ mod tests {
             .iter()
             .map(|l| Line::from(Span::raw(l.to_string())))
             .collect();
+        let n = text_lines.len();
         DocBlock::Text {
             text: Text::from(text_lines),
             links: Vec::new(),
             heading_anchors: Vec::new(),
+            source_lines: (0..n as u32).collect(),
         }
     }
 
@@ -2000,6 +2329,7 @@ mod tests {
             alignments: vec![pulldown_cmark::Alignment::None; num_cols],
             natural_widths,
             rendered_height: 4,
+            source_line: 0,
         })
     }
 
@@ -2094,6 +2424,7 @@ mod tests {
                 id: mermaid_id,
                 source: source.to_string(),
                 cell_height: Cell::new(DEFAULT_MERMAID_HEIGHT),
+                source_line: 0,
             },
         ];
         let cache = source_only_cache(99);
@@ -2111,6 +2442,7 @@ mod tests {
             id: mermaid_id,
             source: "graph LR\n    find_this".to_string(),
             cell_height: Cell::new(DEFAULT_MERMAID_HEIGHT),
+            source_line: 0,
         }];
         let cache = ready_cache(42);
         let layouts = HashMap::new();
@@ -2125,6 +2457,7 @@ mod tests {
             id: mermaid_id,
             source: "sequenceDiagram\n    A ->> match_me: call".to_string(),
             cell_height: Cell::new(DEFAULT_MERMAID_HEIGHT),
+            source_line: 0,
         }];
         let layouts = HashMap::new();
         let cache = empty_mermaid_cache();
@@ -2292,5 +2625,248 @@ mod tests {
         // "row1 target" is at layout index 4 → absolute = 3+4 = 7.
         // after block starts at 3+4=7. "after" is at 7+0=7 — no match for "target".
         assert_eq!(result, vec![7]);
+    }
+
+    // ── Editor spike tests ────────────────────────────────────────────────────
+
+    /// Open a tab with known content and put the app in a state suitable for
+    /// editor tests.  Returns the `App` and the path used.
+    fn make_app_with_tab(content: &str) -> (App, PathBuf) {
+        let mut app = App::new(PathBuf::from("."));
+        let path = PathBuf::from("/fake/test.md");
+        // Use open_or_focus to create the tab, then manually set content.
+        app.tabs.open_or_focus(&path, true);
+        if let Some(tab) = app.tabs.active_tab_mut() {
+            tab.view.content = content.to_string();
+            tab.view.current_path = Some(path.clone());
+            tab.view.file_name = "test.md".to_string();
+        }
+        app.focus = Focus::Viewer;
+        (app, path)
+    }
+
+    #[test]
+    fn enter_edit_mode_initializes_editor_from_view_content() {
+        let (mut app, _path) = make_app_with_tab("# Hello\n\nworld");
+        app.enter_edit_mode();
+        let tab = app.tabs.active_tab().expect("tab must exist");
+        let editor = tab
+            .editor
+            .as_ref()
+            .expect("editor must be Some after enter_edit_mode");
+        assert_eq!(editor.baseline, "# Hello\n\nworld");
+        assert!(!editor.is_dirty());
+        assert_eq!(app.focus, Focus::Editor);
+    }
+
+    #[test]
+    fn q_with_no_dirty_returns_to_viewer() {
+        let (mut app, _path) = make_app_with_tab("clean content");
+        app.enter_edit_mode();
+        // Dispatch :q — buffer is clean so the editor should close.
+        {
+            let tab = app.tabs.active_tab_mut().unwrap();
+            let editor = tab.editor.as_mut().unwrap();
+            let outcome = dispatch_command(editor, "q");
+            // Manually apply the outcome as App::apply_command_outcome would.
+            assert_eq!(outcome, CommandOutcome::Close);
+        }
+        // Simulate the close path.
+        app.close_editor();
+        assert!(app.tabs.active_tab().unwrap().editor.is_none());
+        assert_eq!(app.focus, Focus::Viewer);
+    }
+
+    #[test]
+    fn q_with_dirty_blocks_and_sets_status_message() {
+        let (mut app, _path) = make_app_with_tab("original");
+        app.enter_edit_mode();
+        // Make it dirty by changing the baseline so the buffer no longer matches.
+        {
+            let tab = app.tabs.active_tab_mut().unwrap();
+            let editor = tab.editor.as_mut().unwrap();
+            editor.baseline = "something different".to_string();
+            let outcome = dispatch_command(editor, "q");
+            assert_eq!(
+                outcome,
+                CommandOutcome::Handled,
+                ":q on dirty buffer must return Handled (not Close)"
+            );
+            assert!(
+                editor.status_message.is_some(),
+                "a status message must be set when :q is blocked"
+            );
+        }
+        // Editor must remain open.
+        assert!(app.tabs.active_tab().unwrap().editor.is_some());
+    }
+
+    #[test]
+    fn q_bang_with_dirty_discards_and_returns_to_viewer() {
+        let (mut app, _path) = make_app_with_tab("original");
+        app.enter_edit_mode();
+        {
+            let tab = app.tabs.active_tab_mut().unwrap();
+            let editor = tab.editor.as_mut().unwrap();
+            editor.baseline = "something different".to_string();
+            let outcome = dispatch_command(editor, "q!");
+            assert_eq!(
+                outcome,
+                CommandOutcome::Close,
+                ":q! must always close even when dirty"
+            );
+        }
+        app.close_editor();
+        assert!(app.tabs.active_tab().unwrap().editor.is_none());
+        assert_eq!(app.focus, Focus::Viewer);
+    }
+
+    #[test]
+    fn command_line_captures_chars_until_enter() {
+        use crossterm::event::{KeyCode as KC, KeyEvent, KeyModifiers};
+
+        let (mut app, _path) = make_app_with_tab("text");
+        app.enter_edit_mode();
+        app.focus = Focus::Editor;
+
+        // Press `:` — should start command-line mode (editor is in Normal mode).
+        app.handle_editor_key(KeyEvent::new(KC::Char(':'), KeyModifiers::NONE));
+        {
+            let tab = app.tabs.active_tab().unwrap();
+            let editor = tab.editor.as_ref().unwrap();
+            assert!(
+                editor.command_line.is_some(),
+                "':' in Normal mode must start command-line capture"
+            );
+            assert_eq!(editor.command_line.as_deref(), Some(""));
+        }
+
+        // Type 'w'.
+        app.handle_editor_key(KeyEvent::new(KC::Char('w'), KeyModifiers::NONE));
+        {
+            let tab = app.tabs.active_tab().unwrap();
+            let editor = tab.editor.as_ref().unwrap();
+            assert_eq!(editor.command_line.as_deref(), Some("w"));
+        }
+
+        // We can't easily test the Enter path here without an action_tx, so
+        // just verify the capture works: 'w' was collected into command_line.
+    }
+
+    #[test]
+    fn mouse_events_ignored_while_editing() {
+        use crossterm::event::{KeyModifiers, MouseButton, MouseEventKind};
+
+        let (mut app, _path) = make_app_with_tab("content");
+        app.enter_edit_mode();
+        // Precondition: focus must be Editor.
+        assert_eq!(app.focus, Focus::Editor);
+
+        // Record the tree selection before the mouse event.
+        let selection_before = app.tree.list_state.selected();
+
+        // Simulate a left-click anywhere on screen.
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 5,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        };
+        app.handle_mouse(click);
+
+        // Focus must remain on the editor.
+        assert_eq!(app.focus, Focus::Editor, "focus must stay Editor");
+        // Tree selection must be unchanged.
+        assert_eq!(
+            app.tree.list_state.selected(),
+            selection_before,
+            "tree selection must not change during edit mode"
+        );
+        // Editor must still be present.
+        assert!(
+            app.tabs.active_tab().unwrap().editor.is_some(),
+            "editor must remain open"
+        );
+    }
+
+    // ── enter_edit_mode source-line tests ────────────────────────────────────
+
+    /// `enter_edit_mode` must place the edtui cursor on the source line that
+    /// the viewer cursor's rendered logical line maps to via `source_line_at`.
+    ///
+    /// We build a Text block whose `source_lines` are [10, 11, 12] and set the
+    /// viewer cursor to logical line 1.  `source_line_at` returns 11, so the
+    /// editor cursor row must be 11.
+    #[test]
+    fn enter_edit_mode_uses_cursor_for_source_line() {
+        use crate::markdown::{DocBlock, HeadingAnchor, LinkInfo};
+        use ratatui::text::{Line, Span, Text};
+
+        let mut app = App::new(std::path::PathBuf::from("."));
+
+        // Open a tab with dummy content that has as many newlines as the
+        // highest source line we reference (line 11 → 12 lines).
+        let content: String = (0..12).map(|i| format!("source line {i}\n")).collect();
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        std::fs::write(&path, &content).unwrap();
+
+        let (_, _) = app.tabs.open_or_focus(&path, true);
+        let palette = crate::theme::Palette::from_theme(crate::theme::Theme::Default);
+        let tab = app.tabs.active_tab_mut().unwrap();
+        tab.view.load(
+            path.clone(),
+            "test.md".into(),
+            content,
+            &palette,
+            crate::theme::Theme::Default,
+        );
+
+        // Replace the rendered blocks with a hand-crafted Text block whose
+        // source_lines are [10, 11, 12].
+        let src_lines = vec![10u32, 11, 12];
+        let text_lines: Vec<Line<'static>> = src_lines
+            .iter()
+            .map(|i| Line::from(Span::raw(format!("line {i}"))))
+            .collect();
+        tab.view.rendered = vec![DocBlock::Text {
+            text: Text::from(text_lines),
+            links: Vec::<LinkInfo>::new(),
+            heading_anchors: Vec::<HeadingAnchor>::new(),
+            source_lines: src_lines,
+        }];
+        tab.view.total_lines = 3;
+        // Set cursor to logical line 1 → source_line_at returns 11.
+        tab.view.cursor_line = 1;
+
+        app.focus = Focus::Viewer;
+        app.enter_edit_mode();
+
+        assert_eq!(app.focus, Focus::Editor, "focus should switch to Editor");
+        let tab = app.tabs.active_tab().unwrap();
+        let editor = tab.editor.as_ref().expect("editor should be set");
+        assert_eq!(
+            editor.state.cursor.row, 11,
+            "editor cursor row should be the mapped source line (11)"
+        );
+    }
+
+    #[test]
+    fn watcher_suppresses_reload_within_grace_window() {
+        let (mut app, path) = make_app_with_tab("content");
+        // Simulate a recent self-save.
+        app.last_file_save_at = Some((path.clone(), Instant::now()));
+        // reload_changed_tabs requires action_tx; if None it returns early before
+        // the suppression check.  We use a channel so the logic actually runs.
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Action>();
+        app.action_tx = Some(tx);
+        app.reload_changed_tabs(std::slice::from_ref(&path));
+        // The spawn_blocking must NOT have been called because the path is
+        // within the grace window.  Since spawn_blocking is async, we check that
+        // no FileReloaded action arrives immediately (the channel should be empty).
+        assert!(
+            rx.try_recv().is_err(),
+            "no FileReloaded should be sent when within the grace window"
+        );
     }
 }

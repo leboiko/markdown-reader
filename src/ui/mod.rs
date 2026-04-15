@@ -1,6 +1,7 @@
 pub mod config_popup;
 pub mod copy_menu;
 pub mod doc_search_bar;
+pub mod editor;
 pub mod file_tree;
 pub mod goto_line_bar;
 pub mod help;
@@ -71,7 +72,16 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         viewer_area = content_chunks[1];
         app.viewer_area_rect = Some(viewer_area);
 
-        markdown_view::draw(f, app, viewer_area, is_viewer_focused(app.focus));
+        if app
+            .tabs
+            .active_tab()
+            .map(|t| t.editor.is_some())
+            .unwrap_or(false)
+        {
+            editor::draw(f, app, viewer_area);
+        } else {
+            markdown_view::draw(f, app, viewer_area, is_viewer_focused(app.focus));
+        }
     } else {
         let (first_pct, second_pct) = match app.tree_position {
             TreePosition::Left => (app.tree_width_pct, 100 - app.tree_width_pct),
@@ -110,7 +120,16 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         viewer_area = viewer_col_chunks[1];
         app.viewer_area_rect = Some(viewer_area);
 
-        markdown_view::draw(f, app, viewer_area, is_viewer_focused(app.focus));
+        if app
+            .tabs
+            .active_tab()
+            .map(|t| t.editor.is_some())
+            .unwrap_or(false)
+        {
+            editor::draw(f, app, viewer_area);
+        } else {
+            markdown_view::draw(f, app, viewer_area, is_viewer_focused(app.focus));
+        }
     }
 
     if app.search.active {
@@ -174,5 +193,6 @@ fn is_viewer_focused(focus: Focus) -> bool {
             | Focus::TableModal
             | Focus::CopyMenu
             | Focus::LinkPicker
+            | Focus::Editor
     )
 }
