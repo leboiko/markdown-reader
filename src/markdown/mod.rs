@@ -57,6 +57,13 @@ pub struct TableBlock {
     pub rendered_height: u32,
     /// 0-indexed source line where the opening `|` row of the table appears.
     pub source_line: u32,
+    /// Source lines for each logical row: index 0 is the header, indices
+    /// `1..=rows.len()` are body rows.  Length equals `1 + rows.len()`.
+    ///
+    /// Used by `source_line_at` to map a cursor position inside a rendered
+    /// table back to the exact markdown source row, so `enter_edit_mode` drops
+    /// the editor cursor on the right line.
+    pub row_source_lines: Vec<u32>,
 }
 
 /// A single rendered block in a document.
@@ -134,6 +141,54 @@ pub fn update_mermaid_heights(blocks: &[DocBlock], cache: &crate::mermaid::Merma
     changed
 }
 
+/// Map a cursor position inside a rendered table to the source line of the
+/// corresponding markdown row.
+///
+/// The inline table renderer produces a fixed layout:
+///
+/// ```text
+/// Row | Content
+/// ----+---------
+///   0 | ┌──┬──┐      top border
+///   1 | │ H │...│    header
+///   2 | ├──┼──┤      separator
+///   3 | │ a │...│    body[0]
+///   4 | │ b │...│    body[1]
+///  ...
+///   N | └──┴──┘      bottom border
+/// N+1 | [expand…]    optional truncation hint
+/// ```
+///
+/// `local` is the 0-based row within the block. Border rows fall back to the
+/// nearest content row (header or last body). If `row_source_lines` is shorter
+/// than expected (e.g. in tests with stub data), `source_line` is used as a
+/// safe fallback.
+fn table_row_source_line(t: &TableBlock, local: usize) -> u32 {
+    // Row indices of rendered elements.
+    let header_idx: usize = 1; // after top border
+    let first_body_idx: usize = 3; // after header + separator
+    let last_body_idx: usize = first_body_idx + t.rows.len();
+
+    match local {
+        // Top border — fall back to header source line.
+        i if i < header_idx => t.row_source_lines.first().copied().unwrap_or(t.source_line),
+        // Header row.
+        i if i == header_idx => t.row_source_lines.first().copied().unwrap_or(t.source_line),
+        // Separator — header fallback.
+        i if i < first_body_idx => t.row_source_lines.first().copied().unwrap_or(t.source_line),
+        // Body row.
+        i if i < last_body_idx => {
+            let body_index = i - first_body_idx;
+            t.row_source_lines
+                .get(1 + body_index)
+                .copied()
+                .unwrap_or(t.source_line)
+        }
+        // Bottom border / truncation hint — last body row fallback.
+        _ => t.row_source_lines.last().copied().unwrap_or(t.source_line),
+    }
+}
+
 /// Walk `blocks` and return the 0-indexed source line that corresponds to
 /// `logical_line` (the viewer's absolute rendered-line coordinate).
 ///
@@ -153,8 +208,29 @@ pub fn source_line_at(blocks: &[DocBlock], logical_line: u32) -> u32 {
                 DocBlock::Text { source_lines, .. } => {
                     source_lines.get(local).copied().unwrap_or(0)
                 }
-                DocBlock::Mermaid { source_line, .. } => *source_line,
-                DocBlock::Table(t) => t.source_line,
+                DocBlock::Mermaid {
+                    source_line,
+                    source,
+                    ..
+                } => {
+                    if local == 0 {
+                        // local == 0 is the fence line itself.
+                        *source_line
+                    } else {
+                        // Content lines: fence + 1 + K, clamped to the last content
+                        // line so the closing fence and anything beyond still map to
+                        // the last real source line inside the block.
+                        //
+                        // `source.lines().count()` is O(n) in the source length, but
+                        // this function is only called from `enter_edit_mode`, never
+                        // per frame, so the cost is acceptable.
+                        let content_count = source.lines().count() as u32;
+                        let content_offset =
+                            (local as u32 - 1).min(content_count.saturating_sub(1));
+                        *source_line + 1 + content_offset
+                    }
+                }
+                DocBlock::Table(t) => table_row_source_line(t, local),
             };
         }
         offset += h;

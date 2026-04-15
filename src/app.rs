@@ -2022,13 +2022,29 @@ impl App {
             &query_lower,
         );
         tab.doc_search.match_lines = match_lines;
+        // Copy the first match line before dropping the `tab` borrow so we can
+        // access `self.tabs.view_height` without a conflicting mutable borrow.
+        let first_match = tab.doc_search.match_lines.first().copied();
 
-        if let Some(&line) = tab.doc_search.match_lines.first() {
-            tab.view.scroll_offset = line;
+        if let Some(line) = first_match {
+            // Mirror the j/k idiom: set cursor_line then let scroll_to_cursor
+            // decide whether the viewport needs to move. Setting scroll_offset
+            // directly would strand cursor_line at its old position and break
+            // subsequent j/k movement.
+            let vh = self.tabs.view_height;
+            if let Some(tab) = self.tabs.active_tab_mut() {
+                tab.view.cursor_line = line;
+                tab.view.scroll_to_cursor(vh);
+            }
         }
     }
 
+    /// Advance to the next search match, wrapping around.
+    ///
+    /// Sets `cursor_line` to the match line and calls `scroll_to_cursor` so
+    /// subsequent `j`/`k` presses move from the correct row.
     fn doc_search_next(&mut self) {
+        let vh = self.tabs.view_height;
         let Some(tab) = self.tabs.active_tab_mut() else {
             return;
         };
@@ -2038,10 +2054,16 @@ impl App {
         }
         ds.current_match = (ds.current_match + 1) % ds.match_lines.len();
         let line = ds.match_lines[ds.current_match];
-        tab.view.scroll_offset = line;
+        tab.view.cursor_line = line;
+        tab.view.scroll_to_cursor(vh);
     }
 
+    /// Retreat to the previous search match, wrapping around.
+    ///
+    /// Sets `cursor_line` to the match line and calls `scroll_to_cursor` so
+    /// subsequent `j`/`k` presses move from the correct row.
     fn doc_search_prev(&mut self) {
+        let vh = self.tabs.view_height;
         let Some(tab) = self.tabs.active_tab_mut() else {
             return;
         };
@@ -2055,7 +2077,8 @@ impl App {
             ds.current_match - 1
         };
         let line = ds.match_lines[ds.current_match];
-        tab.view.scroll_offset = line;
+        tab.view.cursor_line = line;
+        tab.view.scroll_to_cursor(vh);
     }
 
     // ── Table modal ──────────────────────────────────────────────────────────
@@ -2322,6 +2345,10 @@ mod tests {
             .collect();
         let num_cols = h.len();
         let natural_widths = vec![10usize; num_cols];
+        // Stub row_source_lines: header at line 0, body rows at 2, 3, ...
+        let row_source_lines: Vec<u32> = std::iter::once(0)
+            .chain((2..).take(rows.len()).map(|i| i as u32))
+            .collect();
         DocBlock::Table(TableBlock {
             id: TableBlockId(id),
             headers: h,
@@ -2330,6 +2357,7 @@ mod tests {
             natural_widths,
             rendered_height: 4,
             source_line: 0,
+            row_source_lines,
         })
     }
 
@@ -2848,6 +2876,213 @@ mod tests {
         assert_eq!(
             editor.state.cursor.row, 11,
             "editor cursor row should be the mapped source line (11)"
+        );
+    }
+
+    // ── viewer navigation (d/u/gg/G) regression tests ────────────────────────
+
+    /// Minimal App with a tab whose view has a known `total_lines` and a
+    /// configured `view_height`.  Cheaper than `make_app_with_tab` because it
+    /// does not load + render real markdown content.
+    fn make_app_with_view(total_lines: u32, view_height: u32) -> App {
+        let mut app = App::new(PathBuf::from("."));
+        let path = PathBuf::from("/fake/nav_test.md");
+        app.tabs.open_or_focus(&path, true);
+        app.tabs.view_height = view_height;
+        if let Some(tab) = app.tabs.active_tab_mut() {
+            tab.view.total_lines = total_lines;
+            tab.view.cursor_line = 0;
+            tab.view.scroll_offset = 0;
+        }
+        app.focus = Focus::Viewer;
+        app
+    }
+
+    #[test]
+    fn d_key_moves_cursor_half_page_down() {
+        let mut app = make_app_with_view(100, 30);
+        app.handle_key(KeyCode::Char('d'), KeyModifiers::NONE);
+        let tab = app.tabs.active_tab().unwrap();
+        assert_eq!(
+            tab.view.cursor_line, 15,
+            "`d` should move the cursor half a page (vh/2 = 15)"
+        );
+    }
+
+    #[test]
+    fn u_key_moves_cursor_half_page_up() {
+        let mut app = make_app_with_view(100, 30);
+        if let Some(tab) = app.tabs.active_tab_mut() {
+            tab.view.cursor_line = 50;
+            tab.view.scroll_offset = 35;
+        }
+        app.handle_key(KeyCode::Char('u'), KeyModifiers::NONE);
+        let tab = app.tabs.active_tab().unwrap();
+        assert_eq!(tab.view.cursor_line, 35, "`u` should move cursor up vh/2");
+    }
+
+    #[test]
+    fn gg_chord_jumps_cursor_to_top() {
+        let mut app = make_app_with_view(100, 30);
+        if let Some(tab) = app.tabs.active_tab_mut() {
+            tab.view.cursor_line = 50;
+            tab.view.scroll_offset = 35;
+        }
+        app.handle_key(KeyCode::Char('g'), KeyModifiers::NONE);
+        app.handle_key(KeyCode::Char('g'), KeyModifiers::NONE);
+        let tab = app.tabs.active_tab().unwrap();
+        assert_eq!(tab.view.cursor_line, 0, "`gg` should jump cursor to 0");
+        assert_eq!(tab.view.scroll_offset, 0, "`gg` should reset scroll");
+    }
+
+    #[test]
+    fn shift_g_jumps_cursor_to_bottom() {
+        let mut app = make_app_with_view(100, 30);
+        app.handle_key(KeyCode::Char('G'), KeyModifiers::SHIFT);
+        let tab = app.tabs.active_tab().unwrap();
+        assert_eq!(tab.view.cursor_line, 99, "`G` should land cursor on last line");
+    }
+
+    #[test]
+    fn d_key_moves_cursor_with_real_loaded_content() {
+        use crate::theme::{Palette, Theme};
+        let mut app = App::new(PathBuf::from("."));
+        let path = PathBuf::from("/fake/nav_test.md");
+        app.tabs.open_or_focus(&path, true);
+        let content: String = (0..60).map(|i| format!("paragraph {i}\n\n")).collect();
+        let palette = Palette::from_theme(Theme::Default);
+        if let Some(tab) = app.tabs.active_tab_mut() {
+            tab.view.load(
+                path.clone(),
+                "nav_test.md".to_string(),
+                content,
+                &palette,
+                Theme::Default,
+            );
+        }
+        app.focus = Focus::Viewer;
+        app.tabs.view_height = 30;
+
+        let before_cursor = app.tabs.active_tab().unwrap().view.cursor_line;
+        let before_total = app.tabs.active_tab().unwrap().view.total_lines;
+        let before_vh = app.tabs.view_height;
+        app.handle_key(KeyCode::Char('d'), KeyModifiers::NONE);
+        let after_cursor = app.tabs.active_tab().unwrap().view.cursor_line;
+        assert!(
+            before_total > 0,
+            "total_lines must be populated (got {before_total})"
+        );
+        assert!(before_vh > 0, "view_height must be positive (got {before_vh})");
+        assert_ne!(
+            before_cursor, after_cursor,
+            "`d` should move the cursor (before={before_cursor} after={after_cursor} \
+             total_lines={before_total} view_height={before_vh})",
+        );
+    }
+
+    // ── doc_search navigation ────────────────────────────────────────────────
+
+    /// Build an `App` with an active tab whose `doc_search` state has the
+    /// given match lines and current_match, and whose view has the given
+    /// total_lines.  view_height defaults to 20.
+    fn make_app_with_doc_search(
+        match_lines: Vec<u32>,
+        current_match: usize,
+        total_lines: u32,
+    ) -> App {
+        let mut app = App::new(PathBuf::from("."));
+        let path = PathBuf::from("/fake/ds_test.md");
+        app.tabs.open_or_focus(&path, true);
+        app.tabs.view_height = 20;
+        if let Some(tab) = app.tabs.active_tab_mut() {
+            tab.view.total_lines = total_lines;
+            tab.view.cursor_line = 0;
+            tab.view.scroll_offset = 0;
+            tab.doc_search.match_lines = match_lines;
+            tab.doc_search.current_match = current_match;
+        }
+        app
+    }
+
+    /// `doc_search_next` must advance `current_match`, set `cursor_line` to the
+    /// new match line, and adjust `scroll_offset` via `scroll_to_cursor`.
+    #[test]
+    fn doc_search_next_updates_cursor_and_scroll() {
+        // 100-line doc, view_height = 20; match_lines = [5, 20, 35],
+        // cursor starts at line 5 (current_match = 0).
+        let mut app = make_app_with_doc_search(vec![5, 20, 35], 0, 100);
+        {
+            // Ensure cursor is already at the first match.
+            let tab = app.tabs.active_tab_mut().unwrap();
+            tab.view.cursor_line = 5;
+        }
+        app.doc_search_next();
+        let tab = app.tabs.active_tab().unwrap();
+        assert_eq!(tab.doc_search.current_match, 1);
+        assert_eq!(
+            tab.view.cursor_line, 20,
+            "cursor must move to match line 20"
+        );
+        // After scroll_to_cursor with view_height=20, scroll_offset = 20 - (20-1) = 1.
+        assert_eq!(tab.view.scroll_offset, 1);
+    }
+
+    /// `doc_search_prev` with `current_match == 0` must wrap to the last match.
+    #[test]
+    fn doc_search_prev_wraps_to_last_match() {
+        let mut app = make_app_with_doc_search(vec![5, 20, 35], 0, 100);
+        app.doc_search_prev();
+        let tab = app.tabs.active_tab().unwrap();
+        assert_eq!(tab.doc_search.current_match, 2);
+        assert_eq!(tab.view.cursor_line, 35, "cursor must wrap to last match");
+    }
+
+    /// When there are no matches, `doc_search_next` must not change any state.
+    #[test]
+    fn doc_search_empty_matches_no_op() {
+        let mut app = make_app_with_doc_search(vec![], 0, 100);
+        {
+            let tab = app.tabs.active_tab_mut().unwrap();
+            tab.view.cursor_line = 7;
+            tab.view.scroll_offset = 3;
+        }
+        app.doc_search_next();
+        let tab = app.tabs.active_tab().unwrap();
+        assert_eq!(tab.view.cursor_line, 7, "cursor must not change");
+        assert_eq!(tab.view.scroll_offset, 3, "scroll must not change");
+    }
+
+    /// `perform_doc_search` with a matching query must set `cursor_line` to the
+    /// first match.
+    ///
+    /// We build rendered blocks that contain "hello" on line 4 (the 5th line
+    /// of a Text block that starts at the document root) and verify the cursor
+    /// ends up at absolute line 4.
+    #[test]
+    fn perform_doc_search_first_match_moves_cursor() {
+        let lines: Vec<&str> = (0..10)
+            .map(|i| if i == 4 { "hello world" } else { "other" })
+            .collect();
+        let mut app = App::new(PathBuf::from("."));
+        let path = PathBuf::from("/fake/search_test.md");
+        app.tabs.open_or_focus(&path, true);
+        app.tabs.view_height = 20;
+        if let Some(tab) = app.tabs.active_tab_mut() {
+            let block = make_text_block(lines.as_slice());
+            let total = block.height();
+            tab.view.rendered = vec![block];
+            tab.view.total_lines = total;
+            tab.view.cursor_line = 0;
+            tab.view.scroll_offset = 0;
+            tab.doc_search.active = true;
+            tab.doc_search.query = "hello".to_string();
+        }
+        app.focus = Focus::Viewer;
+        app.perform_doc_search();
+        let tab = app.tabs.active_tab().unwrap();
+        assert_eq!(
+            tab.view.cursor_line, 4,
+            "cursor must jump to first match at line 4"
         );
     }
 

@@ -326,6 +326,11 @@ mod tests {
         for w in &mut natural_widths {
             *w = (*w).max(1);
         }
+        // Stub row_source_lines: header at line 0, body rows at 2, 3, ...
+        // Exact values don't matter for layout tests.
+        let row_source_lines: Vec<u32> = std::iter::once(0)
+            .chain((2..).take(rows.len()).map(|i| i as u32))
+            .collect();
         TableBlock {
             id: TableBlockId(0),
             headers: h,
@@ -334,6 +339,7 @@ mod tests {
             natural_widths,
             rendered_height: 3,
             source_line: 0,
+            row_source_lines,
         }
     }
 

@@ -29,15 +29,18 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     let file_info = if let Some(tab) = app.tabs.active_tab()
         && !tab.view.file_name.is_empty()
     {
-        let pct = if tab.view.total_lines == 0 {
-            0u32
-        } else {
-            (tab.view.scroll_offset * 100 / tab.view.total_lines.max(1)).min(100)
-        };
+        let total = tab.view.total_lines.max(1);
+        let pct = (tab.view.cursor_line * 100 / total).min(100);
         let tab_idx = app.tabs.active_index().map(|i| i + 1).unwrap_or(0);
+        // Show both the absolute cursor line (1-indexed for humans) and the
+        // percentage through the document so users can see `j`/`k`/`d`/`u`
+        // navigation reflected immediately.
         format!(
-            " | [{tab_idx}/{tab_count}] {} ({}%)",
-            tab.view.file_name, pct
+            " | [{tab_idx}/{tab_count}] {} ({}/{}, {}%)",
+            tab.view.file_name,
+            tab.view.cursor_line + 1,
+            tab.view.total_lines,
+            pct
         )
     } else {
         String::new()

@@ -145,6 +145,13 @@ struct MdRenderer {
     code_block_start_line: u32,
     /// 0-indexed source line where the current table's opening row sits.
     table_start_line: u32,
+    /// Source line of the table row currently being accumulated.
+    /// Captured from `Start(Tag::TableRow)`'s `span.start`.
+    current_table_row_source_line: u32,
+    /// Source lines for every logical row in the current table.
+    /// Index 0 is the header row; indices `1..=table_rows.len()` are body rows.
+    /// Flushed into `TableBlock::row_source_lines` in `emit_table_block`.
+    table_row_source_lines: Vec<u32>,
 }
 
 impl MdRenderer {
@@ -194,6 +201,8 @@ impl MdRenderer {
             code_block_fence_offset: None,
             code_block_start_line: 0,
             table_start_line: 0,
+            current_table_row_source_line: 0,
+            table_row_source_lines: Vec::new(),
         }
     }
 
@@ -452,6 +461,10 @@ impl MdRenderer {
             }
             Tag::TableRow => {
                 self.table_row.clear();
+                // Capture the source line for this row so we can map the cursor
+                // back to the exact markdown row when entering edit mode.
+                self.current_table_row_source_line =
+                    byte_offset_to_line(span.start, &self.line_boundaries);
             }
             Tag::TableCell => {}
             _ => {}
@@ -533,11 +546,18 @@ impl MdRenderer {
             }
             TagEnd::TableHead => {
                 self.table_header_row = Some(self.table_row.clone());
+                // Record the header row's source line before clearing the flag.
+                self.table_row_source_lines
+                    .push(self.current_table_row_source_line);
                 self.table_header = false;
             }
             TagEnd::TableRow => {
                 if !self.table_header {
                     self.table_rows.push(self.table_row.clone());
+                    // Record the body row's source line (header is already recorded
+                    // in TagEnd::TableHead above).
+                    self.table_row_source_lines
+                        .push(self.current_table_row_source_line);
                 }
             }
             TagEnd::TableCell => {
@@ -689,6 +709,7 @@ impl MdRenderer {
     fn emit_table_block(&mut self) {
         let headers = self.table_header_row.take().unwrap_or_default();
         let rows = std::mem::take(&mut self.table_rows);
+        let row_source_lines = std::mem::take(&mut self.table_row_source_lines);
         let alignments = std::mem::take(&mut self.table_alignments);
 
         let num_cols = headers
@@ -740,6 +761,7 @@ impl MdRenderer {
             natural_widths,
             rendered_height,
             source_line: self.table_start_line,
+            row_source_lines,
         }));
         self.push_blank_line();
     }
@@ -1132,5 +1154,107 @@ mod tests {
             source_lines[content_idx], 3,
             "first code content line should map to source line 3"
         );
+    }
+
+    // ── table row_source_lines ───────────────────────────────────────────────
+
+    /// Rendering a 2-column table with a header and two body rows must produce
+    /// `row_source_lines` of length 3 (header + 2 body rows) and correctly
+    /// map each row to its markdown source line.
+    ///
+    /// Markdown input (0-indexed lines):
+    ///   0: | A | B |
+    ///   1: |---|---|
+    ///   2: | 1 | 2 |
+    ///   3: | 3 | 4 |
+    #[test]
+    fn table_captures_row_source_lines() {
+        let md = "| A | B |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n";
+        let p = default_palette();
+        let blocks = render_markdown(md, &p, crate::theme::Theme::Default);
+        let table = blocks
+            .iter()
+            .find_map(|b| {
+                if let DocBlock::Table(t) = b {
+                    Some(t)
+                } else {
+                    None
+                }
+            })
+            .expect("expected a Table block");
+
+        // Header is on source line 0; body rows on lines 2 and 3.
+        // (line 1 is the `|---|---|` separator, which is not a data row.)
+        assert_eq!(
+            table.row_source_lines,
+            vec![0, 2, 3],
+            "row_source_lines mismatch: {:#?}",
+            table.row_source_lines
+        );
+    }
+
+    /// A header-only table (no body rows) must produce exactly one entry in
+    /// `row_source_lines`.
+    #[test]
+    fn table_header_source_line_captured() {
+        let md = "| A | B |\n|---|---|\n";
+        let p = default_palette();
+        let blocks = render_markdown(md, &p, crate::theme::Theme::Default);
+        let table = blocks
+            .iter()
+            .find_map(|b| {
+                if let DocBlock::Table(t) = b {
+                    Some(t)
+                } else {
+                    None
+                }
+            })
+            .expect("expected a Table block");
+
+        assert_eq!(
+            table.row_source_lines,
+            vec![0],
+            "header-only table must have exactly one entry"
+        );
+    }
+
+    // ── mermaid source_line_at precision ────────────────────────────────────
+
+    /// `source_line_at` must map each cursor row inside a mermaid block to
+    /// the corresponding source line (fence + 1 + row_offset), clamped to the
+    /// last content line.
+    ///
+    /// Markdown input (0-indexed lines):
+    ///   0: ```mermaid
+    ///   1: graph LR
+    ///   2: A-->B
+    ///   3: C-->D
+    ///   4: ```
+    ///   5: (blank after fence)
+    #[test]
+    fn mermaid_source_line_precise_per_row() {
+        use crate::markdown::source_line_at;
+        use crate::mermaid::DEFAULT_MERMAID_HEIGHT;
+        use std::cell::Cell;
+
+        // Construct the block manually; the renderer collapses the content
+        // into a single `source` string.
+        let blocks = vec![DocBlock::Mermaid {
+            id: crate::markdown::MermaidBlockId(0),
+            source: "graph LR\nA-->B\nC-->D".to_string(), // 3 content lines
+            cell_height: Cell::new(DEFAULT_MERMAID_HEIGHT),
+            source_line: 0, // fence is on line 0
+        }];
+
+        // local == 0 → fence line
+        assert_eq!(source_line_at(&blocks, 0), 0, "fence row");
+        // local == 1 → first content line: fence + 1 + 0 = 1
+        assert_eq!(source_line_at(&blocks, 1), 1, "content[0]");
+        // local == 2 → second content line: fence + 1 + 1 = 2
+        assert_eq!(source_line_at(&blocks, 2), 2, "content[1]");
+        // local == 3 → third content line: fence + 1 + 2 = 3
+        assert_eq!(source_line_at(&blocks, 3), 3, "content[2]");
+        // local == 4 → clamped to last content (index 2): fence + 1 + 2 = 3
+        assert_eq!(source_line_at(&blocks, 4), 3, "clamped past last content");
     }
 }

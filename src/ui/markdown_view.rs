@@ -10,7 +10,7 @@ use crate::ui::table_render::layout_table;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
@@ -355,6 +355,10 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
         fully_visible: bool,
         id: crate::markdown::MermaidBlockId,
         source: String,
+        /// Absolute logical-line index where this block starts in the document.
+        block_start: u32,
+        /// Total height of this block in logical lines.
+        block_height: u32,
     }
 
     let mut text_draws: Vec<TextDraw> = Vec::new();
@@ -418,21 +422,11 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                                 // start == clip_start (lines before viewport are skipped).
                                 if cursor_relative >= start {
                                     let idx_in_visible = cursor_relative - start;
-                                    if let Some(line) = visible_text.lines.get_mut(idx_in_visible) {
-                                        for span in line.spans.iter_mut() {
-                                            span.style = span
-                                                .style
-                                                .patch(Style::default().bg(p.selection_bg));
-                                        }
-                                        // Empty lines have no spans; inject a filler so the
-                                        // highlight is still visible as a colored row.
-                                        if line.spans.is_empty() {
-                                            *line = Line::from(Span::styled(
-                                                " ".to_string(),
-                                                Style::default().bg(p.selection_bg),
-                                            ));
-                                        }
-                                    }
+                                    patch_cursor_highlight(
+                                        &mut visible_text.lines,
+                                        idx_in_visible,
+                                        p.selection_bg,
+                                    );
                                 }
                             }
 
@@ -458,6 +452,8 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                                 fully_visible,
                                 id: *id,
                                 source: source.clone(),
+                                block_start,
+                                block_height,
                             });
                         }
                         DocBlock::Table(table) => {
@@ -467,7 +463,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                                 let end = (clip_start + visible_lines)
                                     .min(cached.text.lines.len() as u32)
                                     as usize;
-                                let visible_text =
+                                let mut visible_text =
                                     if let Some((query, current_line)) = &doc_search_query {
                                         let full = highlight_matches(
                                             &cached.text,
@@ -480,6 +476,21 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                                     } else {
                                         Text::from(cached.text.lines[start..end].to_vec())
                                     };
+                                // Apply cursor highlight when the viewer has focus and
+                                // the cursor falls inside this table block.
+                                let block_end = block_start + block_height;
+                                if focused && cursor_line >= block_start && cursor_line < block_end
+                                {
+                                    let cursor_relative = (cursor_line - block_start) as usize;
+                                    if cursor_relative >= start {
+                                        let idx_in_visible = cursor_relative - start;
+                                        patch_cursor_highlight(
+                                            &mut visible_text.lines,
+                                            idx_in_visible,
+                                            p.selection_bg,
+                                        );
+                                    }
+                                }
                                 text_draws.push(TextDraw {
                                     y: rect_y,
                                     height: draw_height,
@@ -506,7 +517,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
         let in_tmux = std::env::var("TMUX").is_ok();
         let tx = tx.clone();
         let bg_rgb = match p.background {
-            ratatui::style::Color::Rgb(r, g, b) => (r, g, b),
+            Color::Rgb(r, g, b) => (r, g, b),
             _ => (0, 0, 0),
         };
         for (id, source) in mermaid_to_queue {
@@ -545,27 +556,60 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
             width: inner.width,
             height: md.height,
         };
-        draw_mermaid_block(f, app, rect, md.fully_visible, md.id, &md.source, &p);
+        let params = MermaidDrawParams {
+            fully_visible: md.fully_visible,
+            id: md.id,
+            source: &md.source,
+            focused,
+            cursor_line,
+            block_start: md.block_start,
+            block_end: md.block_start + md.block_height,
+        };
+        draw_mermaid_block(f, app, rect, &p, &params);
     }
+}
+
+/// All parameters needed to draw a single mermaid block.
+///
+/// Bundles the per-block rendering state and cursor context into one struct so
+/// [`draw_mermaid_block`] stays within clippy's 7-argument limit.
+struct MermaidDrawParams<'a> {
+    /// Whether the image is fully visible in the viewport.
+    fully_visible: bool,
+    /// Opaque block identifier used to look up the cache entry.
+    id: crate::markdown::MermaidBlockId,
+    /// Raw mermaid source, displayed when the image is not available.
+    source: &'a str,
+    /// Whether the viewer panel currently has keyboard focus.
+    focused: bool,
+    /// Absolute logical-line index of the cursor.
+    cursor_line: u32,
+    /// Inclusive start of the block in absolute logical lines.
+    block_start: u32,
+    /// Exclusive end of the block in absolute logical lines.
+    block_end: u32,
 }
 
 /// Draw a mermaid block at the given rect, looking up the cache entry.
 ///
-/// When `fully_visible` is false (the block is partially scrolled on- or
-/// off-screen), skip image rendering and show a placeholder; otherwise the
+/// When `params.fully_visible` is false (the block is partially scrolled on-
+/// or off-screen), skip image rendering and show a placeholder; otherwise the
 /// image widget would re-fit to the shrinking rect and visibly jitter.
 fn draw_mermaid_block(
     f: &mut Frame,
     app: &mut App,
     rect: Rect,
-    fully_visible: bool,
-    id: crate::markdown::MermaidBlockId,
-    source: &str,
     p: &Palette,
+    params: &MermaidDrawParams,
 ) {
     use crate::mermaid::MermaidEntry;
 
-    let entry = app.mermaid_cache.get_mut(&id);
+    let entry = app.mermaid_cache.get_mut(&params.id);
+
+    // Helper: true when the cursor is inside this block and the viewer is focused.
+    let cursor_in_block = params.focused
+        && params.cursor_line >= params.block_start
+        && params.cursor_line < params.block_end;
 
     match entry {
         None => {
@@ -575,12 +619,31 @@ fn draw_mermaid_block(
             render_mermaid_placeholder(f, rect, "rendering\u{2026}", p);
         }
         Some(MermaidEntry::Ready { protocol, .. }) => {
-            if fully_visible {
+            if params.fully_visible {
                 use ratatui_image::{Resize, StatefulImage};
                 f.render_widget(
                     Block::default().style(Style::default().bg(p.background)),
                     rect,
                 );
+                // Render the cursor background bar BEFORE the image so it sits
+                // underneath. The image overwrites most of the bar, but a thin
+                // colored strip is left at the cursor row around the image
+                // padding. This is the best we can do without image compositing.
+                if cursor_in_block {
+                    let row_offset = (params.cursor_line - params.block_start) as u16;
+                    if row_offset < rect.height {
+                        let bar_rect = Rect {
+                            x: rect.x,
+                            y: rect.y + row_offset,
+                            width: rect.width,
+                            height: 1,
+                        };
+                        f.render_widget(
+                            Block::default().style(Style::default().bg(p.selection_bg)),
+                            bar_rect,
+                        );
+                    }
+                }
                 let padded = padded_rect(rect, 4, 1);
                 let image = StatefulImage::new().resize(Resize::Fit(None));
                 f.render_stateful_widget(image, padded, protocol.as_mut());
@@ -590,11 +653,23 @@ fn draw_mermaid_block(
         }
         Some(MermaidEntry::Failed(msg)) => {
             let footer = format!("[mermaid \u{2014} {}]", truncate(msg, 60));
-            render_mermaid_source(f, rect, source, &footer, p);
+            let mut text = render_mermaid_source_text(params.source, &footer, p);
+            // Apply cursor highlight to the source-text fallback.
+            if cursor_in_block {
+                let idx = (params.cursor_line - params.block_start) as usize;
+                patch_cursor_highlight(&mut text.lines, idx, p.selection_bg);
+            }
+            render_mermaid_source_styled(f, rect, text, p);
         }
         Some(MermaidEntry::SourceOnly(reason)) => {
             let footer = format!("[mermaid \u{2014} {}]", reason);
-            render_mermaid_source(f, rect, source, &footer, p);
+            let mut text = render_mermaid_source_text(params.source, &footer, p);
+            // Apply cursor highlight to the source-text fallback.
+            if cursor_in_block {
+                let idx = (params.cursor_line - params.block_start) as usize;
+                patch_cursor_highlight(&mut text.lines, idx, p.selection_bg);
+            }
+            render_mermaid_source_styled(f, rect, text, p);
         }
     }
 }
@@ -636,7 +711,11 @@ fn render_mermaid_placeholder(f: &mut Frame, rect: Rect, msg: &str, p: &Palette)
     }
 }
 
-fn render_mermaid_source(f: &mut Frame, rect: Rect, source: &str, footer: &str, p: &Palette) {
+/// Build the styled `Text` for a mermaid source-fallback display.
+///
+/// Separating text construction from rendering lets callers mutate the lines
+/// (e.g., apply cursor highlight) before committing to the frame buffer.
+fn render_mermaid_source_text(source: &str, footer: &str, p: &Palette) -> Text<'static> {
     let code_style = Style::default().fg(p.code_fg).bg(p.code_bg);
     let dim_style = p.dim_style();
 
@@ -645,14 +724,16 @@ fn render_mermaid_source(f: &mut Frame, rect: Rect, source: &str, footer: &str, 
         .map(|l| Line::from(Span::styled(l.to_string(), code_style)))
         .collect();
     lines.push(Line::from(Span::styled(footer.to_string(), dim_style)));
+    Text::from(lines)
+}
 
+/// Render a pre-built mermaid source `Text` with a border block.
+fn render_mermaid_source_styled(f: &mut Frame, rect: Rect, text: Text<'static>, p: &Palette) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(p.border_style())
         .style(Style::default().bg(p.background));
-    let para = Paragraph::new(Text::from(lines))
-        .block(block)
-        .wrap(Wrap { trim: false });
+    let para = Paragraph::new(text).block(block).wrap(Wrap { trim: false });
     f.render_widget(para, rect);
 }
 
@@ -691,6 +772,34 @@ fn render_text_with_gutter(
 
     f.render_widget(Paragraph::new(Text::from(gutter_lines)), chunks[0]);
     f.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), chunks[1]);
+}
+
+/// Apply the cursor-highlight background to one row inside a visible slice.
+///
+/// `lines` is the mutable slice of rendered lines (already clipped to the
+/// viewport). `idx` is the 0-based index within that slice that should be
+/// highlighted. `bg` is the selection background color.
+///
+/// Behaviour:
+/// - If `idx` is out of bounds, the function is a no-op (no panic).
+/// - If the target line has no spans (blank line), a single space span with
+///   the background color is injected so the highlight row is still visible.
+/// - Otherwise every existing span on that line is patched with `.bg(bg)`.
+///
+/// All three block types (Text, Table, Mermaid-source) share this helper so
+/// the highlight logic lives in exactly one place.
+pub fn patch_cursor_highlight(lines: &mut [Line<'static>], idx: usize, bg: Color) {
+    let Some(line) = lines.get_mut(idx) else {
+        return;
+    };
+    if line.spans.is_empty() {
+        // Blank line — inject a space so the colored row is visible.
+        *line = Line::from(Span::styled(" ".to_string(), Style::default().bg(bg)));
+    } else {
+        for span in line.spans.iter_mut() {
+            span.style = span.style.patch(Style::default().bg(bg));
+        }
+    }
 }
 
 /// Produce a new `Text` with search matches highlighted.
@@ -978,6 +1087,8 @@ mod tests {
     }
 
     /// Every logical line within a Table block must return the table's source line.
+    /// A table with no `row_source_lines` data (empty) falls back to
+    /// `source_line` for every row position (defensive stub path).
     #[test]
     fn source_line_at_table_block_returns_table_start() {
         use crate::markdown::source_line_at;
@@ -990,10 +1101,165 @@ mod tests {
             natural_widths: vec![],
             rendered_height: 4,
             source_line: 5,
+            row_source_lines: vec![],
         });
         let blocks = vec![block];
-        // Any row within the 4-line-tall table block should return 5.
+        // With no row_source_lines, all positions fall back to source_line = 5.
         assert_eq!(source_line_at(&blocks, 0), 5);
         assert_eq!(source_line_at(&blocks, 3), 5);
+    }
+
+    // ── patch_cursor_highlight ───────────────────────────────────────────────
+
+    /// Build a slice of simple `Line`s for highlight tests.
+    fn make_lines(count: usize) -> Vec<Line<'static>> {
+        (0..count)
+            .map(|i| Line::from(Span::raw(format!("line {i}"))))
+            .collect()
+    }
+
+    /// Patching a middle line must set `bg` on all its spans and leave other
+    /// lines unchanged.
+    #[test]
+    fn patch_cursor_highlight_patches_given_line() {
+        use ratatui::style::Color;
+        let bg = Color::Rgb(30, 30, 100);
+        let mut lines = make_lines(3);
+        patch_cursor_highlight(&mut lines, 1, bg);
+
+        // Line 1 spans must carry the bg color.
+        for span in &lines[1].spans {
+            assert_eq!(span.style.bg, Some(bg), "line 1 span must have bg color");
+        }
+        // Lines 0 and 2 must be untouched.
+        for span in &lines[0].spans {
+            assert_eq!(span.style.bg, None, "line 0 must be untouched");
+        }
+        for span in &lines[2].spans {
+            assert_eq!(span.style.bg, None, "line 2 must be untouched");
+        }
+    }
+
+    /// An empty line at the target index must be replaced with a space span
+    /// carrying the bg color so the highlight row is visible.
+    #[test]
+    fn patch_cursor_highlight_fills_empty_line() {
+        use ratatui::style::Color;
+        let bg = Color::Rgb(50, 50, 150);
+        let mut lines = vec![
+            Line::from(Span::raw("before")),
+            Line::from(vec![]), // empty — no spans
+            Line::from(Span::raw("after")),
+        ];
+        patch_cursor_highlight(&mut lines, 1, bg);
+        assert_eq!(
+            lines[1].spans.len(),
+            1,
+            "empty line must have a filler span injected"
+        );
+        assert_eq!(
+            lines[1].spans[0].content.as_ref(),
+            " ",
+            "filler span must be a single space"
+        );
+        assert_eq!(lines[1].spans[0].style.bg, Some(bg));
+    }
+
+    /// An out-of-bounds `idx` must not panic or mutate anything.
+    #[test]
+    fn patch_cursor_highlight_out_of_bounds_noop() {
+        use ratatui::style::Color;
+        let bg = Color::Rgb(10, 10, 10);
+        let mut lines = make_lines(2);
+        // idx == 2 is one past the end.
+        patch_cursor_highlight(&mut lines, 2, bg);
+        // Both lines must be unchanged.
+        for line in &lines {
+            for span in &line.spans {
+                assert_eq!(span.style.bg, None);
+            }
+        }
+    }
+
+    // ── source_line_at — Table with row_source_lines ─────────────────────────
+
+    /// Build a `TableBlock` with explicit `row_source_lines` and verify that
+    /// `source_line_at` maps each rendered row to the correct source line.
+    ///
+    /// Layout (2 body rows):
+    ///   0: top border  → header source (5)
+    ///   1: header row  → 5
+    ///   2: separator   → 5
+    ///   3: body[0]     → 7
+    ///   4: body[1]     → 8
+    ///   5: bottom border → last body (8)
+    #[test]
+    fn source_line_at_table_block_per_row() {
+        use crate::markdown::{TableBlock, TableBlockId, source_line_at};
+        let block = DocBlock::Table(TableBlock {
+            id: TableBlockId(0),
+            headers: vec![vec![Span::raw("H")]],
+            rows: vec![vec![vec![Span::raw("a")]], vec![vec![Span::raw("b")]]],
+            alignments: vec![pulldown_cmark::Alignment::None],
+            natural_widths: vec![1],
+            rendered_height: 6,
+            source_line: 5,
+            row_source_lines: vec![5, 7, 8],
+        });
+        let blocks = vec![block];
+        // top border → header fallback
+        assert_eq!(source_line_at(&blocks, 0), 5, "top border -> header");
+        // header row
+        assert_eq!(source_line_at(&blocks, 1), 5, "header row");
+        // separator
+        assert_eq!(source_line_at(&blocks, 2), 5, "separator -> header");
+        // body[0]
+        assert_eq!(source_line_at(&blocks, 3), 7, "body[0]");
+        // body[1]
+        assert_eq!(source_line_at(&blocks, 4), 8, "body[1]");
+        // bottom border → last body fallback
+        assert_eq!(source_line_at(&blocks, 5), 8, "bottom border -> last body");
+    }
+
+    /// Edge cases: table with only a header (no body rows).
+    #[test]
+    fn table_row_source_line_helper_boundary_cases() {
+        use crate::markdown::{TableBlock, TableBlockId, source_line_at};
+
+        // Header-only: rendered_height = 3 (top border, header, bottom border).
+        let header_only = DocBlock::Table(TableBlock {
+            id: TableBlockId(1),
+            headers: vec![vec![Span::raw("H")]],
+            rows: vec![],
+            alignments: vec![pulldown_cmark::Alignment::None],
+            natural_widths: vec![1],
+            rendered_height: 3,
+            source_line: 10,
+            row_source_lines: vec![10],
+        });
+        let blocks = vec![header_only];
+        // Row 0 = top border → header (10)
+        assert_eq!(source_line_at(&blocks, 0), 10);
+        // Row 1 = header → 10
+        assert_eq!(source_line_at(&blocks, 1), 10);
+        // Row 2 = bottom border → last (10)
+        assert_eq!(source_line_at(&blocks, 2), 10);
+
+        // Empty row_source_lines: must not panic, must fall back to source_line.
+        let empty_rsl = DocBlock::Table(TableBlock {
+            id: TableBlockId(2),
+            headers: vec![vec![Span::raw("H")]],
+            rows: vec![vec![vec![Span::raw("a")]]],
+            alignments: vec![pulldown_cmark::Alignment::None],
+            natural_widths: vec![1],
+            rendered_height: 4,
+            source_line: 99,
+            row_source_lines: vec![],
+        });
+        let blocks2 = vec![empty_rsl];
+        // All positions must fall back to source_line without panicking.
+        for i in 0..4 {
+            assert_eq!(source_line_at(&blocks2, i), 99, "empty rsl row {i}");
+        }
     }
 }
