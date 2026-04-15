@@ -5,6 +5,46 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-04-15
+
+### Added
+- **Visible viewer cursor.** The viewer now shows a highlighted cursor row
+  (background from `palette.selection_bg`, carries through line wrapping)
+  that moves with `j`/`k`/`d`/`u`/`PageDown`/`PageUp`/`gg`/`G`. Scroll
+  follows the cursor when it would leave the viewport, so the observable
+  behaviour of "press `j` to scroll down" is preserved while unlocking a
+  proper notion of "where I am" for future features.
+- **Vim-style edit mode** via
+  [edtui](https://crates.io/crates/edtui) 0.11.2. Press `i` in the viewer
+  to drop into a modal editor at the exact source line of the viewer
+  cursor. Normal/Insert/Visual modes with vim motions (`w`, `b`, `e`,
+  `gg`, `G`, `0`, `$`, `dd`, `yy`, `p`, etc.). `:w` saves atomically
+  (tempfile + rename), `:q` returns to the rendered view, `:wq` does
+  both, `:q!` force-discards unsaved changes. Undo/redo via `u` /
+  `Ctrl+r`. The editor theme tracks the active UI palette.
+- **Source-line plumbing through the renderer.** pulldown-cmark byte
+  offsets are now threaded through `MdRenderer` so every rendered logical
+  line reports its originating source line. `DocBlock::Text` carries a
+  parallel `source_lines: Vec<u32>`; `DocBlock::Mermaid` and `TableBlock`
+  carry `source_line: u32`. This is what powers exact cursor-to-editor
+  positioning and unlocks future line-aware features.
+- **Git status refresh on save.** Editing a file and pressing `:w` now
+  recolors its entry in the file tree immediately — new files turn
+  yellow (modified) as soon as the write lands, no git poll wait.
+
+### Changed
+- `j`/`k`/`d`/`u`/`PageDown`/`PageUp`/`gg`/`G` in the viewer now move a
+  cursor rather than the scroll offset directly. Scroll follows cursor,
+  so the visible effect is the same — but the cursor is the new primary
+  concept for "where I am".
+- `edtui` is pulled in with `default-features = false` to avoid the
+  `arboard` clipboard dependency. Our app handles mouse and clipboard
+  separately, and this keeps the binary smaller and headless-safe.
+
+### Fixed
+- Mouse events are now ignored while `Focus::Editor` is active, so clicks
+  in the tree panel during editing no longer select and open files.
+
 ## [1.1.0] - 2026-04-14
 
 ### Added

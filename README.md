@@ -85,6 +85,12 @@ drawn on the left of the viewer content when enabled.
   changed subtrees are easy to spot at a glance.
 - **Configurable tree position** — place the file tree on the left
   (default) or right side of the viewer via the settings modal.
+- **Visible cursor and vim-style edit mode** — a highlighted cursor row
+  tracks your position in the viewer (move with `j`/`k`/`d`/`u`/`gg`/`G`
+  and friends). Press `i` to drop into a vim-style modal editor
+  ([edtui](https://crates.io/crates/edtui)) at the exact source line you
+  were reading. `:w` saves atomically, `:q` returns to the rendered view,
+  `:wq` does both. `:q!` force-discards unsaved changes.
 - **Rendered markdown preview** — headings, lists, code blocks, tables,
   links, blockquotes, task lists, and more, styled from the active theme.
 - **Live file watching** — the tree and open tabs reload when files change
@@ -159,12 +165,13 @@ reopening the same directory resumes where you left off.
 
 | Key | Action |
 |---|---|
-| `j` / `Down` | Scroll down one line |
-| `k` / `Up` | Scroll up one line |
-| `d` / `u` | Half-page scroll down / up |
-| `PageDown` / `PageUp` | Full-page scroll down / up |
-| `gg` | Scroll to top |
-| `G` | Scroll to bottom |
+| `j` / `Down` | Move cursor down one line |
+| `k` / `Up` | Move cursor up one line |
+| `d` / `u` | Half-page cursor down / up |
+| `PageDown` / `PageUp` | Full-page cursor down / up |
+| `gg` | Jump to top |
+| `G` | Jump to bottom |
+| `i` | Enter edit mode |
 | `Ctrl+f` | Find in document |
 | `n` / `N` | Next / previous match |
 | `:` | Go to line |
