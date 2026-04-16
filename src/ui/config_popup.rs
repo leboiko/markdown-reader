@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 use crate::app::ConfigPopupState;
-use crate::config::TreePosition;
+use crate::config::{SearchPreview, TreePosition};
 use crate::theme::{Palette, Theme};
 
 const ACTIVE_BULLET: &str = "●";
@@ -17,22 +17,35 @@ const INACTIVE_BULLET: &str = "○";
 ///
 /// # Arguments
 ///
-/// * `f`       - Ratatui frame.
-/// * `state`   - Cursor position in the flat option list.
-/// * `config`  - Reference to the live config for reading current values.
-/// * `palette` - Active palette for border and accent colors.
+/// * `f`              - Ratatui frame.
+/// * `state`          - Cursor position in the flat option list.
+/// * `theme`          - Currently active theme (for bullet state).
+/// * `show_line_numbers` - Whether line numbers are enabled.
+/// * `tree_position`  - Current tree panel position.
+/// * `search_preview` - Current search preview mode.
+/// * `palette`        - Active palette for border and accent colors.
 pub fn render_config_popup(
     f: &mut Frame,
     state: &ConfigPopupState,
     theme: Theme,
     show_line_numbers: bool,
     tree_position: TreePosition,
+    search_preview: SearchPreview,
     palette: &Palette,
 ) {
-    let area = centered_rect(46, 18, f.area());
+    // 22 rows: 1 blank + 1 section + 8 themes + 1 blank + 1 section + 1 line-numbers
+    // + 1 blank + 1 section + 2 panels + 1 blank + 1 section + 2 search + 1 blank + 1 footer
+    let area = centered_rect(46, 22, f.area());
     f.render_widget(Clear, area);
 
-    let lines = build_lines(state, theme, show_line_numbers, tree_position, palette);
+    let lines = build_lines(
+        state,
+        theme,
+        show_line_numbers,
+        tree_position,
+        search_preview,
+        palette,
+    );
 
     let block = Block::default()
         .title(" Settings ")
@@ -49,6 +62,7 @@ fn build_lines<'a>(
     theme: Theme,
     show_line_numbers: bool,
     tree_position: TreePosition,
+    search_preview: SearchPreview,
     palette: &Palette,
 ) -> Vec<Line<'a>> {
     let section_style = Style::new()
@@ -123,6 +137,34 @@ fn build_lines<'a>(
         row == state.cursor,
         tree_position == TreePosition::Right,
         "Tree right",
+        cursor_style,
+        active_style,
+        text_style,
+        dim_style,
+    ));
+    row += 1;
+
+    lines.push(Line::from(""));
+
+    // --- Search section ---
+    lines.push(Line::from(vec![
+        Span::styled("  ", text_style),
+        Span::styled(ConfigPopupState::SECTIONS[3].0, section_style),
+    ]));
+    lines.push(option_line(
+        row == state.cursor,
+        search_preview == SearchPreview::FullLine,
+        "Full line preview",
+        cursor_style,
+        active_style,
+        text_style,
+        dim_style,
+    ));
+    row += 1;
+    lines.push(option_line(
+        row == state.cursor,
+        search_preview == SearchPreview::Snippet,
+        "Snippet preview (~80 chars)",
         cursor_style,
         active_style,
         text_style,

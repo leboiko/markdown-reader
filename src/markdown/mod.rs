@@ -238,6 +238,110 @@ pub fn source_line_at(blocks: &[DocBlock], logical_line: u32) -> u32 {
     0
 }
 
+/// Inverse of [`source_line_at`]: locate the first rendered logical line that
+/// originates from source line `target_source` (0-indexed).
+///
+/// Returns `None` only when `blocks` is empty (no candidate exists at all).
+/// For non-empty block lists, out-of-range or gap targets return the closest
+/// preceding rendered line whose recorded source number is `<= target_source`.
+///
+/// # Arguments
+///
+/// * `blocks` – the rendered document block list.
+/// * `target_source` – 0-indexed source line to locate.
+///
+/// # Examples
+///
+/// ```
+/// # use markdown_tui_explorer::markdown::{DocBlock, logical_line_at_source};
+/// # use ratatui::text::{Line, Span, Text};
+/// let block = DocBlock::Text {
+///     text: Text::from(vec![
+///         Line::from(Span::raw("a")),
+///         Line::from(Span::raw("b")),
+///     ]),
+///     links: vec![],
+///     heading_anchors: vec![],
+///     source_lines: vec![0, 1],
+/// };
+/// assert_eq!(logical_line_at_source(&[block], 1), Some(1));
+/// ```
+pub fn logical_line_at_source(blocks: &[DocBlock], target_source: u32) -> Option<u32> {
+    // A rendered logical line can span multiple source lines (pulldown-cmark
+    // joins soft breaks, inline formatting, etc.), so exact matching on
+    // `source_lines` would miss any target that lands inside a joined line.
+    //
+    // Instead, track the last rendered line whose recorded source number is
+    // `<= target_source` — that is the line that visually contains the target.
+    // Exact hits inside a Mermaid or Table block short-circuit immediately
+    // since those blocks have unambiguous per-row source lines.
+    let mut offset = 0u32;
+    let mut best: Option<u32> = None;
+
+    for block in blocks {
+        let height = block.height();
+        match block {
+            DocBlock::Text { source_lines, .. } => {
+                // Do NOT break early here.  List item End-events can cause
+                // non-monotonic source_lines (e.g. [..., 165, 160, 167, ...])
+                // so a break would skip valid candidates after a dip.  The
+                // scan is bounded by the block's rendered-line count and is
+                // therefore O(visible lines), which is negligible.
+                for (i, &s) in source_lines.iter().enumerate() {
+                    if s <= target_source {
+                        best = Some(offset + i as u32);
+                    }
+                }
+            }
+            DocBlock::Mermaid {
+                source_line,
+                source,
+                ..
+            } => {
+                let content_count = source.lines().count() as u32;
+                let block_end_source = *source_line + 1 + content_count;
+                if target_source >= *source_line && target_source < block_end_source {
+                    let local = target_source - *source_line;
+                    return Some(offset + local.min(height.saturating_sub(1)));
+                }
+                if *source_line <= target_source {
+                    // The block starts before the target but doesn't contain
+                    // it — record its first row as a fallback candidate.
+                    best = Some(offset);
+                }
+            }
+            DocBlock::Table(t) => {
+                // Table rows are emitted in document order (monotonically
+                // increasing source lines), so breaking early here is safe:
+                // no later row can have a smaller source number than the
+                // current one.
+                for (row_idx, &s) in t.row_source_lines.iter().enumerate() {
+                    let rendered_row = if row_idx == 0 {
+                        1u32 // header is at rendered index 1
+                    } else {
+                        3 + (row_idx - 1) as u32 // body rows start at rendered index 3
+                    };
+                    // row_idx increases monotonically and so does rendered_row;
+                    // no later row can fit either, so stop scanning.
+                    if rendered_row >= height {
+                        break;
+                    }
+                    if s == target_source {
+                        return Some(offset + rendered_row);
+                    }
+                    if s <= target_source {
+                        best = Some(offset + rendered_row);
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+        offset += height;
+    }
+    best
+}
+
 /// Convert a heading's visible text to a GitHub-style anchor slug.
 ///
 /// Algorithm:
@@ -559,5 +663,152 @@ mod tests {
                 found.1,
             );
         }
+    }
+
+    // ── logical_line_at_source ───────────────────────────────────────────────
+
+    /// Helper to build a `DocBlock::Text` with explicit source-line mapping.
+    fn text_block_with_sources(content: &[&str], sources: &[u32]) -> DocBlock {
+        let lines: Vec<ratatui::text::Line<'static>> = content
+            .iter()
+            .map(|s| ratatui::text::Line::from(ratatui::text::Span::raw(s.to_string())))
+            .collect();
+        DocBlock::Text {
+            text: ratatui::text::Text::from(lines),
+            links: vec![],
+            heading_anchors: vec![],
+            source_lines: sources.to_vec(),
+        }
+    }
+
+    #[test]
+    fn logical_line_at_source_finds_text_line() {
+        // Single Text block: source lines [0, 1, 2] map to logical lines 0, 1, 2.
+        let block = text_block_with_sources(&["a", "b", "c"], &[0, 1, 2]);
+        assert_eq!(logical_line_at_source(&[block], 1), Some(1));
+    }
+
+    #[test]
+    fn logical_line_at_source_across_blocks() {
+        // Two Text blocks: first covers source [0, 1], second covers source [3, 4, 5].
+        let b1 = text_block_with_sources(&["a", "b"], &[0, 1]);
+        let b2 = text_block_with_sources(&["d", "e", "f"], &[3, 4, 5]);
+        // Source line 4 is in the second block at local index 1.
+        // First block has height 2, so absolute offset is 2 + 1 = 3.
+        assert_eq!(logical_line_at_source(&[b1, b2], 4), Some(3));
+    }
+
+    #[test]
+    fn logical_line_at_source_table_header() {
+        use crate::markdown::{TableBlock, TableBlockId};
+        // Table with row_source_lines = [5, 7, 8]:
+        //   rendered row 0: top border
+        //   rendered row 1: header (source 5)
+        //   rendered row 2: separator
+        //   rendered row 3: body[0] (source 7)
+        //   rendered row 4: body[1] (source 8)
+        //   rendered row 5: bottom border
+        let block = DocBlock::Table(TableBlock {
+            id: TableBlockId(0),
+            headers: vec![vec![ratatui::text::Span::raw("H")]],
+            rows: vec![
+                vec![vec![ratatui::text::Span::raw("a")]],
+                vec![vec![ratatui::text::Span::raw("b")]],
+            ],
+            alignments: vec![pulldown_cmark::Alignment::None],
+            natural_widths: vec![1],
+            rendered_height: 6,
+            source_line: 5,
+            row_source_lines: vec![5, 7, 8],
+        });
+        // Source line 5 (header) should map to rendered row 1.
+        assert_eq!(logical_line_at_source(&[block], 5), Some(1));
+    }
+
+    #[test]
+    fn logical_line_at_source_table_body() {
+        use crate::markdown::{TableBlock, TableBlockId};
+        let block = DocBlock::Table(TableBlock {
+            id: TableBlockId(1),
+            headers: vec![vec![ratatui::text::Span::raw("H")]],
+            rows: vec![
+                vec![vec![ratatui::text::Span::raw("a")]],
+                vec![vec![ratatui::text::Span::raw("b")]],
+            ],
+            alignments: vec![pulldown_cmark::Alignment::None],
+            natural_widths: vec![1],
+            rendered_height: 6,
+            source_line: 5,
+            row_source_lines: vec![5, 7, 8],
+        });
+        // Source line 7 (first body row) should map to rendered row 3.
+        assert_eq!(logical_line_at_source(&[block], 7), Some(3));
+    }
+
+    #[test]
+    fn logical_line_at_source_mermaid_inside() {
+        use std::cell::Cell;
+        // Mermaid fence at source line 10, content "a\nb\nc" (3 lines).
+        // Source range: [10, 14) — fence (10), a (11), b (12), c (13).
+        // Block height set to 4 to cover the fence + content.
+        let block = DocBlock::Mermaid {
+            id: crate::markdown::MermaidBlockId(0),
+            source: "a\nb\nc".to_string(),
+            cell_height: Cell::new(4),
+            source_line: 10,
+        };
+        // Source line 12 = fence + 2 → local index 2 → logical line 0 + 2 = 2.
+        assert_eq!(logical_line_at_source(&[block], 12), Some(2));
+    }
+
+    #[test]
+    fn logical_line_at_source_overshoot_falls_back_to_last_line() {
+        // A single Text block covering source lines 0–2.
+        // Asking for source line 99 beyond the block's last recorded source
+        // line should fall back to the closest earlier candidate — the last
+        // rendered line whose source <= target.
+        let block = text_block_with_sources(&["x", "y", "z"], &[0, 1, 2]);
+        assert_eq!(logical_line_at_source(&[block], 99), Some(2));
+    }
+
+    #[test]
+    fn logical_line_at_source_non_monotonic_text_block() {
+        // List items + End-of-list dip: source_lines dips from 165 back to 160.
+        // This mirrors the real renderer output that caused the OAB jump bug.
+        let block = text_block_with_sources(&["a", "b", "c"], &[165, 160, 167]);
+        // target=163 should land on index 1 (s=160, the largest s <= 163).
+        assert_eq!(logical_line_at_source(&[block], 163), Some(1));
+    }
+
+    #[test]
+    fn logical_line_at_source_target_beyond_any_block_is_none() {
+        // With no blocks at all there is no candidate anywhere, so None.
+        assert_eq!(logical_line_at_source(&[], 5), None);
+    }
+
+    #[test]
+    fn logical_line_at_source_target_inside_joined_paragraph() {
+        // A paragraph whose source spans lines 5–7 but renders as a single
+        // joined line (pulldown-cmark merges soft breaks). Only line 5 is
+        // recorded; asking for 5, 6, or 7 must still land on the same
+        // rendered line. DocBlock is not Clone, so rebuild per assertion.
+        for target in [5u32, 6, 7] {
+            let block = text_block_with_sources(&["joined paragraph"], &[5]);
+            assert_eq!(
+                logical_line_at_source(&[block], target),
+                Some(0),
+                "target source line {target} should land on the joined paragraph's rendered line 0",
+            );
+        }
+    }
+
+    #[test]
+    fn logical_line_at_source_between_blocks_lands_on_previous_last_line() {
+        // First block source [0, 1], second block source [10, 11]. Source
+        // line 5 falls in the gap; it should land on the last line of the
+        // first block (closest candidate at or before 5).
+        let b1 = text_block_with_sources(&["a", "b"], &[0, 1]);
+        let b2 = text_block_with_sources(&["c", "d"], &[10, 11]);
+        assert_eq!(logical_line_at_source(&[b1, b2], 5), Some(1));
     }
 }

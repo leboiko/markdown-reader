@@ -17,6 +17,19 @@ pub enum TreePosition {
     Right,
 }
 
+/// How to render the inline preview for a content-search result.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchPreview {
+    /// Show the full matched line (trimmed).  More readable; may wrap on narrow
+    /// terminals.
+    #[default]
+    FullLine,
+    /// Show an ~80-character window centred on the first match occurrence.
+    /// Compact, uniform row height.
+    Snippet,
+}
+
 /// All persisted user settings.
 ///
 /// `#[serde(default)]` on every field ensures that config files written by
@@ -29,6 +42,8 @@ pub struct Config {
     pub show_line_numbers: bool,
     #[serde(default)]
     pub tree_position: TreePosition,
+    #[serde(default)]
+    pub search_preview: SearchPreview,
 }
 
 impl Config {
@@ -65,4 +80,26 @@ fn config_path() -> Option<PathBuf> {
     path.push(APP_NAME);
     path.push(CONFIG_FILE);
     Some(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `SearchPreview` must round-trip through TOML with the default value.
+    #[test]
+    fn search_preview_default_round_trips() {
+        let config = Config::default();
+        let serialized = toml::to_string_pretty(&config).expect("serialization failed");
+        let deserialized: Config = toml::from_str(&serialized).expect("deserialization failed");
+        assert_eq!(deserialized.search_preview, SearchPreview::FullLine);
+    }
+
+    /// A TOML file that omits `search_preview` must deserialize to `FullLine`.
+    #[test]
+    fn search_preview_missing_field_defaults_to_full_line() {
+        let toml_str = r#"theme = "default""#;
+        let config: Config = toml::from_str(toml_str).expect("deserialization failed");
+        assert_eq!(config.search_preview, SearchPreview::default());
+    }
 }

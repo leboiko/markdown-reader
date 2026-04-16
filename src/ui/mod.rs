@@ -7,7 +7,7 @@ pub mod goto_line_bar;
 pub mod help;
 pub mod link_picker;
 pub mod markdown_view;
-pub mod search_bar;
+pub mod search_modal;
 pub mod status_bar;
 pub mod tab_bar;
 pub mod tab_picker;
@@ -43,14 +43,14 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     app.tab_bar_rects.clear();
     app.tab_close_rects.clear();
     app.tab_picker_rects.clear();
+    app.search_result_rects.clear();
 
+    // The search modal is a full-screen overlay rendered after all other panels,
+    // so it gets no dedicated layout slot.  The outer layout has only two rows:
+    // the main content area and the status bar.
     let outer_chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(1),
-            Constraint::Length(if app.search.active { 3 } else { 0 }),
-            Constraint::Length(1),
-        ])
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
         .split(area);
 
     let has_tabs = !app.tabs.is_empty();
@@ -132,11 +132,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         }
     }
 
-    if app.search.active {
-        search_bar::draw(f, app, outer_chunks[1]);
-    }
-
-    status_bar::draw(f, app, outer_chunks[2]);
+    status_bar::draw(f, app, outer_chunks[1]);
 
     let doc_search_active = app.doc_search().map(|ds| ds.active).unwrap_or(false);
     if doc_search_active {
@@ -171,6 +167,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             app.theme,
             app.show_line_numbers,
             app.tree_position,
+            app.search_preview,
             &app.palette,
         );
     }
@@ -178,6 +175,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if let Some(state) = &app.copy_menu {
         let state = state.clone();
         copy_menu::draw(f, &state, &app.palette);
+    }
+
+    // Search modal is drawn last so it floats above all other panels.
+    if app.search.active {
+        search_modal::draw(f, app);
     }
 }
 

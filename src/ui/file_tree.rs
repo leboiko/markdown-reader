@@ -9,7 +9,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState},
 };
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Persistent UI state for the file-tree panel.
 #[derive(Debug, Default)]
@@ -131,6 +131,35 @@ impl FileTreeState {
             self.list_state.select(Some(self.flat_items.len() - 1));
         }
     }
+
+    /// Expand every ancestor directory of `path`, rebuild the flat item list,
+    /// and select the row for `path` if present.
+    ///
+    /// Safe to call on paths that are outside the tree root — the walk simply
+    /// finds no matching ancestors and no matching row, making this a no-op.
+    /// Intended to be invoked whenever a file is opened programmatically (search
+    /// result, link pick, session restore, etc.) so the tree is always aligned
+    /// with the viewer.
+    pub fn reveal_path(&mut self, path: &Path) {
+        // Walk up the directory hierarchy, inserting each ancestor into the
+        // expanded set.  We stop when `parent()` returns `None` (hit filesystem
+        // root) or when the parent equals the path itself (POSIX root "/" is its
+        // own parent — guards against infinite loops).
+        let mut cursor = path.parent();
+        while let Some(parent) = cursor {
+            self.expanded.insert(parent.to_path_buf());
+            let next = parent.parent();
+            // POSIX root "/" has itself as its own parent; stop to avoid a loop.
+            if next == Some(parent) {
+                break;
+            }
+            cursor = next;
+        }
+        self.flatten_visible();
+        if let Some(idx) = self.flat_items.iter().position(|item| item.path == path) {
+            self.list_state.select(Some(idx));
+        }
+    }
 }
 
 /// Recursively walk `entries` and append visible rows to `out`.
@@ -234,4 +263,112 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
         .highlight_symbol("│ ");
 
     f.render_stateful_widget(list, area, &mut app.tree.list_state);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fs::discovery::FileEntry;
+
+    /// Build a small synthetic tree:
+    ///
+    /// ```
+    /// deep/        (dir)
+    ///   nested/    (dir)
+    ///     file.md  (file)
+    /// other.md     (file)
+    /// ```
+    fn make_test_tree() -> (FileTreeState, PathBuf) {
+        let deep_nested_file = PathBuf::from("/root/deep/nested/file.md");
+        let deep = PathBuf::from("/root/deep");
+        let nested = PathBuf::from("/root/deep/nested");
+
+        let entries = vec![
+            FileEntry {
+                path: deep.clone(),
+                name: "deep".to_string(),
+                is_dir: true,
+                children: vec![FileEntry {
+                    path: nested,
+                    name: "nested".to_string(),
+                    is_dir: true,
+                    children: vec![FileEntry {
+                        path: deep_nested_file.clone(),
+                        name: "file.md".to_string(),
+                        is_dir: false,
+                        children: vec![],
+                    }],
+                }],
+            },
+            FileEntry {
+                path: PathBuf::from("/root/other.md"),
+                name: "other.md".to_string(),
+                is_dir: false,
+                children: vec![],
+            },
+        ];
+
+        let mut state = FileTreeState::default();
+        state.rebuild(entries);
+        (state, deep_nested_file)
+    }
+
+    /// `reveal_path` must expand all ancestor directories and select the target.
+    #[test]
+    fn reveal_path_expands_ancestors() {
+        let (mut state, target) = make_test_tree();
+        // Initially only the top-level items are visible (no dirs expanded).
+        let initial_len = state.flat_items.len();
+        assert_eq!(initial_len, 2, "only deep/ and other.md at root");
+
+        state.reveal_path(&target);
+
+        // Both ancestor directories must now be in the expanded set.
+        assert!(
+            state.expanded.contains(Path::new("/root/deep")),
+            "deep/ should be expanded"
+        );
+        assert!(
+            state.expanded.contains(Path::new("/root/deep/nested")),
+            "deep/nested/ should be expanded"
+        );
+
+        // The flat list must now contain all 4 entries.
+        assert_eq!(state.flat_items.len(), 4);
+
+        // The selection must point at the target file.
+        let selected = state.list_state.selected().expect("a row must be selected");
+        assert_eq!(state.flat_items[selected].path, target);
+    }
+
+    /// Calling `reveal_path` on a path not present in the tree must be a no-op.
+    #[test]
+    fn reveal_path_on_unknown_file_is_noop() {
+        let (mut state, _) = make_test_tree();
+        let before_len = state.flat_items.len();
+        let before_sel = state.list_state.selected();
+
+        state.reveal_path(Path::new("/nonexistent/path/file.md"));
+
+        // The flat list shape is unchanged (ancestors inserted into `expanded` but
+        // they don't match real tree nodes, so flatten produces the same output).
+        assert_eq!(state.flat_items.len(), before_len);
+        // Selection is unchanged because the file isn't in the list.
+        assert_eq!(state.list_state.selected(), before_sel);
+    }
+
+    /// Calling `reveal_path` twice with the same path is idempotent.
+    #[test]
+    fn reveal_path_idempotent() {
+        let (mut state, target) = make_test_tree();
+
+        state.reveal_path(&target);
+        let len_after_first = state.flat_items.len();
+        let sel_after_first = state.list_state.selected();
+
+        state.reveal_path(&target);
+
+        assert_eq!(state.flat_items.len(), len_after_first);
+        assert_eq!(state.list_state.selected(), sel_after_first);
+    }
 }

@@ -1,5 +1,5 @@
 use crate::action::Action;
-use crate::config::{Config, TreePosition};
+use crate::config::{Config, SearchPreview, TreePosition};
 use crate::event::EventHandler;
 use crate::fs::discovery::FileEntry;
 use crate::fs::git_status;
@@ -13,7 +13,9 @@ use crate::ui::editor::{
 use crate::ui::file_tree::FileTreeState;
 use crate::ui::link_picker::{LinkPickerItem, LinkPickerState};
 use crate::ui::markdown_view::{TableLayout, visual_row_to_logical_line};
-use crate::ui::search_bar::{SearchMode, SearchResult, SearchState};
+use crate::ui::search_modal::{
+    RESULT_CAP, SearchMode, SearchResult, SearchState, build_preview, smartcase_is_sensitive,
+};
 use crate::ui::tab_picker::TabPickerState;
 use crate::ui::tabs::{OpenOutcome, Tabs};
 use anyhow::Result;
@@ -23,7 +25,7 @@ use ratatui::layout::Rect;
 use ratatui::prelude::*;
 use ratatui_image::picker::Picker;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
@@ -38,6 +40,35 @@ fn copy_to_clipboard(text: &str) {
     let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
     let osc52 = format!("\x1b]52;c;{encoded}\x07");
     let _ = std::io::Write::write_all(&mut std::io::stdout(), osc52.as_bytes());
+}
+
+/// Build the text that `yy` or a visual-mode `y` would copy.
+///
+/// Selects source lines `start_source..=end_source` (inclusive, 0-indexed)
+/// from `content` and joins them with newlines.  The range is normalised so
+/// callers need not order the endpoints.  If the range extends past EOF, only
+/// the available lines are returned; the function never panics.
+///
+/// This is a pure helper so the yank logic can be unit-tested without a terminal.
+///
+/// # Arguments
+///
+/// * `content`      – raw markdown source.
+/// * `start_source` – 0-indexed source line at one end of the selection.
+/// * `end_source`   – 0-indexed source line at the other end (may be equal to
+///   `start_source` for a single-line yank).
+pub(crate) fn build_yank_text(content: &str, start_source: u32, end_source: u32) -> String {
+    let (lo, hi) = if start_source <= end_source {
+        (start_source as usize, end_source as usize)
+    } else {
+        (end_source as usize, start_source as usize)
+    };
+    content
+        .lines()
+        .skip(lo)
+        .take(hi - lo + 1)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Returns `true` when terminal position `(col, row)` falls inside `rect`.
@@ -187,8 +218,15 @@ pub struct ConfigPopupState {
 
 impl ConfigPopupState {
     /// Ordered sections: `(label, option count)`.
-    pub const SECTIONS: &'static [(&'static str, usize)] =
-        &[("Theme", Theme::ALL.len()), ("Markdown", 1), ("Panels", 2)];
+    ///
+    /// The order and counts here must stay in sync with `apply_config_selection`
+    /// and `config_popup::build_lines`.
+    pub const SECTIONS: &'static [(&'static str, usize)] = &[
+        ("Theme", Theme::ALL.len()),
+        ("Markdown", 1),
+        ("Panels", 2),
+        ("Search", 2),
+    ];
 
     pub fn total_rows() -> usize {
         Self::SECTIONS.iter().map(|(_, n)| n).sum()
@@ -255,6 +293,8 @@ pub struct App {
     pub show_line_numbers: bool,
     /// Which side of the screen the file-tree panel appears on.
     pub tree_position: TreePosition,
+    /// How to render the inline preview in content-search results.
+    pub search_preview: SearchPreview,
     /// Copy-path popup state; `None` when the popup is closed.
     pub copy_menu: Option<CopyMenuState>,
     /// Persisted sessions (loaded once on startup, written on file open and quit).
@@ -268,6 +308,11 @@ pub struct App {
     pub tab_close_rects: Vec<(crate::ui::tabs::TabId, ratatui::layout::Rect)>,
     /// Per-row rects in the tab picker overlay for mouse hit-testing.
     pub tab_picker_rects: Vec<(crate::ui::tabs::TabId, ratatui::layout::Rect)>,
+    /// Per-row rects in the search modal for mouse hit-testing.
+    ///
+    /// Each element is `(result_index, rect)`.  Populated during each draw;
+    /// cleared at the start of `search_modal::draw`.
+    pub search_result_rects: Vec<(usize, ratatui::layout::Rect)>,
     /// Tab picker overlay state; `None` when the picker is closed.
     pub tab_picker: Option<TabPickerState>,
     /// Link picker overlay state; `None` when the picker is closed.
@@ -299,6 +344,13 @@ pub struct App {
     pub last_file_save_at: Option<(PathBuf, std::time::Instant)>,
     /// Application-level status message shown in the editor footer or status bar.
     pub status_message: Option<String>,
+    /// When set, the first file load whose path equals the stored path will
+    /// position `cursor_line` at the logical line corresponding to the given
+    /// 0-indexed source line, then clear this state.
+    ///
+    /// Set by [`open_or_focus`] when called from [`confirm_search`] with a
+    /// non-`None` jump target.  Consumed (and cleared) in [`apply_file_loaded`].
+    pub pending_jump: Option<(PathBuf, u32)>,
 }
 
 impl App {
@@ -337,6 +389,7 @@ impl App {
             palette,
             show_line_numbers: config.show_line_numbers,
             tree_position: config.tree_position,
+            search_preview: config.search_preview,
             copy_menu: None,
             app_state,
             action_tx: None,
@@ -344,6 +397,7 @@ impl App {
             tab_bar_rects: Vec::new(),
             tab_close_rects: Vec::new(),
             tab_picker_rects: Vec::new(),
+            search_result_rects: Vec::new(),
             tab_picker: None,
             link_picker: None,
             tree_area_rect: None,
@@ -355,6 +409,7 @@ impl App {
             search_generation: Arc::new(AtomicU64::new(0)),
             last_file_save_at: None,
             status_message: None,
+            pending_jump: None,
         };
 
         app.restore_session();
@@ -441,29 +496,11 @@ impl App {
     }
 
     /// Expand every ancestor directory of `file` in the tree and select the file.
-    fn expand_and_select(&mut self, file: &PathBuf) {
-        let mut to_expand = Vec::new();
-        let mut current = file.as_path();
-        while let Some(parent) = current.parent() {
-            if parent == self.root {
-                break;
-            }
-            if parent.starts_with(&self.root) {
-                to_expand.push(parent.to_path_buf());
-            }
-            current = parent;
-        }
-        for dir in to_expand {
-            self.tree.expanded.insert(dir);
-        }
-        self.tree.flatten_visible();
-
-        for (i, item) in self.tree.flat_items.iter().enumerate() {
-            if item.path == *file {
-                self.tree.list_state.select(Some(i));
-                break;
-            }
-        }
+    ///
+    /// Delegates to [`FileTreeState::reveal_path`], which handles the ancestor
+    /// walk, flat-list rebuild, and selection update in one step.
+    fn expand_and_select(&mut self, file: &Path) {
+        self.tree.reveal_path(file);
     }
 
     /// Blocking session save used on quit to ensure data reaches disk before
@@ -507,6 +544,7 @@ impl App {
             theme: self.theme,
             show_line_numbers: self.show_line_numbers,
             tree_position: self.tree_position,
+            search_preview: self.search_preview,
         };
         tokio::task::spawn_blocking(move || config.save());
     }
@@ -654,11 +692,13 @@ impl App {
             Action::SearchResults {
                 generation,
                 results,
+                truncated,
             } => {
                 // Discard if a newer search has already been started.
                 if self.search_generation.load(Ordering::Relaxed) == generation {
                     self.search.results = results;
                     self.search.selected_index = 0;
+                    self.search.truncated_at_cap = truncated;
                 }
             }
             Action::FileLoaded {
@@ -692,6 +732,16 @@ impl App {
                     self.status_message = Some(msg);
                 }
             }
+            Action::FileLoadFailed { path } => {
+                // Clear a pending_jump that can never be satisfied because the
+                // file read failed.  Only clear when the path matches so we
+                // don't clobber a pending jump registered for a different file.
+                if let Some((ref pending_path, _)) = self.pending_jump
+                    && *pending_path == path
+                {
+                    self.pending_jump = None;
+                }
+            }
         }
     }
 
@@ -715,6 +765,22 @@ impl App {
 
         match m.kind {
             MouseEventKind::Down(MouseButton::Left) => {
+                // Search modal rows take priority when the modal is open.
+                if self.search.active {
+                    let search_hit = self
+                        .search_result_rects
+                        .iter()
+                        .find(|(_, rect)| contains(*rect, col, row))
+                        .map(|(idx, _)| *idx);
+                    if let Some(idx) = search_hit {
+                        self.search.selected_index = idx;
+                        self.confirm_search();
+                        return;
+                    }
+                    // Click outside the search modal dismisses it.
+                    return;
+                }
+
                 // Tab picker rows take priority when the picker is open.
                 let picker_hit = self
                     .tab_picker_rects
@@ -1031,6 +1097,18 @@ impl App {
 
     fn apply_config_selection(&mut self, cursor: usize) {
         let theme_count = Theme::ALL.len();
+        // Section offsets (cumulative row indices):
+        // [0, theme_count)      → Theme
+        // [markdown_start]      → Markdown: show_line_numbers
+        // [panels_start]        → Panels: tree_position left
+        // [panels_start + 1]    → Panels: tree_position right
+        // [search_start]        → Search: full_line preview
+        // [search_start + 1]    → Search: snippet preview
+        const MARKDOWN_ROWS: usize = 1; // "Show line numbers"
+        const PANELS_ROWS: usize = 2; // "Tree left", "Tree right"
+        let markdown_start = theme_count;
+        let panels_start = markdown_start + MARKDOWN_ROWS;
+        let search_start = panels_start + PANELS_ROWS;
 
         if cursor < theme_count {
             let theme = Theme::ALL[cursor];
@@ -1038,17 +1116,24 @@ impl App {
             self.palette = Palette::from_theme(theme);
             self.rerender_all_tabs();
             self.persist_config();
-        } else if cursor == theme_count {
+        } else if cursor == markdown_start {
             self.show_line_numbers = !self.show_line_numbers;
             self.persist_config();
-        } else {
-            // Panels section: index 0 = Tree left, index 1 = Tree right.
-            let panels_cursor = cursor - theme_count - 1;
-            self.tree_position = if panels_cursor == 0 {
-                TreePosition::Left
-            } else {
-                TreePosition::Right
-            };
+        } else if cursor == panels_start {
+            // Panels: tree left
+            self.tree_position = TreePosition::Left;
+            self.persist_config();
+        } else if cursor == panels_start + 1 {
+            // Panels: tree right
+            self.tree_position = TreePosition::Right;
+            self.persist_config();
+        } else if cursor == search_start {
+            // Search: full line preview
+            self.search_preview = SearchPreview::FullLine;
+            self.persist_config();
+        } else if cursor == search_start + 1 {
+            // Search: snippet preview
+            self.search_preview = SearchPreview::Snippet;
             self.persist_config();
         }
     }
@@ -1127,6 +1212,18 @@ impl App {
             }
             _ => false,
         }
+    }
+
+    /// Resolve the second key of a pending `y` chord in the viewer.
+    ///
+    /// `yy` yanks the current line; any other key cancels the chord.
+    /// Returns `true` when the chord was consumed (the caller should return).
+    fn resolve_y_chord_viewer(&mut self, code: KeyCode) -> bool {
+        if code == KeyCode::Char('y') {
+            self.yank_current_line();
+            return true;
+        }
+        false
     }
 
     fn handle_tree_key(&mut self, code: KeyCode, _modifiers: KeyModifiers) {
@@ -1380,8 +1477,13 @@ impl App {
     }
 
     fn handle_viewer_key(&mut self, code: KeyCode, modifiers: KeyModifiers) {
-        // Resolve a pending vim `g` chord before normal dispatch.
-        if self.pending_chord.take() == Some('g') && self.resolve_g_chord_viewer(code) {
+        // Resolve pending vim chords before normal dispatch.
+        // The `take()` consumes the stored chord; we check `g` and `y` in order.
+        let pending = self.pending_chord.take();
+        if pending == Some('g') && self.resolve_g_chord_viewer(code) {
+            return;
+        }
+        if pending == Some('y') && self.resolve_y_chord_viewer(code) {
             return;
         }
 
@@ -1390,6 +1492,13 @@ impl App {
                 self.try_open_table_modal();
             }
             KeyCode::Esc => {
+                // In visual mode Esc exits visual selection first.
+                if let Some(tab) = self.tabs.active_tab_mut()
+                    && tab.view.visual_mode.is_some()
+                {
+                    tab.view.visual_mode = None;
+                    return;
+                }
                 if let Some(ds) = self.doc_search_mut() {
                     ds.active = false;
                     ds.query.clear();
@@ -1515,6 +1624,35 @@ impl App {
                 self.goto_line.input.clear();
                 self.focus = Focus::GotoLine;
             }
+            // `y` in visual mode yanks the selection and exits; otherwise starts the
+            // `yy` chord (second `y` copies the current line).
+            KeyCode::Char('y') => {
+                if let Some(tab) = self.tabs.active_tab_mut()
+                    && tab.view.visual_mode.is_some()
+                {
+                    // Consume visual mode and yank the selection.
+                    self.yank_visual_selection();
+                } else {
+                    // Begin the `yy` chord; next key is resolved at the top of
+                    // this function via `resolve_y_chord_viewer`.
+                    self.pending_chord = Some('y');
+                }
+            }
+            // `V` toggles visual-line mode.
+            KeyCode::Char('V') => {
+                if let Some(tab) = self.tabs.active_tab_mut() {
+                    if tab.view.visual_mode.is_some() {
+                        // Already in visual mode — toggle off.
+                        tab.view.visual_mode = None;
+                    } else {
+                        let line = tab.view.cursor_line;
+                        tab.view.visual_mode = Some(crate::ui::markdown_view::VisualRange {
+                            anchor: line,
+                            cursor: line,
+                        });
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -1537,7 +1675,9 @@ impl App {
                     {
                         let max_line = tab.view.total_lines;
                         tab.view.cursor_line = n.min(max_line) - 1;
-                        tab.view.scroll_to_cursor(vh);
+                        // Use centered scroll so `:N` jumps feel the same as
+                        // search-result opens — both are long-distance jumps.
+                        tab.view.scroll_to_cursor_centered(vh);
                     }
                 }
                 self.goto_line.active = false;
@@ -1657,7 +1797,7 @@ impl App {
         self.open_selected_file(false);
     }
 
-    /// Open `path` in a tab.
+    /// Open `path` in a tab, optionally jumping to a source line after load.
     ///
     /// `new_tab == true` pushes a new tab (or focuses an existing one with the
     /// same path). `new_tab == false` replaces the active tab's content.
@@ -1665,7 +1805,14 @@ impl App {
     /// If the file is already open the switch is instantaneous (no I/O).
     /// Otherwise the read is dispatched to a background thread and the result
     /// arrives as [`Action::FileLoaded`].
-    pub fn open_or_focus(&mut self, path: PathBuf, new_tab: bool) {
+    ///
+    /// # Arguments
+    ///
+    /// * `jump_to_source` – when `Some(line)`, the viewer cursor will be
+    ///   positioned at the rendered logical line that corresponds to the given
+    ///   0-indexed source line once the file finishes loading.  If the tab is
+    ///   already open (i.e. `Focused` outcome), the jump is applied immediately.
+    pub fn open_or_focus(&mut self, path: PathBuf, new_tab: bool, jump_to_source: Option<u32>) {
         if path.is_dir() {
             return;
         }
@@ -1673,8 +1820,27 @@ impl App {
         // If the tab already exists, activating it requires no disk I/O.
         let (_, outcome) = self.tabs.open_or_focus(&path, new_tab);
         if matches!(outcome, OpenOutcome::Focused) {
+            // Apply the jump immediately — no FileLoaded event will fire.
+            if let Some(source_line) = jump_to_source {
+                let vh = self.tabs.view_height;
+                if let Some(tab) = self.tabs.find_tab_by_path_mut(&path)
+                    && let Some(logical) =
+                        crate::markdown::logical_line_at_source(&tab.view.rendered, source_line)
+                {
+                    tab.view.cursor_line = logical;
+                    // Centre the jump target so the user sees surrounding
+                    // context rather than landing at the viewport edge.
+                    tab.view.scroll_to_cursor_centered(vh);
+                }
+            }
             self.focus = Focus::Viewer;
             return;
+        }
+
+        // Store the jump target so `apply_file_loaded` can pick it up when the
+        // background read completes.
+        if let Some(source_line) = jump_to_source {
+            self.pending_jump = Some((path.clone(), source_line));
         }
 
         let Some(tx) = self.action_tx.clone() else {
@@ -1682,14 +1848,20 @@ impl App {
         };
 
         tokio::task::spawn_blocking(move || {
-            let Ok(content) = std::fs::read_to_string(&path) else {
-                return;
-            };
-            let _ = tx.send(Action::FileLoaded {
-                path,
-                content,
-                new_tab,
-            });
+            match std::fs::read_to_string(&path) {
+                Ok(content) => {
+                    let _ = tx.send(Action::FileLoaded {
+                        path,
+                        content,
+                        new_tab,
+                    });
+                }
+                Err(_) => {
+                    // Notify the main task so it can clear any pending_jump
+                    // registered for this path.  No user-facing message yet.
+                    let _ = tx.send(Action::FileLoadFailed { path });
+                }
+            }
         });
 
         self.focus = Focus::Viewer;
@@ -1697,6 +1869,10 @@ impl App {
 
     /// Apply a completed async file load: populate the tab that was reserved
     /// by [`open_or_focus`].
+    ///
+    /// After loading, if [`pending_jump`] holds a matching path, the viewer
+    /// cursor is positioned at the logical line that corresponds to the stored
+    /// 0-indexed source line.
     fn apply_file_loaded(&mut self, path: PathBuf, content: String, _new_tab: bool) {
         let name = path
             .file_name()
@@ -1719,6 +1895,27 @@ impl App {
             tab.view.load(path.clone(), name, content, &palette, theme);
         }
 
+        // Apply a pending jump-to-source-line if one was registered for this path.
+        // `take()` atomically clears the field; we restore it if the path doesn't
+        // match so a later load of the correct file still picks it up.
+        if let Some((pending_path, source_line)) = self.pending_jump.take() {
+            if pending_path == path {
+                let vh = self.tabs.view_height;
+                if let Some(tab) = self.tabs.find_tab_by_path_mut(&path)
+                    && let Some(logical) =
+                        crate::markdown::logical_line_at_source(&tab.view.rendered, source_line)
+                {
+                    tab.view.cursor_line = logical;
+                    // Centre the jump target so the user sees surrounding
+                    // context rather than landing at the viewport edge.
+                    tab.view.scroll_to_cursor_centered(vh);
+                }
+            } else {
+                // Path doesn't match — put it back for a later load.
+                self.pending_jump = Some((pending_path, source_line));
+            }
+        }
+
         self.focus = Focus::Viewer;
         self.expand_and_select(&path);
     }
@@ -1727,7 +1924,7 @@ impl App {
         let Some(path) = self.tree.selected_path().map(|p| p.to_path_buf()) else {
             return;
         };
-        self.open_or_focus(path, new_tab);
+        self.open_or_focus(path, new_tab, None);
     }
 
     /// Reload every open tab whose path is in the `changed` set.
@@ -1888,25 +2085,52 @@ impl App {
         // superseded query while the new background task is running.
         self.search.results.clear();
         self.search.selected_index = 0;
+        self.search.truncated_at_cap = false;
 
         if self.search.query.is_empty() {
             return;
         }
 
-        let query_lower = self.search.query.to_lowercase();
+        let query = self.search.query.clone();
 
         match self.search.mode {
             SearchMode::FileName => {
                 // Filename search is O(n) over in-memory data — fast enough to
                 // run synchronously on the main thread with no perceptible delay.
-                for item in &self.tree.flat_items {
-                    if !item.is_dir && item.name.to_lowercase().contains(&query_lower) {
+                // Uses smartcase: uppercase in query → case-sensitive match.
+                let sensitive = smartcase_is_sensitive(&query);
+                let query_cmp = if sensitive {
+                    query.clone()
+                } else {
+                    query.to_lowercase()
+                };
+
+                // Walk all entries (not just flat_items) so collapsed directories
+                // are still searched.
+                let all_paths = FileEntry::flat_paths(&self.tree.entries);
+                for path in all_paths {
+                    let name = path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    let name_cmp = if sensitive {
+                        name.clone()
+                    } else {
+                        name.to_lowercase()
+                    };
+                    if name_cmp.contains(query_cmp.as_str()) {
                         self.search.results.push(SearchResult {
-                            path: item.path.clone(),
-                            name: item.name.clone(),
-                            line_number: None,
-                            snippet: None,
+                            path,
+                            name,
+                            match_count: 0,
+                            preview: String::new(),
+                            first_match_line: None,
                         });
+                        if self.search.results.len() >= RESULT_CAP {
+                            self.search.truncated_at_cap = true;
+                            break;
+                        }
                     }
                 }
             }
@@ -1924,10 +2148,29 @@ impl App {
                 let gen_arc = Arc::clone(&self.search_generation);
 
                 let paths = FileEntry::flat_paths(&self.tree.entries);
+                let preview_mode = self.search_preview;
 
                 tokio::task::spawn_blocking(move || {
-                    let mut results = Vec::new();
-                    for path in paths {
+                    // Build the match predicate once — avoids re-lowercasing the
+                    // query on every line comparison.
+                    let sensitive = smartcase_is_sensitive(&query);
+                    // Keep a separate clone for preview building (the predicate
+                    // closure moves `query` or `query_lower` into itself).
+                    let query_for_preview = query.clone();
+                    let query_lower = query.to_lowercase();
+
+                    let matches_line: Box<dyn Fn(&str) -> bool + Send> = if sensitive {
+                        Box::new(move |line: &str| line.contains(query.as_str()))
+                    } else {
+                        Box::new(move |line: &str| {
+                            line.to_lowercase().contains(query_lower.as_str())
+                        })
+                    };
+
+                    let mut results: Vec<SearchResult> = Vec::new();
+                    let mut truncated = false;
+
+                    'files: for path in paths {
                         // Bail early if a newer search has already started.
                         if gen_arc.load(Ordering::Relaxed) != generation {
                             return;
@@ -1935,29 +2178,52 @@ impl App {
                         let Ok(content) = std::fs::read_to_string(&path) else {
                             continue;
                         };
+
+                        let mut match_count = 0usize;
+                        let mut first_match: Option<(usize, String)> = None;
+
                         for (i, line) in content.lines().enumerate() {
-                            if line.to_lowercase().contains(&query_lower) {
-                                let name = path
-                                    .file_name()
-                                    .unwrap_or_default()
-                                    .to_string_lossy()
-                                    .to_string();
-                                results.push(SearchResult {
-                                    path: path.clone(),
-                                    name,
-                                    line_number: Some(i + 1),
-                                    snippet: Some(line.trim().to_string()),
-                                });
-                                break;
+                            if matches_line(line) {
+                                match_count += 1;
+                                if first_match.is_none() {
+                                    // Store i as 0-based; confirm_search passes it
+                                    // directly as a source-line coordinate.
+                                    first_match = Some((
+                                        i,
+                                        build_preview(line, &query_for_preview, preview_mode),
+                                    ));
+                                }
+                            }
+                        }
+
+                        if match_count > 0 {
+                            let name = path
+                                .file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .to_string();
+                            let (first_line, preview) = first_match.unwrap_or((0, String::new()));
+                            results.push(SearchResult {
+                                path,
+                                name,
+                                match_count,
+                                preview,
+                                first_match_line: Some(first_line),
+                            });
+                            if results.len() >= RESULT_CAP {
+                                truncated = true;
+                                break 'files;
                             }
                         }
                     }
+
                     // Final check before sending — another keystroke may have
                     // arrived while we were iterating the last file.
                     if gen_arc.load(Ordering::Relaxed) == generation {
                         let _ = tx.send(Action::SearchResults {
                             generation,
                             results,
+                            truncated,
                         });
                     }
                 });
@@ -1975,14 +2241,49 @@ impl App {
         self.search.active = false;
         self.focus = Focus::Viewer;
 
-        for (i, item) in self.tree.flat_items.iter().enumerate() {
-            if item.path == result.path {
-                self.tree.list_state.select(Some(i));
-                break;
-            }
-        }
+        // Expand ancestor directories and select the file row in the tree so the
+        // panel is aligned with the viewer even when the file was in a collapsed
+        // subtree.
+        self.tree.reveal_path(&result.path);
 
-        self.open_or_focus(result.path, true);
+        // `first_match_line` is 0-based; pass it directly as a source-line
+        // coordinate without adjustment.
+        let jump_to_source = result.first_match_line.map(|n| n as u32);
+
+        self.open_or_focus(result.path, true, jump_to_source);
+    }
+
+    // ── Yank helpers ─────────────────────────────────────────────────────────
+
+    /// Copy the source-level text of the current cursor line to the system
+    /// clipboard via OSC 52.  Invoked by the `yy` chord in the viewer.
+    fn yank_current_line(&mut self) {
+        let Some(tab) = self.tabs.active_tab() else {
+            return;
+        };
+        let target_source =
+            crate::markdown::source_line_at(&tab.view.rendered, tab.view.cursor_line);
+        // `content` is the raw markdown; we index into its lines.
+        let content = tab.view.content.clone();
+        if let Some(line) = content.lines().nth(target_source as usize) {
+            copy_to_clipboard(line);
+        }
+    }
+
+    /// Copy the source-level text covered by the current visual-line selection
+    /// to the system clipboard, then exit visual mode.  Invoked by `y` in visual mode.
+    fn yank_visual_selection(&mut self) {
+        let Some(tab) = self.tabs.active_tab_mut() else {
+            return;
+        };
+        let Some(range) = tab.view.visual_mode else {
+            return;
+        };
+        let top_source = crate::markdown::source_line_at(&tab.view.rendered, range.top());
+        let bottom_source = crate::markdown::source_line_at(&tab.view.rendered, range.bottom());
+        let text = build_yank_text(&tab.view.content, top_source, bottom_source);
+        copy_to_clipboard(&text);
+        tab.view.visual_mode = None;
     }
 
     fn shrink_tree(&mut self) {
@@ -2940,7 +3241,10 @@ mod tests {
         let mut app = make_app_with_view(100, 30);
         app.handle_key(KeyCode::Char('G'), KeyModifiers::SHIFT);
         let tab = app.tabs.active_tab().unwrap();
-        assert_eq!(tab.view.cursor_line, 99, "`G` should land cursor on last line");
+        assert_eq!(
+            tab.view.cursor_line, 99,
+            "`G` should land cursor on last line"
+        );
     }
 
     #[test]
@@ -2972,7 +3276,10 @@ mod tests {
             before_total > 0,
             "total_lines must be populated (got {before_total})"
         );
-        assert!(before_vh > 0, "view_height must be positive (got {before_vh})");
+        assert!(
+            before_vh > 0,
+            "view_height must be positive (got {before_vh})"
+        );
         assert_ne!(
             before_cursor, after_cursor,
             "`d` should move the cursor (before={before_cursor} after={after_cursor} \
@@ -3102,6 +3409,304 @@ mod tests {
         assert!(
             rx.try_recv().is_err(),
             "no FileReloaded should be sent when within the grace window"
+        );
+    }
+
+    // ── build_yank_text ──────────────────────────────────────────────────────
+
+    #[test]
+    fn build_yank_text_single_line() {
+        let content = "alpha\nbeta\ngamma";
+        assert_eq!(build_yank_text(content, 1, 1), "beta");
+    }
+
+    #[test]
+    fn build_yank_text_multi_line() {
+        let content = "line0\nline1\nline2\nline3";
+        assert_eq!(build_yank_text(content, 1, 3), "line1\nline2\nline3");
+    }
+
+    #[test]
+    fn build_yank_text_reversed_range() {
+        // Range given in reverse order must produce same result as forward range.
+        let content = "a\nb\nc";
+        assert_eq!(build_yank_text(content, 2, 0), "a\nb\nc");
+    }
+
+    #[test]
+    fn build_yank_text_past_eof() {
+        // Range that extends past the available lines returns whatever is there.
+        let content = "x\ny";
+        let result = build_yank_text(content, 0, 10);
+        assert_eq!(result, "x\ny");
+    }
+
+    #[test]
+    fn build_yank_text_empty_content() {
+        assert_eq!(build_yank_text("", 0, 0), "");
+    }
+
+    // ── Feature 2: Visual mode and yank ─────────────────────────────────────
+
+    /// Helper: build an App with a rendered tab (blocks set, not just content string).
+    fn make_rendered_app(content: &str) -> (App, PathBuf) {
+        use crate::theme::{Palette, Theme};
+        let palette = Palette::from_theme(Theme::Default);
+        let path = PathBuf::from("/fake/yank_test.md");
+        let mut app = App::new(PathBuf::from("."));
+        app.tabs.open_or_focus(&path, true);
+        app.tabs.view_height = 20;
+        if let Some(tab) = app.tabs.active_tab_mut() {
+            tab.view.load(
+                path.clone(),
+                "yank_test.md".to_string(),
+                content.to_string(),
+                &palette,
+                Theme::Default,
+            );
+        }
+        app.focus = Focus::Viewer;
+        (app, path)
+    }
+
+    #[test]
+    fn v_enters_visual_mode() {
+        let (mut app, _path) = make_rendered_app("line0\nline1\nline2");
+        // Move cursor to line 2.
+        if let Some(tab) = app.tabs.active_tab_mut() {
+            tab.view.cursor_line = 2;
+        }
+        app.handle_key(KeyCode::Char('V'), KeyModifiers::NONE);
+        let tab = app.tabs.active_tab().unwrap();
+        assert_eq!(
+            tab.view.visual_mode,
+            Some(crate::ui::markdown_view::VisualRange {
+                anchor: 2,
+                cursor: 2
+            }),
+            "V must enter visual mode at current cursor"
+        );
+    }
+
+    #[test]
+    fn v_in_visual_mode_exits_visual_mode() {
+        let (mut app, _path) = make_rendered_app("line0\nline1\nline2");
+        // Enter visual mode manually.
+        if let Some(tab) = app.tabs.active_tab_mut() {
+            tab.view.visual_mode = Some(crate::ui::markdown_view::VisualRange {
+                anchor: 1,
+                cursor: 2,
+            });
+        }
+        app.handle_key(KeyCode::Char('V'), KeyModifiers::NONE);
+        let tab = app.tabs.active_tab().unwrap();
+        assert_eq!(tab.view.visual_mode, None, "V in visual mode must exit it");
+    }
+
+    #[test]
+    fn esc_in_visual_mode_exits_visual_mode() {
+        let (mut app, _path) = make_rendered_app("line0\nline1");
+        if let Some(tab) = app.tabs.active_tab_mut() {
+            tab.view.visual_mode = Some(crate::ui::markdown_view::VisualRange {
+                anchor: 0,
+                cursor: 1,
+            });
+        }
+        app.handle_key(KeyCode::Esc, KeyModifiers::NONE);
+        let tab = app.tabs.active_tab().unwrap();
+        assert_eq!(tab.view.visual_mode, None, "Esc must exit visual mode");
+    }
+
+    #[test]
+    fn j_in_visual_mode_extends_range() {
+        // Use a controlled tab with known total_lines to avoid renderer side-effects.
+        let mut app = App::new(PathBuf::from("."));
+        let path = PathBuf::from("/fake/visual_j.md");
+        app.tabs.open_or_focus(&path, true);
+        app.tabs.view_height = 20;
+        if let Some(tab) = app.tabs.active_tab_mut() {
+            // Build 10 logical lines directly so the cursor clamp works correctly.
+            let block = make_text_block(&["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"]);
+            let total = block.height();
+            tab.view.rendered = vec![block];
+            tab.view.total_lines = total;
+            tab.view.cursor_line = 2;
+            tab.view.visual_mode = Some(crate::ui::markdown_view::VisualRange {
+                anchor: 2,
+                cursor: 2,
+            });
+        }
+        app.focus = Focus::Viewer;
+        // Press j to move down.
+        app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE);
+        let tab = app.tabs.active_tab().unwrap();
+        let range = tab
+            .view
+            .visual_mode
+            .expect("visual mode must still be active");
+        assert_eq!(range.anchor, 2, "anchor must stay at 2");
+        assert_eq!(range.cursor, 3, "cursor must extend to 3 after j");
+    }
+
+    #[test]
+    fn y_in_visual_mode_yanks_and_exits() {
+        // Use a controlled tab with predictable source_lines mapping.
+        // make_text_block assigns source_lines = [0, 1, 2, ...] sequentially.
+        let content = "alpha\nbeta\ngamma\ndelta";
+        let mut app = App::new(PathBuf::from("."));
+        let path = PathBuf::from("/fake/visual_yank.md");
+        app.tabs.open_or_focus(&path, true);
+        app.tabs.view_height = 20;
+        if let Some(tab) = app.tabs.active_tab_mut() {
+            let block = make_text_block(&["alpha", "beta", "gamma", "delta"]);
+            let total = block.height();
+            tab.view.rendered = vec![block];
+            tab.view.total_lines = total;
+            tab.view.content = content.to_string();
+            tab.view.current_path = Some(path.clone());
+            // Select logical lines 1..=2 (source lines 1="beta", 2="gamma").
+            tab.view.cursor_line = 1;
+            tab.view.visual_mode = Some(crate::ui::markdown_view::VisualRange {
+                anchor: 1,
+                cursor: 2,
+            });
+        }
+        app.focus = Focus::Viewer;
+        // Press y — should yank and exit visual mode.
+        app.handle_key(KeyCode::Char('y'), KeyModifiers::NONE);
+        let tab = app.tabs.active_tab().unwrap();
+        assert_eq!(
+            tab.view.visual_mode, None,
+            "y in visual mode must exit visual mode"
+        );
+        // Verify that the yank text for source lines 1..=2 is correct.
+        let top_source = crate::markdown::source_line_at(&tab.view.rendered, 1);
+        let bottom_source = crate::markdown::source_line_at(&tab.view.rendered, 2);
+        let expected = build_yank_text(content, top_source, bottom_source);
+        assert_eq!(
+            expected, "beta\ngamma",
+            "yank text must span visual selection"
+        );
+    }
+
+    // ── Feature 1: confirm_search jumps to match line ───────────────────────
+
+    #[test]
+    fn pending_jump_cleared_after_apply() {
+        // Set a pending jump and simulate a FileLoaded action for the same path.
+        let path = PathBuf::from("/fake/jump_test.md");
+        let content = "line0\nline1\nline2\nline3\nline4";
+        let mut app = App::new(PathBuf::from("."));
+        app.tabs.open_or_focus(&path, true);
+        // Seed the tab as empty (simulates a pending load).
+        // pending_jump is set to source line 2.
+        app.pending_jump = Some((path.clone(), 2));
+        // Now simulate FileLoaded arriving.
+        app.apply_file_loaded(path.clone(), content.to_string(), true);
+        assert!(
+            app.pending_jump.is_none(),
+            "pending_jump must be cleared after apply_file_loaded"
+        );
+    }
+
+    #[test]
+    fn confirm_search_filename_result_no_jump() {
+        // A filename-mode result has first_match_line = None;
+        // after the search confirm, pending_jump should remain None.
+        use crate::ui::search_modal::{SearchMode, SearchResult};
+        let mut app = App::new(PathBuf::from("."));
+        let path = PathBuf::from("/fake/fn_result.md");
+        app.search.active = true;
+        app.search.mode = SearchMode::FileName;
+        app.search.results = vec![SearchResult {
+            path: path.clone(),
+            name: "fn_result.md".to_string(),
+            match_count: 0,
+            preview: String::new(),
+            first_match_line: None,
+        }];
+        app.search.selected_index = 0;
+        app.confirm_search();
+        assert!(
+            app.pending_jump.is_none(),
+            "filename result must not set pending_jump"
+        );
+    }
+
+    #[test]
+    fn apply_file_loaded_jumps_cursor_to_source_line() {
+        // Verify that apply_file_loaded applies the pending_jump by setting
+        // cursor_line to the logical line that corresponds to a given source line.
+        //
+        // We use a controlled tab with a direct DocBlock whose source_lines are
+        // sequential (0, 1, 2, …), bypassing the markdown renderer so we can
+        // predict the mapping exactly.
+        let content = "alpha\nbeta\ngamma\ndelta\nepsilon";
+        let path = PathBuf::from("/fake/jump_cursor.md");
+        let mut app = App::new(PathBuf::from("."));
+        app.tabs.open_or_focus(&path, true);
+        app.tabs.view_height = 20;
+
+        // Populate the tab with a known block (source_lines = [0,1,2,3,4]).
+        if let Some(tab) = app.tabs.active_tab_mut() {
+            let block = make_text_block(&["alpha", "beta", "gamma", "delta", "epsilon"]);
+            let total = block.height();
+            tab.view.rendered = vec![block];
+            tab.view.total_lines = total;
+            tab.view.content = content.to_string();
+            tab.view.current_path = Some(path.clone());
+        }
+
+        // Confirm that logical_line_at_source maps source line 2 to logical 2
+        // in our controlled block.
+        let expected_logical = {
+            let tab = app.tabs.active_tab().unwrap();
+            crate::markdown::logical_line_at_source(&tab.view.rendered, 2)
+                .expect("controlled block must map source 2 to logical 2")
+        };
+        assert_eq!(
+            expected_logical, 2,
+            "make_text_block must yield source_line == logical_line"
+        );
+
+        // Now simulate a pending jump followed by a fresh FileLoaded event.
+        // Because content is non-empty, apply_file_loaded won't call load();
+        // but the pending_jump logic still runs and moves the cursor.
+        app.pending_jump = Some((path.clone(), 2));
+        app.apply_file_loaded(path.clone(), content.to_string(), true);
+
+        let tab = app.tabs.active_tab().unwrap();
+        assert_eq!(
+            tab.view.cursor_line, expected_logical,
+            "cursor_line must land on logical line {expected_logical} for source line 2"
+        );
+        assert!(app.pending_jump.is_none(), "pending_jump must be consumed");
+    }
+
+    #[test]
+    fn pending_jump_cleared_on_file_load_failure() {
+        // A FileLoadFailed for the matching path must clear pending_jump.
+        let path = PathBuf::from("/fake/nonexistent.md");
+        let mut app = App::new(PathBuf::from("."));
+        app.pending_jump = Some((path.clone(), 5));
+        app.handle_action(Action::FileLoadFailed { path: path.clone() });
+        assert!(
+            app.pending_jump.is_none(),
+            "pending_jump must be cleared when the matching file fails to load"
+        );
+    }
+
+    #[test]
+    fn pending_jump_not_cleared_on_different_path_failure() {
+        // A FileLoadFailed for a different path must not touch pending_jump.
+        let path = PathBuf::from("/fake/target.md");
+        let other = PathBuf::from("/fake/other.md");
+        let mut app = App::new(PathBuf::from("."));
+        app.pending_jump = Some((path.clone(), 3));
+        app.handle_action(Action::FileLoadFailed { path: other });
+        assert!(
+            app.pending_jump.is_some(),
+            "pending_jump must be preserved when a different file fails to load"
         );
     }
 }

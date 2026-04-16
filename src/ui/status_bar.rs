@@ -25,6 +25,20 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         Focus::Editor => "EDIT",
     };
 
+    // Override the label with "VISUAL" when the viewer has an active visual-line
+    // selection, so the user always knows they are in selection mode.
+    let focus_label = if app.focus == Focus::Viewer
+        && app
+            .tabs
+            .active_tab()
+            .and_then(|t| t.view.visual_mode.as_ref())
+            .is_some()
+    {
+        "VISUAL"
+    } else {
+        focus_label
+    };
+
     let tab_count = app.tabs.len();
     let file_info = if let Some(tab) = app.tabs.active_tab()
         && !tab.view.file_name.is_empty()
@@ -50,7 +64,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         Span::styled(
             format!(" {focus_label} "),
             Style::default()
-                .fg(p.selection_fg)
+                .fg(p.on_accent_fg)
                 .bg(p.accent)
                 .add_modifier(Modifier::BOLD),
         ),

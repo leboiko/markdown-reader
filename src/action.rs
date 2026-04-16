@@ -1,7 +1,7 @@
 use crate::fs::git_status::GitFileStatus;
 use crate::markdown::MermaidBlockId;
 use crate::mermaid::MermaidEntry;
-use crate::ui::search_bar::SearchResult;
+use crate::ui::search_modal::SearchResult;
 use crossterm::event::{KeyEvent, MouseEvent};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -90,6 +90,8 @@ pub enum Action {
     SearchResults {
         generation: u64,
         results: Vec<SearchResult>,
+        /// `true` when the file list was capped at [`RESULT_CAP`] entries.
+        truncated: bool,
     },
 
     /// A file was loaded asynchronously and is ready to be opened in a tab.
@@ -133,5 +135,15 @@ pub enum Action {
         path: PathBuf,
         /// Human-readable error description.
         error: String,
+    },
+
+    /// A background file read failed.
+    ///
+    /// Used to clear a [`crate::app::App::pending_jump`] that can never be
+    /// satisfied because the file could not be read.  No user-facing message
+    /// is shown in v1.4.0 — the handler is intentionally quiet.
+    FileLoadFailed {
+        /// The path whose read attempt failed.
+        path: PathBuf,
     },
 }

@@ -75,6 +75,14 @@ pub struct Palette {
     pub accent_alt: Color,
     pub selection_bg: Color,
     pub selection_fg: Color,
+    /// Foreground color for text rendered on an `accent`-colored background.
+    ///
+    /// For most themes `selection_fg` happens to contrast adequately with
+    /// `accent`, so they share the same value.  GitHub Light is the exception:
+    /// its `selection_fg` is `#0969da` (same as `accent`), which would produce
+    /// invisible blue-on-blue text.  Setting this field to white for that theme
+    /// ensures readable text on the vivid blue accent background.
+    pub on_accent_fg: Color,
     pub title: Color,
     pub h1: Color,
     pub h2: Color,
@@ -117,6 +125,7 @@ impl Palette {
                 accent_alt: Color::Yellow,
                 selection_bg: Color::Rgb(0, 160, 80),
                 selection_fg: Color::Black,
+                on_accent_fg: Color::Black,
                 title: Color::Rgb(220, 220, 220),
                 h1: Color::Cyan,
                 h2: Color::Blue,
@@ -154,6 +163,7 @@ impl Palette {
                 accent_alt: Color::Rgb(241, 250, 140), // yellow
                 selection_bg: Color::Rgb(68, 71, 90), // current line
                 selection_fg: Color::Rgb(248, 248, 242),
+                on_accent_fg: Color::Rgb(248, 248, 242),
                 title: Color::Rgb(248, 248, 242),
                 h1: Color::Rgb(255, 121, 198), // pink
                 h2: Color::Rgb(189, 147, 249), // purple
@@ -191,10 +201,11 @@ impl Palette {
                 accent_alt: Color::Rgb(181, 137, 0),      // yellow
                 selection_bg: Color::Rgb(7, 54, 66),      // base02
                 selection_fg: Color::Rgb(147, 161, 161),  // base1
-                title: Color::Rgb(147, 161, 161),         // base1
-                h1: Color::Rgb(203, 75, 22),              // orange
-                h2: Color::Rgb(38, 139, 210),             // blue
-                h3: Color::Rgb(42, 161, 152),             // cyan
+                on_accent_fg: Color::Rgb(147, 161, 161),
+                title: Color::Rgb(147, 161, 161), // base1
+                h1: Color::Rgb(203, 75, 22),      // orange
+                h2: Color::Rgb(38, 139, 210),     // blue
+                h3: Color::Rgb(42, 161, 152),     // cyan
                 heading_other: Color::Rgb(131, 148, 150),
                 inline_code: Color::Rgb(133, 153, 0), // green
                 code_fg: Color::Rgb(131, 148, 150),
@@ -228,18 +239,19 @@ impl Palette {
                 accent_alt: Color::Rgb(181, 137, 0),   // yellow
                 selection_bg: Color::Rgb(238, 232, 213), // base2
                 selection_fg: Color::Rgb(88, 110, 117), // base01
-                title: Color::Rgb(88, 110, 117),       // base01
-                h1: Color::Rgb(203, 75, 22),           // orange
-                h2: Color::Rgb(38, 139, 210),          // blue
-                h3: Color::Rgb(42, 161, 152),          // cyan
+                on_accent_fg: Color::Rgb(253, 246, 227),
+                title: Color::Rgb(88, 110, 117),         // base01
+                h1: Color::Rgb(203, 75, 22),             // orange
+                h2: Color::Rgb(38, 139, 210),            // blue
+                h3: Color::Rgb(42, 161, 152),            // cyan
                 heading_other: Color::Rgb(88, 110, 117), // base01
-                inline_code: Color::Rgb(133, 153, 0),  // green
-                code_fg: Color::Rgb(101, 123, 131),    // base00
-                code_bg: Color::Rgb(238, 232, 213),    // base2
-                code_border: Color::Rgb(147, 161, 161), // base1
-                link: Color::Rgb(38, 139, 210),        // blue
-                list_marker: Color::Rgb(181, 137, 0),  // yellow
-                task_marker: Color::Rgb(42, 161, 152), // cyan
+                inline_code: Color::Rgb(133, 153, 0),    // green
+                code_fg: Color::Rgb(101, 123, 131),      // base00
+                code_bg: Color::Rgb(238, 232, 213),      // base2
+                code_border: Color::Rgb(147, 161, 161),  // base1
+                link: Color::Rgb(38, 139, 210),          // blue
+                list_marker: Color::Rgb(181, 137, 0),    // yellow
+                task_marker: Color::Rgb(42, 161, 152),   // cyan
                 block_quote_fg: Color::Rgb(147, 161, 161),
                 block_quote_border: Color::Rgb(147, 161, 161),
                 table_header: Color::Rgb(203, 75, 22), // orange
@@ -265,10 +277,11 @@ impl Palette {
                 accent_alt: Color::Rgb(235, 203, 139),     // nord13 yellow
                 selection_bg: Color::Rgb(67, 76, 94),      // nord1
                 selection_fg: Color::Rgb(236, 239, 244),   // nord6
-                title: Color::Rgb(236, 239, 244),          // nord6
-                h1: Color::Rgb(191, 97, 106),              // nord11 red
-                h2: Color::Rgb(136, 192, 208),             // nord8
-                h3: Color::Rgb(163, 190, 140),             // nord14 green
+                on_accent_fg: Color::Rgb(46, 52, 64),
+                title: Color::Rgb(236, 239, 244), // nord6
+                h1: Color::Rgb(191, 97, 106),     // nord11 red
+                h2: Color::Rgb(136, 192, 208),    // nord8
+                h3: Color::Rgb(163, 190, 140),    // nord14 green
                 heading_other: Color::Rgb(216, 222, 233),
                 inline_code: Color::Rgb(163, 190, 140), // nord14 green
                 code_fg: Color::Rgb(216, 222, 233),
@@ -302,6 +315,7 @@ impl Palette {
                 accent_alt: Color::Rgb(184, 187, 38),    // green
                 selection_bg: Color::Rgb(80, 73, 69),    // bg3
                 selection_fg: Color::Rgb(235, 219, 178),
+                on_accent_fg: Color::Rgb(40, 40, 40),
                 title: Color::Rgb(235, 219, 178),
                 h1: Color::Rgb(251, 73, 52),  // red (bright)
                 h2: Color::Rgb(250, 189, 47), // yellow (bright)
@@ -339,6 +353,7 @@ impl Palette {
                 accent_alt: Color::Rgb(152, 151, 26),  // green #98971a
                 selection_bg: Color::Rgb(235, 219, 178), // bg1 #ebdbb2
                 selection_fg: Color::Rgb(60, 56, 54),  // fg
+                on_accent_fg: Color::Rgb(60, 56, 54),
                 title: Color::Rgb(60, 56, 54),
                 h1: Color::Rgb(204, 36, 29),  // red #cc241d
                 h2: Color::Rgb(215, 153, 33), // yellow
@@ -376,6 +391,9 @@ impl Palette {
                 accent_alt: Color::Rgb(154, 103, 0),   // attention.fg      #9a6700
                 selection_bg: Color::Rgb(221, 244, 255), // accent.subtle     #ddf4ff
                 selection_fg: Color::Rgb(9, 105, 218), // accent.fg on subtle bg
+                // White on the vivid blue — selection_fg is also #0969da which would
+                // produce invisible blue-on-blue text if used on an accent background.
+                on_accent_fg: Color::Rgb(255, 255, 255),
                 title: Color::Rgb(31, 35, 40),
                 h1: Color::Rgb(9, 105, 218), // accent.fg         #0969da
                 h2: Color::Rgb(154, 103, 0), // attention.fg      #9a6700
@@ -437,5 +455,24 @@ impl Palette {
 impl Default for Palette {
     fn default() -> Self {
         Self::from_theme(Theme::Default)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every theme must have `on_accent_fg != accent` so that text drawn on an
+    /// accent-coloured background is never invisible.
+    #[test]
+    fn on_accent_fg_contrasts_with_accent() {
+        for &theme in Theme::ALL {
+            let p = Palette::from_theme(theme);
+            assert_ne!(
+                p.on_accent_fg, p.accent,
+                "Theme {:?}: on_accent_fg == accent — text would be invisible",
+                theme,
+            );
+        }
     }
 }

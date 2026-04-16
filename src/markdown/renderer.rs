@@ -458,11 +458,18 @@ impl MdRenderer {
             Tag::TableHead => {
                 self.table_header = true;
                 self.table_row.clear();
+                // pulldown-cmark does NOT emit `Tag::TableRow` for a table's
+                // header — the header's cells live directly inside
+                // `TableHead`. Capture the source line here so `TagEnd::TableHead`
+                // has the right value to push onto `table_row_source_lines`.
+                self.current_table_row_source_line =
+                    byte_offset_to_line(span.start, &self.line_boundaries);
             }
             Tag::TableRow => {
                 self.table_row.clear();
-                // Capture the source line for this row so we can map the cursor
-                // back to the exact markdown row when entering edit mode.
+                // Capture the source line for body rows so we can map the
+                // cursor back to the exact markdown row when entering edit
+                // mode or jumping from search.
                 self.current_table_row_source_line =
                     byte_offset_to_line(span.start, &self.line_boundaries);
             }
@@ -1215,6 +1222,44 @@ mod tests {
             table.row_source_lines,
             vec![0],
             "header-only table must have exactly one entry"
+        );
+    }
+
+    /// Regression test for a header-row tracking bug: when a table was
+    /// preceded by other content, the header's source line was recorded as
+    /// 0 instead of the header line's real source position. The root cause
+    /// was that pulldown-cmark does NOT emit `Tag::TableRow` for the
+    /// header — the header's cells live directly inside `Tag::TableHead` —
+    /// so the header's `current_table_row_source_line` was never updated
+    /// from its initial zero.
+    #[test]
+    fn table_header_source_line_not_anchored_to_zero_when_preceded_by_text() {
+        // Source layout:
+        //   0: # Title
+        //   1: (blank)
+        //   2: Some intro paragraph.
+        //   3: (blank)
+        //   4: | A | B |
+        //   5: |---|---|
+        //   6: | 1 | 2 |
+        let md = "# Title\n\nSome intro paragraph.\n\n| A | B |\n|---|---|\n| 1 | 2 |\n";
+        let p = default_palette();
+        let blocks = render_markdown(md, &p, crate::theme::Theme::Default);
+        let table = blocks
+            .iter()
+            .find_map(|b| {
+                if let DocBlock::Table(t) = b {
+                    Some(t)
+                } else {
+                    None
+                }
+            })
+            .expect("expected a Table block");
+
+        assert_eq!(
+            table.row_source_lines,
+            vec![4, 6],
+            "header must be on source line 4 (not 0); body row on 6",
         );
     }
 

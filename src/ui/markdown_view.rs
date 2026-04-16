@@ -24,6 +24,38 @@ pub struct TableLayout {
     pub text: Text<'static>,
 }
 
+/// Anchor and cursor bounds of a visual-line selection in the viewer.
+///
+/// Both values are absolute logical line indices in the rendered output
+/// (same coordinate space as `cursor_line`).  The selected range is
+/// `min(anchor, cursor)..=max(anchor, cursor)` — inclusive on both ends,
+/// normalising the direction of selection so callers need not distinguish
+/// upward from downward selections.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VisualRange {
+    /// The line where the selection began (does not move during extension).
+    pub anchor: u32,
+    /// The current end of the selection, tracking the cursor.
+    pub cursor: u32,
+}
+
+impl VisualRange {
+    /// Smaller of `anchor` and `cursor` — the top of the selection.
+    pub fn top(&self) -> u32 {
+        self.anchor.min(self.cursor)
+    }
+
+    /// Larger of `anchor` and `cursor` — the bottom of the selection.
+    pub fn bottom(&self) -> u32 {
+        self.anchor.max(self.cursor)
+    }
+
+    /// `true` if the absolute logical `line` is inside the selection (inclusive).
+    pub fn contains(&self, line: u32) -> bool {
+        line >= self.top() && line <= self.bottom()
+    }
+}
+
 /// A hyperlink with an absolute display-line position (after block offsets are applied).
 #[derive(Debug, Clone)]
 pub struct AbsoluteLink {
@@ -70,6 +102,11 @@ pub struct MarkdownViewState {
     pub links: Vec<AbsoluteLink>,
     /// All heading anchors in the document with absolute display-line positions.
     pub heading_anchors: Vec<AbsoluteAnchor>,
+    /// Active visual-line selection; `None` when the viewer is in normal mode.
+    ///
+    /// Reset to `None` by [`load`] so switching files always clears any
+    /// dangling selection from the previous document.
+    pub visual_mode: Option<VisualRange>,
 }
 
 impl MarkdownViewState {
@@ -137,6 +174,9 @@ impl MarkdownViewState {
         self.current_path = Some(path);
         self.scroll_offset = 0;
         self.cursor_line = 0;
+        // Always clear visual-line selection when loading a new file so the
+        // previous document's selection doesn't appear in the new one.
+        self.visual_mode = None;
         // Invalidate table layout cache. The fresh DocBlock::Table values carry
         // a pessimistic rendered_height that only becomes accurate once the
         // draw loop runs layout_table; forcing a rebuild keeps the hint line
@@ -148,26 +188,45 @@ impl MarkdownViewState {
 
     /// Move the cursor down by `n` logical lines, clamped to the last line.
     ///
+    /// When visual mode is active, the selection's `cursor` end is extended to
+    /// track the new cursor position; the `anchor` stays fixed.
+    ///
     /// Does not update `scroll_offset`; call [`scroll_to_cursor`] afterward.
     pub fn cursor_down(&mut self, n: u32) {
         let max = self.total_lines.saturating_sub(1);
         self.cursor_line = self.cursor_line.saturating_add(n).min(max);
+        if let Some(range) = self.visual_mode.as_mut() {
+            range.cursor = self.cursor_line;
+        }
     }
 
     /// Move the cursor up by `n` logical lines, saturating at 0.
     ///
+    /// When visual mode is active, the selection's `cursor` end is extended to
+    /// track the new cursor position; the `anchor` stays fixed.
+    ///
     /// Does not update `scroll_offset`; call [`scroll_to_cursor`] afterward.
     pub fn cursor_up(&mut self, n: u32) {
         self.cursor_line = self.cursor_line.saturating_sub(n);
+        if let Some(range) = self.visual_mode.as_mut() {
+            range.cursor = self.cursor_line;
+        }
     }
 
     /// Jump the cursor to the first line and reset the scroll to the top.
+    ///
+    /// When visual mode is active, extends the selection to the top of the document.
     pub fn cursor_to_top(&mut self) {
         self.cursor_line = 0;
         self.scroll_offset = 0;
+        if let Some(range) = self.visual_mode.as_mut() {
+            range.cursor = 0;
+        }
     }
 
     /// Jump the cursor to the last line and scroll so it is visible.
+    ///
+    /// When visual mode is active, extends the selection to the bottom of the document.
     ///
     /// # Arguments
     ///
@@ -175,6 +234,29 @@ impl MarkdownViewState {
     pub fn cursor_to_bottom(&mut self, view_height: u32) {
         self.cursor_line = self.total_lines.saturating_sub(1);
         self.scroll_to_cursor(view_height);
+        if let Some(range) = self.visual_mode.as_mut() {
+            range.cursor = self.cursor_line;
+        }
+    }
+
+    /// Adjust `scroll_offset` so the cursor sits as close to the vertical
+    /// centre of the viewport as possible.
+    ///
+    /// Intended for long-distance cursor jumps (search-result open, go-to-line)
+    /// where the user wants to see context around the target line rather than
+    /// landing at the viewport edge.  Short-distance movement (`j`/`k`/etc.)
+    /// should continue to use [`scroll_to_cursor`] so the scroll only tracks
+    /// the cursor when the cursor would otherwise leave the screen.
+    ///
+    /// # Arguments
+    ///
+    /// * `view_height` – visible viewport height in display lines.
+    pub fn scroll_to_cursor_centered(&mut self, view_height: u32) {
+        let vh = view_height.max(1);
+        let half = vh / 2;
+        self.scroll_offset = self.cursor_line.saturating_sub(half);
+        let max = self.total_lines.saturating_sub(vh / 2);
+        self.scroll_offset = self.scroll_offset.min(max);
     }
 
     /// Adjust `scroll_offset` so the cursor is visible in the viewport.
@@ -318,6 +400,9 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
     let tab = app.tabs.active_tab().unwrap();
     let scroll_offset = tab.view.scroll_offset;
     let cursor_line = tab.view.cursor_line;
+    // Copy the visual selection so we can use it while iterating over blocks
+    // without holding a borrow into `app.tabs`.
+    let visual_mode = tab.view.visual_mode;
 
     let doc_search_query =
         if !tab.doc_search.query.is_empty() && !tab.doc_search.match_lines.is_empty() {
@@ -359,6 +444,8 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
         block_start: u32,
         /// Total height of this block in logical lines.
         block_height: u32,
+        /// Visual selection at the time of the draw instruction capture.
+        visual_mode: Option<VisualRange>,
     }
 
     let mut text_draws: Vec<TextDraw> = Vec::new();
@@ -413,21 +500,20 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                                 Text::from(sliced_lines)
                             };
 
-                            // Apply cursor highlight when the viewer has focus and
-                            // the cursor falls inside this block.
+                            // Apply highlight(s) when the viewer has focus.
+                            // In visual mode every line in the selection gets highlighted;
+                            // in normal mode only the single cursor row is highlighted.
                             let block_end = block_start + block_height;
-                            if focused && cursor_line >= block_start && cursor_line < block_end {
-                                // cursor_relative is 0-indexed within the block.
-                                let cursor_relative = (cursor_line - block_start) as usize;
-                                // start == clip_start (lines before viewport are skipped).
-                                if cursor_relative >= start {
-                                    let idx_in_visible = cursor_relative - start;
-                                    patch_cursor_highlight(
-                                        &mut visible_text.lines,
-                                        idx_in_visible,
-                                        p.selection_bg,
-                                    );
-                                }
+                            if focused {
+                                apply_block_highlight(
+                                    &mut visible_text.lines,
+                                    visual_mode,
+                                    cursor_line,
+                                    block_start,
+                                    block_end,
+                                    start,
+                                    p.selection_bg,
+                                );
                             }
 
                             text_draws.push(TextDraw {
@@ -454,6 +540,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                                 source: source.clone(),
                                 block_start,
                                 block_height,
+                                visual_mode,
                             });
                         }
                         DocBlock::Table(table) => {
@@ -476,20 +563,20 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                                     } else {
                                         Text::from(cached.text.lines[start..end].to_vec())
                                     };
-                                // Apply cursor highlight when the viewer has focus and
-                                // the cursor falls inside this table block.
+                                // Apply highlight(s) when the viewer has focus.
+                                // In visual mode every line in the selection range is
+                                // highlighted; in normal mode only the cursor row.
                                 let block_end = block_start + block_height;
-                                if focused && cursor_line >= block_start && cursor_line < block_end
-                                {
-                                    let cursor_relative = (cursor_line - block_start) as usize;
-                                    if cursor_relative >= start {
-                                        let idx_in_visible = cursor_relative - start;
-                                        patch_cursor_highlight(
-                                            &mut visible_text.lines,
-                                            idx_in_visible,
-                                            p.selection_bg,
-                                        );
-                                    }
+                                if focused {
+                                    apply_block_highlight(
+                                        &mut visible_text.lines,
+                                        visual_mode,
+                                        cursor_line,
+                                        block_start,
+                                        block_end,
+                                        start,
+                                        p.selection_bg,
+                                    );
                                 }
                                 text_draws.push(TextDraw {
                                     y: rect_y,
@@ -564,6 +651,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
             cursor_line,
             block_start: md.block_start,
             block_end: md.block_start + md.block_height,
+            visual_mode: md.visual_mode,
         };
         draw_mermaid_block(f, app, rect, &p, &params);
     }
@@ -588,6 +676,8 @@ struct MermaidDrawParams<'a> {
     block_start: u32,
     /// Exclusive end of the block in absolute logical lines.
     block_end: u32,
+    /// Active visual-line selection, or `None` in normal mode.
+    visual_mode: Option<VisualRange>,
 }
 
 /// Draw a mermaid block at the given rect, looking up the cache entry.
@@ -625,12 +715,24 @@ fn draw_mermaid_block(
                     Block::default().style(Style::default().bg(p.background)),
                     rect,
                 );
-                // Render the cursor background bar BEFORE the image so it sits
-                // underneath. The image overwrites most of the bar, but a thin
-                // colored strip is left at the cursor row around the image
-                // padding. This is the best we can do without image compositing.
-                if cursor_in_block {
-                    let row_offset = (params.cursor_line - params.block_start) as u16;
+                // Render background bars BEFORE the image so they sit underneath.
+                // In visual mode draw a bar for every selected row; in normal mode
+                // draw one bar for the cursor row.  The image overwrites most of
+                // each bar, leaving only a thin coloured strip around the padding.
+                let highlighted_rows: Vec<u32> = match params.visual_mode {
+                    Some(range) => {
+                        let top = range.top().max(params.block_start) - params.block_start;
+                        let bottom = range.bottom().min(params.block_end.saturating_sub(1))
+                            - params.block_start;
+                        (top..=bottom).collect()
+                    }
+                    None if cursor_in_block => {
+                        vec![params.cursor_line - params.block_start]
+                    }
+                    None => vec![],
+                };
+                for row_offset in highlighted_rows {
+                    let row_offset = row_offset as u16;
                     if row_offset < rect.height {
                         let bar_rect = Rect {
                             x: rect.x,
@@ -654,20 +756,34 @@ fn draw_mermaid_block(
         Some(MermaidEntry::Failed(msg)) => {
             let footer = format!("[mermaid \u{2014} {}]", truncate(msg, 60));
             let mut text = render_mermaid_source_text(params.source, &footer, p);
-            // Apply cursor highlight to the source-text fallback.
-            if cursor_in_block {
-                let idx = (params.cursor_line - params.block_start) as usize;
-                patch_cursor_highlight(&mut text.lines, idx, p.selection_bg);
+            // Apply cursor/selection highlight to the source-text fallback.
+            if params.focused {
+                apply_block_highlight(
+                    &mut text.lines,
+                    params.visual_mode,
+                    params.cursor_line,
+                    params.block_start,
+                    params.block_end,
+                    0,
+                    p.selection_bg,
+                );
             }
             render_mermaid_source_styled(f, rect, text, p);
         }
         Some(MermaidEntry::SourceOnly(reason)) => {
             let footer = format!("[mermaid \u{2014} {}]", reason);
             let mut text = render_mermaid_source_text(params.source, &footer, p);
-            // Apply cursor highlight to the source-text fallback.
-            if cursor_in_block {
-                let idx = (params.cursor_line - params.block_start) as usize;
-                patch_cursor_highlight(&mut text.lines, idx, p.selection_bg);
+            // Apply cursor/selection highlight to the source-text fallback.
+            if params.focused {
+                apply_block_highlight(
+                    &mut text.lines,
+                    params.visual_mode,
+                    params.cursor_line,
+                    params.block_start,
+                    params.block_end,
+                    0,
+                    p.selection_bg,
+                );
             }
             render_mermaid_source_styled(f, rect, text, p);
         }
@@ -749,7 +865,6 @@ fn render_text_with_gutter(
     total_doc_lines: u32,
     p: &Palette,
 ) {
-    let slice_len = text.lines.len() as u32;
     let num_digits = if total_doc_lines == 0 {
         4
     } else {
@@ -760,18 +875,89 @@ fn render_text_with_gutter(
     let chunks = Layout::horizontal([Constraint::Length(gutter_width as u16), Constraint::Min(0)])
         .split(rect);
 
+    // The content pane uses `Paragraph::wrap(Wrap { trim: false })`, so a
+    // single logical `Line` can occupy multiple visual rows on narrow
+    // terminals. The gutter must match that per-row layout: emit the line
+    // number on the row where the logical line starts and blank padding on
+    // each continuation row, so the number stays visually adjacent to its
+    // content.
+    let content_width = chunks[1].width;
     let gutter_style = Style::new().fg(p.gutter);
-    let gutter_lines: Vec<Line<'static>> = (first_line_number..first_line_number + slice_len)
-        .map(|n| {
-            Line::from(Span::styled(
-                format!("{:>width$} | ", n, width = num_digits as usize),
-                gutter_style,
-            ))
-        })
-        .collect();
+    let mut gutter_lines: Vec<Line<'static>> = Vec::with_capacity(text.lines.len());
+    let blank_span = Span::styled(
+        format!("{:>width$} | ", "", width = num_digits as usize),
+        gutter_style,
+    );
+    for (i, line) in text.lines.iter().enumerate() {
+        gutter_lines.push(Line::from(Span::styled(
+            format!(
+                "{:>width$} | ",
+                first_line_number + i as u32,
+                width = num_digits as usize
+            ),
+            gutter_style,
+        )));
+        let wraps = line_visual_rows(line, content_width);
+        for _ in 1..wraps {
+            gutter_lines.push(Line::from(blank_span.clone()));
+        }
+    }
 
     f.render_widget(Paragraph::new(Text::from(gutter_lines)), chunks[0]);
     f.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), chunks[1]);
+}
+
+/// Decide which lines in a visible block slice need highlighting and apply the
+/// background colour to each.
+///
+/// In **visual mode** every absolute logical line that falls inside the
+/// `VisualRange` and is also within the visible clip is highlighted.  In
+/// **normal mode** only the single cursor row is highlighted.
+///
+/// # Arguments
+///
+/// * `lines`       – mutable slice of visible lines already clipped to the viewport.
+/// * `visual_mode` – current visual selection, or `None` for normal mode.
+/// * `cursor_line` – absolute logical cursor position.
+/// * `block_start` – absolute logical line where this block starts.
+/// * `block_end`   – exclusive end of the block in absolute logical lines.
+/// * `clip_start`  – index within the block of the first visible line (same as
+///   the `start` variable used when slicing `visible_text`).
+/// * `bg`          – background colour to apply.
+fn apply_block_highlight(
+    lines: &mut [Line<'static>],
+    visual_mode: Option<VisualRange>,
+    cursor_line: u32,
+    block_start: u32,
+    block_end: u32,
+    clip_start: usize,
+    bg: Color,
+) {
+    match visual_mode {
+        Some(range) => {
+            // Highlight every visible line inside the selection range.
+            // Iterate over absolute logical lines that belong to this block
+            // and fall within the visible clip.
+            let block_visible_start = block_start + clip_start as u32;
+            let block_visible_end = block_start + clip_start as u32 + lines.len() as u32;
+            for abs in block_visible_start..block_visible_end {
+                if range.contains(abs) {
+                    let idx = (abs - block_visible_start) as usize;
+                    patch_cursor_highlight(lines, idx, bg);
+                }
+            }
+        }
+        None => {
+            // Normal mode: highlight only the cursor row.
+            if cursor_line >= block_start && cursor_line < block_end {
+                let cursor_relative = (cursor_line - block_start) as usize;
+                if cursor_relative >= clip_start {
+                    let idx = cursor_relative - clip_start;
+                    patch_cursor_highlight(lines, idx, bg);
+                }
+            }
+        }
+    }
 }
 
 /// Apply the cursor-highlight background to one row inside a visible slice.
@@ -788,7 +974,7 @@ fn render_text_with_gutter(
 ///
 /// All three block types (Text, Table, Mermaid-source) share this helper so
 /// the highlight logic lives in exactly one place.
-pub fn patch_cursor_highlight(lines: &mut [Line<'static>], idx: usize, bg: Color) {
+fn patch_cursor_highlight(lines: &mut [Line<'static>], idx: usize, bg: Color) {
     let Some(line) = lines.get_mut(idx) else {
         return;
     };
@@ -1001,6 +1187,97 @@ mod tests {
     use super::*;
     use crate::markdown::{DocBlock, HeadingAnchor, LinkInfo};
     use ratatui::text::{Line, Span, Text};
+
+    // ── VisualRange ──────────────────────────────────────────────────────────
+
+    /// A selection anchored at 3 with cursor at 5 should contain 3, 4, 5 and
+    /// exclude lines outside the range.
+    #[test]
+    fn visual_range_contains_inclusive() {
+        let r = VisualRange {
+            anchor: 3,
+            cursor: 5,
+        };
+        assert!(r.contains(3), "should contain anchor");
+        assert!(r.contains(4), "should contain middle");
+        assert!(r.contains(5), "should contain cursor");
+        assert!(!r.contains(2), "should not contain below anchor");
+        assert!(!r.contains(6), "should not contain above cursor");
+    }
+
+    /// A reversed selection (anchor > cursor) should behave identically because
+    /// `top()`/`bottom()` normalise the direction.
+    #[test]
+    fn visual_range_contains_reversed() {
+        let r = VisualRange {
+            anchor: 5,
+            cursor: 3,
+        };
+        assert!(r.contains(3));
+        assert!(r.contains(4));
+        assert!(r.contains(5));
+        assert!(!r.contains(2));
+        assert!(!r.contains(6));
+    }
+
+    // ── load clears visual_mode ──────────────────────────────────────────────
+
+    #[test]
+    fn load_clears_visual_mode() {
+        use crate::theme::{Palette, Theme};
+        let palette = Palette::from_theme(Theme::Default);
+        let mut view = MarkdownViewState {
+            visual_mode: Some(VisualRange {
+                anchor: 2,
+                cursor: 4,
+            }),
+            ..Default::default()
+        };
+        view.load(
+            std::path::PathBuf::from("/fake/test.md"),
+            "test.md".to_string(),
+            "hello\nworld\n".to_string(),
+            &palette,
+            Theme::Default,
+        );
+        assert_eq!(view.visual_mode, None, "load() must clear visual_mode");
+    }
+
+    // ── cursor_down / cursor_up extend visual range ─────────────────────────
+
+    #[test]
+    fn cursor_down_in_visual_mode_extends_range() {
+        let mut v = MarkdownViewState {
+            total_lines: 10,
+            cursor_line: 3,
+            visual_mode: Some(VisualRange {
+                anchor: 3,
+                cursor: 3,
+            }),
+            ..Default::default()
+        };
+        v.cursor_down(2);
+        let range = v.visual_mode.unwrap();
+        assert_eq!(range.anchor, 3, "anchor must stay fixed");
+        assert_eq!(range.cursor, 5, "cursor must extend down");
+    }
+
+    #[test]
+    fn cursor_up_in_visual_mode_extends_range() {
+        let mut v = MarkdownViewState {
+            total_lines: 10,
+            cursor_line: 5,
+            visual_mode: Some(VisualRange {
+                anchor: 5,
+                cursor: 5,
+            }),
+            ..Default::default()
+        };
+        v.cursor_up(3);
+        let range = v.visual_mode.unwrap();
+        assert_eq!(range.anchor, 5, "anchor must stay fixed");
+        assert_eq!(range.cursor, 2, "cursor must move up");
+    }
 
     /// Helper: build a MarkdownViewState with a given total_lines and
     /// default scroll/cursor at 0.

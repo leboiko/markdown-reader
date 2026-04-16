@@ -144,7 +144,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
 
         let style = if i == active_idx {
             Style::default()
-                .fg(p.selection_fg)
+                .fg(p.on_accent_fg)
                 .bg(p.accent)
                 .add_modifier(Modifier::BOLD)
         } else {
