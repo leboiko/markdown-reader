@@ -2392,36 +2392,52 @@ impl App {
         };
         let viewport_start = tab.view.scroll_offset;
         let viewport_end = viewport_start + view_height;
+        let cursor_line = tab.view.cursor_line;
 
-        // Expand the first table whose range intersects the viewport. Viewport
-        // center detection would miss the common case of a table sitting at
-        // the top or bottom of the visible area with the center on surrounding
-        // prose.
+        // Prefer the table the cursor is currently inside.  Fall back to the
+        // first table that intersects the viewport when the cursor is on
+        // prose — this preserves the old click-anywhere-to-expand behaviour
+        // for files where the cursor hasn't been moved into a table yet.
+        let mut cursor_match: Option<&crate::markdown::TableBlock> = None;
+        let mut viewport_match: Option<&crate::markdown::TableBlock> = None;
         let mut block_start = 0u32;
         for doc_block in &tab.view.rendered {
             let block_end = block_start + doc_block.height();
-            let intersects = block_end > viewport_start && block_start < viewport_end;
-
-            if intersects && let crate::markdown::DocBlock::Table(table) = doc_block {
-                let modal = TableModalState {
-                    tab_id: tab.id,
-                    h_scroll: 0,
-                    v_scroll: 0,
-                    headers: table.headers.clone(),
-                    rows: table.rows.clone(),
-                    alignments: table.alignments.clone(),
-                    natural_widths: table.natural_widths.clone(),
-                };
-                self.table_modal = Some(modal);
-                self.focus = Focus::TableModal;
-                return;
+            if let crate::markdown::DocBlock::Table(table) = doc_block {
+                if cursor_line >= block_start && cursor_line < block_end {
+                    cursor_match = Some(table);
+                    break;
+                }
+                if viewport_match.is_none()
+                    && block_end > viewport_start
+                    && block_start < viewport_end
+                {
+                    viewport_match = Some(table);
+                }
             }
-
             block_start = block_end;
-            if block_start >= viewport_end {
-                break;
+            if block_start >= viewport_end && cursor_match.is_none() {
+                // No more blocks can intersect the viewport; only keep
+                // scanning if we still need to find a cursor match.
+                if cursor_line < block_start {
+                    break;
+                }
             }
         }
+
+        let Some(table) = cursor_match.or(viewport_match) else {
+            return;
+        };
+        self.table_modal = Some(TableModalState {
+            tab_id: tab.id,
+            h_scroll: 0,
+            v_scroll: 0,
+            headers: table.headers.clone(),
+            rows: table.rows.clone(),
+            alignments: table.alignments.clone(),
+            natural_widths: table.natural_widths.clone(),
+        });
+        self.focus = Focus::TableModal;
     }
 
     /// Handle a mouse event while the table modal is open.
@@ -3244,6 +3260,77 @@ mod tests {
         assert_eq!(
             tab.view.cursor_line, 99,
             "`G` should land cursor on last line"
+        );
+    }
+
+    /// When the cursor is inside a table block, `Enter` must open THAT
+    /// table rather than the first table visible on screen.
+    #[test]
+    fn try_open_table_modal_picks_table_under_cursor() {
+        let mut app = App::new(PathBuf::from("."));
+        let path = PathBuf::from("/fake/tables.md");
+        app.tabs.open_or_focus(&path, true);
+        app.tabs.view_height = 30;
+        app.focus = Focus::Viewer;
+
+        // Layout: [text(3)] [table A(4)] [text(3)] [table B(4)]
+        //          0..3      3..7         7..10     10..14
+        let blocks = vec![
+            make_text_block(&["intro", "text", "here"]),
+            make_table_block(10, &["A"], &[&["a-row-0"]]),
+            make_text_block(&["middle", "text", "here"]),
+            make_table_block(20, &["B"], &[&["b-row-0"]]),
+        ];
+        if let Some(tab) = app.tabs.active_tab_mut() {
+            tab.view.total_lines = blocks.iter().map(|b| b.height()).sum();
+            tab.view.rendered = blocks;
+            tab.view.scroll_offset = 0;
+            tab.view.cursor_line = 12; // inside table B (10..14)
+        }
+
+        app.try_open_table_modal();
+        let modal = app.table_modal.as_ref().expect("modal must open");
+        assert_eq!(
+            modal.headers.len(),
+            1,
+            "expected table B's single header, got {:?}",
+            modal.headers
+        );
+        assert_eq!(
+            modal.rows[0][0].iter().map(|s| s.content.as_ref()).collect::<String>(),
+            "b-row-0",
+            "modal should carry table B's data, not table A's",
+        );
+    }
+
+    /// Regression: when the cursor is on prose (not a table), `Enter` should
+    /// fall back to the first table intersecting the viewport (old behaviour).
+    #[test]
+    fn try_open_table_modal_falls_back_to_first_visible_table() {
+        let mut app = App::new(PathBuf::from("."));
+        let path = PathBuf::from("/fake/tables.md");
+        app.tabs.open_or_focus(&path, true);
+        app.tabs.view_height = 30;
+        app.focus = Focus::Viewer;
+
+        let blocks = vec![
+            make_text_block(&["intro"]),
+            make_table_block(10, &["A"], &[&["a-row-0"]]),
+            make_table_block(20, &["B"], &[&["b-row-0"]]),
+        ];
+        if let Some(tab) = app.tabs.active_tab_mut() {
+            tab.view.total_lines = blocks.iter().map(|b| b.height()).sum();
+            tab.view.rendered = blocks;
+            tab.view.scroll_offset = 0;
+            tab.view.cursor_line = 0; // on prose, above any table
+        }
+
+        app.try_open_table_modal();
+        let modal = app.table_modal.as_ref().expect("modal must open");
+        assert_eq!(
+            modal.rows[0][0].iter().map(|s| s.content.as_ref()).collect::<String>(),
+            "a-row-0",
+            "modal should open table A (first visible) when cursor is on prose",
         );
     }
 

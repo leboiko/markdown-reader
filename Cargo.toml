@@ -1,6 +1,6 @@
 [package]
 name = "markdown-tui-explorer"
-version = "1.4.0"
+version = "1.4.1"
 edition = "2024"
 description = "A terminal-based markdown file browser and viewer with search, syntax highlighting, and live reload"
 license = "MIT"
@@ -9,6 +9,10 @@ homepage = "https://github.com/leboiko/markdown-reader"
 keywords = ["markdown", "tui", "terminal", "viewer", "ratatui"]
 categories = ["command-line-utilities", "text-processing"]
 readme = "README.md"
+# Screenshots are referenced from README.md via absolute GitHub raw URLs,
+# so crates.io fetches them at render time. Excluding them from the
+# tarball keeps `cargo install` downloads lean.
+exclude = ["docs/screenshots/*"]
 
 [[bin]]
 name = "markdown-reader"

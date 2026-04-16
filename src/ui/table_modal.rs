@@ -36,12 +36,16 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         if num_cols == 1 { "" } else { "s" },
     );
 
+    // Use the viewer background rather than `help_bg` so the grid border
+    // colour (which is tuned for contrast against the main background) stays
+    // legible.  The focused-border colour around the modal still signals
+    // "this is a modal" visually.
     let block = Block::default()
         .title(title)
         .title_style(p.title_style())
         .borders(Borders::ALL)
         .border_style(Style::default().fg(p.border_focused))
-        .style(Style::default().bg(p.help_bg));
+        .style(Style::default().bg(p.background));
 
     let inner = block.inner(popup);
     f.render_widget(block, popup);

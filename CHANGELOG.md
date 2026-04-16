@@ -5,6 +5,27 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.1] - 2026-04-16
+
+### Fixed
+- **`Enter` now expands the table under the cursor** rather than the first
+  table that happens to intersect the viewport.  Falls back to the
+  first-visible table when the cursor is on prose, preserving the old
+  "click anywhere to expand" behaviour.
+- **Table modal contrast** — the expanded-table modal's grid borders
+  were rendered with a colour tuned for the main viewer background but
+  drawn against the modal's tinted background, which made the grid
+  barely visible on light themes (GitHub Light in particular).  The
+  modal body now uses the viewer background directly; the focused-border
+  colour around the outer frame still signals "this is a modal".
+
+### Changed
+- README now includes screenshots (viewer overview, global search,
+  GitHub Light with settings) and lists all eight themes in the
+  Features section (Solarized Light and Gruvbox Light were missing from
+  the count).  The settings-modal keybinding description mentions the
+  new "search preview" option.
+
 ## [1.4.0] - 2026-04-16
 
 ### Added

@@ -5,6 +5,24 @@ A terminal-based markdown file browser and viewer built with Rust and
 multiple files as tabs, search across content, jump to lines, switch themes,
 and resume exactly where you left off.
 
+## Screenshots
+
+The viewer with tabs, tree, inline tables, and syntax-highlighted code —
+dark theme by default.
+
+![Viewer overview (dark theme)](https://raw.githubusercontent.com/leboiko/markdown-reader/master/docs/screenshots/overview-dark.png)
+
+Global search across every markdown file in the tree — results are
+grouped per file with match counts and previews. Smartcase matching and
+a 500-file cap with a truncation footer.
+
+![Global search modal](https://raw.githubusercontent.com/leboiko/markdown-reader/master/docs/screenshots/global-search.png)
+
+Eight themes ship built-in, including light variants. Settings modal
+reached via `c`.
+
+![GitHub Light theme with settings open](https://raw.githubusercontent.com/leboiko/markdown-reader/master/docs/screenshots/settings-github-light.png)
+
 ## Layout
 
 ```
@@ -57,9 +75,10 @@ drawn on the left of the viewer content when enabled.
   The modal supports column-boundary panning (`h`/`l` snap to the next
   column, `H`/`L` half-page pan), mouse scroll wheel (plain for rows,
   `Shift`+wheel for columns), and click-outside-to-close.
-- **Themes** — six built-in palettes (Default, Dracula, Solarized Dark,
-  Nord, Gruvbox Dark, GitHub Light). Switch live from the settings modal;
-  every open document re-renders with the new colors.
+- **Themes** — eight built-in palettes (Default, Dracula, Solarized Dark,
+  Solarized Light, Nord, Gruvbox Dark, Gruvbox Light, GitHub Light).
+  Switch live from the settings modal; every open document re-renders
+  with the new colors.
 - **Session resume** — per-project: the last open tabs, active tab, and
   scroll positions are saved and restored automatically on the next launch.
 - **Line numbers** — optional left gutter in the viewer, togglable from
@@ -259,7 +278,7 @@ is silently ignored; close an existing one first.
 
 | Key | Action |
 |---|---|
-| `c` | Open settings (theme, line numbers, tree position) |
+| `c` | Open settings (theme, line numbers, tree position, search preview) |
 | `Esc` / `c` | Close settings |
 
 ### General
