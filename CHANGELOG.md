@@ -5,6 +5,87 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-04-16
+
+### Added
+- **Global search modal.** Press `/` in the Tree or Viewer to open a
+  full-screen search pane. Results are grouped per file with a match
+  count and a preview of the first match (full-line or ~80-char
+  snippet, selectable in Settings). `j`/`k`/arrows/`Ctrl+n`/`Ctrl+p`
+  navigate; `Enter` opens the selected file in a new tab; `Tab`
+  toggles between Files and Content modes; `Esc` dismisses. Click a
+  row to open it, click outside to dismiss.
+- **Smartcase search.** Lowercase query = case-insensitive match;
+  any uppercase character in the query = case-sensitive. An `Aa`
+  / `aA` indicator in the modal footer shows the active mode. No
+  manual toggle required.
+- **Jump to match line on open.** Confirming a content-search result
+  opens the file and places the viewer cursor on the first-match
+  source line, centred in the viewport.
+- **Tree auto-expand on open.** Whenever a file is opened
+  programmatically (search, link follow, session restore), the file
+  tree expands any collapsed ancestor directories so the file's row
+  is visible and selected.
+- **Vim-style visual-line mode in the viewer.** Press `V` to start a
+  line-wise selection; `j`/`k`/`d`/`u`/`gg`/`G`/`PageDown`/`PageUp`
+  extend the range; `y` yanks the selection to the clipboard via
+  OSC 52 and exits; `Esc` or `V` cancels. Status bar shows
+  `VISUAL` while active. `yy` in normal mode copies the current
+  cursor line.
+- **Search preview setting.** New `Search preview` section in the
+  Settings modal toggles between Full line (default) and Snippet
+  (~80 chars) previews in the search modal. Persisted in
+  `config.toml` as `search_preview`.
+- **Cursor position in the status bar.** The status bar now shows
+  `(cursor_line / total_lines, percentage)` so `d`/`u`/`gg`/`G`
+  navigation is reflected immediately. (Already shipped in 1.3.0;
+  this release adds the `VISUAL` label override.)
+
+### Fixed
+- **GitHub Light theme: invisible tab and status-bar labels.** The
+  `accent` and `selection_fg` colors in the GitHub Light palette
+  were both the same blue, so text drawn on an accent background
+  (active tab name, focus indicator) rendered blue-on-blue and
+  vanished. A new `Palette::on_accent_fg` field disambiguates the
+  two roles; for GitHub Light it's set to white.
+- **Search-jump to the right source line inside lists and
+  paragraphs.** Previously the inverse source-to-logical mapping
+  assumed `source_lines` was monotonically non-decreasing, but
+  pulldown-cmark's End-of-list events can cause dips (e.g.
+  `[..., 165, 160, 167, ...]`), leading to wrong jumps for any
+  match whose target line lived after a list. The scan now walks
+  the full vector and returns the last candidate whose source
+  `<= target`.
+- **Gutter line numbers now align with wrapped content.** The
+  gutter paragraph previously rendered one number per logical
+  line against a wrapping content paragraph, so the two drifted
+  vertically on long lines. The gutter now emits blank
+  continuation rows that match the content's wrap count, so a
+  line number always sits next to its content.
+- **Table header source-line tracking.** pulldown-cmark does not
+  emit `Tag::TableRow` for a table's header — cells live directly
+  inside `Tag::TableHead` — so the header's source line was
+  recorded as 0 regardless of the table's actual position. Now
+  captured from `Tag::TableHead`'s own span.
+- **`pending_jump` no longer leaks on read failure.** A new
+  `Action::FileLoadFailed` variant fires when the async read
+  fails, clearing the pending jump so a later unrelated file
+  load cannot inherit a stale target.
+- **Misleading search-truncation footer.** The "N more" count was
+  derived by subtracting a file cap from a match count. Replaced
+  with a clear `"results capped at N files"` message.
+
+### Changed
+- **`:N` go-to-line now centres the target** to match the UX of
+  search-result jumps. Both are long-distance jumps; neither
+  should park the cursor at the viewport edge.
+- **Content search counts all matches per file.** Previously the
+  search broke after the first match in each file; the new
+  modal needs the count for its per-file display.
+- **`edtui` upgraded to 0.11.2** (already in 1.2.0) now with
+  `default-features = false` to drop the `arboard` clipboard
+  dependency we do not use. Smaller binary, headless-safe.
+
 ## [1.3.0] - 2026-04-15
 
 ### Fixed

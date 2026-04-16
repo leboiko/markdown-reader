@@ -64,9 +64,18 @@ drawn on the left of the viewer content when enabled.
   scroll positions are saved and restored automatically on the next launch.
 - **Line numbers** — optional left gutter in the viewer, togglable from
   settings.
-- **Global search** — by filename or by content, with result cycling.
-  Confirming a result opens the file in a new tab without clobbering the
-  current one.
+- **Global search** — `/` opens a full-screen modal. File-name mode
+  lists matching paths; content mode scans every markdown file and
+  groups matches per file with a count and a preview of the first
+  hit (full line, or ~80-char snippet — your choice in Settings).
+  Smartcase: lowercase query = case-insensitive; any uppercase = case
+  sensitive, shown as `Aa` / `aA` in the footer. Confirming a
+  content-result opens the file in a new tab with the viewer cursor
+  centred on the match line and the file tree expanded to reveal it.
+- **Visual-line selection and copy** — press `V` in the viewer to
+  start a line-wise selection, extend with `j`/`k`/`d`/`u`/`gg`/`G`,
+  press `y` to copy the range to the system clipboard via OSC 52.
+  `yy` copies the current line without entering visual mode.
 - **In-document find** — `Ctrl+f` to search within the active document,
   with highlighted matches and `n`/`N` to cycle. Per-tab state — switching
   tabs preserves each tab's find state independently.
@@ -172,9 +181,12 @@ reopening the same directory resumes where you left off.
 | `gg` | Jump to top |
 | `G` | Jump to bottom |
 | `i` | Enter edit mode |
+| `V` | Enter visual-line selection mode |
+| `yy` | Copy current line to clipboard |
+| `y` (visual) | Copy selected range to clipboard and exit visual mode |
 | `Ctrl+f` | Find in document |
 | `n` / `N` | Next / previous match |
-| `:` | Go to line |
+| `:` | Go to line (centred on target) |
 | `f` | Open anchor link picker (jump to a heading) |
 | `Enter` | Expand the first visible table into the modal viewer |
 | `Tab` | Switch focus to tree |
