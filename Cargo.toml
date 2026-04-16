@@ -1,6 +1,6 @@
 [package]
 name = "markdown-tui-explorer"
-version = "1.4.1"
+version = "1.4.2"
 edition = "2024"
 description = "A terminal-based markdown file browser and viewer with search, syntax highlighting, and live reload"
 license = "MIT"
@@ -31,8 +31,8 @@ serde = { version = "1.0.228", features = ["derive"] }
 toml = "1.1.2"
 dirs = "6.0.0"
 mermaid-rs-renderer = "0.2.1"
-ratatui-image = { version = "10.0.6", default-features = false, features = ["crossterm", "image-defaults"] }
-image = "0.25"
+ratatui-image = { version = "10.0.6", default-features = false, features = ["crossterm"] }
+image = { version = "0.25", default-features = false }
 resvg = "0.46"
 unicode-width = "0.2"
 base64 = "0.22"

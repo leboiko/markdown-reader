@@ -5,6 +5,18 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.2] - 2026-04-16
+
+### Changed
+- **Trimmed transitive dependencies.** Dropped `image-defaults` from
+  `ratatui-image` and `default-features` from `image` — we only use the
+  `RgbaImage`/`DynamicImage` types to shuttle pixels from `tiny_skia`
+  (mermaid rasterization) to `ratatui-image`, never to decode image
+  files. Removing the format decoders also removes the
+  `ravif → rav1e → bitstream-io → core2` chain that was triggering a
+  "yanked dependency" warning on every build. Significantly smaller
+  compile time and binary. No functional change.
+
 ## [1.4.1] - 2026-04-16
 
 ### Fixed
