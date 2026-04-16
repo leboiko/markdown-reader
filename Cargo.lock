@@ -1176,7 +1176,7 @@ dependencies = [
 
 [[package]]
 name = "markdown-tui-explorer"
-version = "1.4.2"
+version = "1.4.3"
 dependencies = [
  "anyhow",
  "base64",

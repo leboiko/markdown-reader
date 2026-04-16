@@ -431,58 +431,53 @@ pub fn slice_line_at(line: &Line<'static>, h_scroll: usize, visible_width: usize
         return Line::from("");
     }
 
-    // Flatten the line to a single string for column-based slicing.
-    let full: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-    let sliced = slice_row(&full, h_scroll, visible_width);
+    // Walk spans preserving each span's style. A naive "flatten to a string
+    // and re-span with the first style" approach loses every cell's colour
+    // because the first span is always the left border `│`, so the entire
+    // row inherits the border's muted grey.
+    let mut out: Vec<Span<'static>> = Vec::with_capacity(line.spans.len());
+    let mut col = 0usize; // absolute display column across the whole line
+    let mut used = 0usize; // display columns already written to `out`
 
-    // Preserve the style of the first span that has content (good enough for modal).
-    let style = line.spans.first().map(|s| s.style).unwrap_or_default();
-    Line::from(Span::styled(sliced, style))
-}
-
-/// Extract a visible horizontal slice from a rendered row string.
-///
-/// `h_scroll` is the number of display columns to skip from the left.
-/// `visible_width` is the maximum number of display columns to return.
-/// Double-width characters that straddle the left edge are replaced with a space.
-pub fn slice_row(row: &str, h_scroll: usize, visible_width: usize) -> String {
-    if visible_width == 0 {
-        return String::new();
-    }
-
-    // Walk through the row accumulating display columns.
-    let mut col = 0usize;
-    let mut result = String::with_capacity(visible_width + 4);
-
-    for ch in row.chars() {
-        let ch_w = UnicodeWidthChar::width(ch).unwrap_or(0);
-
-        if col + ch_w <= h_scroll {
-            col += ch_w;
-            continue;
-        }
-
-        if col < h_scroll {
-            // Double-width char straddles the left edge — emit a replacement space.
-            result.push(' ');
-            col = h_scroll + 1;
-            continue;
-        }
-
-        let used = result
-            .chars()
-            .map(|c| UnicodeWidthChar::width(c).unwrap_or(0))
-            .sum::<usize>();
-
-        if used + ch_w > visible_width {
+    for span in &line.spans {
+        if used >= visible_width {
             break;
         }
+        let mut buf = String::new();
+        for ch in span.content.chars() {
+            let ch_w = UnicodeWidthChar::width(ch).unwrap_or(0);
 
-        result.push(ch);
-        col += ch_w;
+            // Fully before the left edge — skip without emitting.
+            if col + ch_w <= h_scroll {
+                col += ch_w;
+                continue;
+            }
+
+            // Double-width char straddling the left edge — replace with a
+            // space so downstream column math stays aligned.
+            if col < h_scroll {
+                if used + 1 > visible_width {
+                    break;
+                }
+                buf.push(' ');
+                used += 1;
+                col = h_scroll + 1;
+                continue;
+            }
+
+            if used + ch_w > visible_width {
+                break;
+            }
+            buf.push(ch);
+            used += ch_w;
+            col += ch_w;
+        }
+        if !buf.is_empty() {
+            out.push(Span::styled(buf, span.style));
+        }
     }
 
-    result
+    Line::from(out)
 }
 
 fn centered_pct(w_pct: u16, h_pct: u16, area: Rect) -> Rect {
@@ -691,41 +686,81 @@ mod tests {
         assert_eq!(spans_text(&result[1]), "line two");
     }
 
-    // ── slice_row tests ──────────────────────────────────────────────────────
+    // ── slice_line_at tests ──────────────────────────────────────────────────
 
-    #[test]
-    fn slice_row_ascii_mid_column() {
-        let row = "abcdefghij";
-        assert_eq!(slice_row(row, 3, 4), "defg");
+    fn styled(text: &str, fg: ratatui::style::Color) -> Span<'static> {
+        Span::styled(text.to_string(), Style::default().fg(fg))
     }
 
     #[test]
-    fn slice_row_start_of_row() {
-        let row = "hello world";
-        assert_eq!(slice_row(row, 0, 5), "hello");
-    }
-
-    #[test]
-    fn slice_row_past_end() {
-        let row = "short";
-        assert_eq!(slice_row(row, 10, 5), "");
-    }
-
-    #[test]
-    fn slice_row_double_width_straddle() {
-        let row = "AB\u{30A2}CD";
-        let result = slice_row(row, 3, 5);
+    fn slice_line_at_preserves_per_span_styles() {
+        use ratatui::style::Color;
+        // Simulate a header row: border + header text + border + header text + border.
+        let line = Line::from(vec![
+            styled("│", Color::Gray),
+            styled(" Name ", Color::Blue),
+            styled("│", Color::Gray),
+            styled(" Value ", Color::Blue),
+            styled("│", Color::Gray),
+        ]);
+        let sliced = slice_line_at(&line, 0, 100);
+        // The header text must retain Blue — not collapse to the border's grey.
+        let blue_count = sliced
+            .spans
+            .iter()
+            .filter(|s| s.style.fg == Some(Color::Blue))
+            .count();
         assert!(
-            result.starts_with(' '),
-            "cut double-width char should be replaced with space: {result:?}"
+            blue_count >= 2,
+            "expected at least 2 blue header spans, got {blue_count}: {:#?}",
+            sliced.spans,
         );
-        assert!(result.contains('C'), "C should be visible: {result:?}");
     }
 
     #[test]
-    fn slice_row_exact_visible_width() {
-        let row = "12345678";
-        assert_eq!(slice_row(row, 2, 4), "3456");
+    fn slice_line_at_ascii_mid_column() {
+        let line = Line::from(vec![Span::raw("abcdefghij".to_string())]);
+        let sliced = slice_line_at(&line, 3, 4);
+        let text: String = sliced.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "defg");
+    }
+
+    #[test]
+    fn slice_line_at_past_end_returns_empty() {
+        let line = Line::from(vec![Span::raw("short".to_string())]);
+        let sliced = slice_line_at(&line, 10, 5);
+        let text: String = sliced.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "");
+    }
+
+    #[test]
+    fn slice_line_at_double_width_straddle() {
+        // AB<wide>CD — ask for columns 3..8. The wide char straddles left edge
+        // and must be replaced with a single space.
+        let line = Line::from(vec![Span::raw("AB\u{30A2}CD".to_string())]);
+        let sliced = slice_line_at(&line, 3, 5);
+        let text: String = sliced.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            text.starts_with(' '),
+            "cut double-width char should be replaced with space: {text:?}",
+        );
+        assert!(text.contains('C'), "C should be visible: {text:?}");
+    }
+
+    #[test]
+    fn slice_line_at_exact_visible_width() {
+        let line = Line::from(vec![Span::raw("12345678".to_string())]);
+        let sliced = slice_line_at(&line, 2, 4);
+        let text: String = sliced.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "3456");
+    }
+
+    #[test]
+    fn slice_line_at_zero_width_returns_empty_line() {
+        let line = Line::from(vec![Span::raw("hello".to_string())]);
+        let sliced = slice_line_at(&line, 0, 0);
+        let text: String = sliced.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "");
     }
 
     // ── column boundary helper tests ─────────────────────────────────────────

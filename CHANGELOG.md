@@ -5,6 +5,19 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.3] - 2026-04-16
+
+### Fixed
+- **Table modal preserved only the first span's colour when slicing for
+  horizontal scroll.** The first span on every row is the left border
+  `│` styled with `table_border`, so the whole row — including cell
+  text and header text — inherited the border's muted colour, making
+  the modal unreadable on every theme. `slice_line_at` now walks the
+  line span-by-span, keeping each span's original style, and only
+  replaces a span's content with the correct display-width slice.
+  Double-width characters straddling the left edge are still
+  replaced with a single space so column alignment stays consistent.
+
 ## [1.4.2] - 2026-04-16
 
 ### Changed
