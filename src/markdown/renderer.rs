@@ -40,7 +40,10 @@ use crate::theme::{Palette, Theme};
 /// * `theme` – the active UI theme; used to select the matching syntect
 ///   highlighting theme for fenced code blocks.
 pub fn render_markdown(content: &str, palette: &Palette, theme: Theme) -> Vec<DocBlock> {
-    let opts = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
+    let opts = Options::ENABLE_TABLES
+        | Options::ENABLE_STRIKETHROUGH
+        | Options::ENABLE_TASKLISTS
+        | Options::ENABLE_MATH;
     let parser = Parser::new_ext(content, opts);
     let renderer = MdRenderer::new(palette, theme);
     renderer.render(content, parser)
@@ -347,6 +350,82 @@ impl MdRenderer {
                         marker.to_string(),
                         Style::default().fg(self.task_marker),
                     ));
+                }
+                Event::InlineMath(math) => {
+                    // Convert LaTeX to Unicode approximation and render
+                    // inline, styled like inline code but in italic so
+                    // readers can tell math from code at a glance.
+                    let rendered = crate::markdown::math::latex_to_unicode(&math);
+                    let style = self
+                        .current_style()
+                        .fg(self.inline_code)
+                        .add_modifier(Modifier::ITALIC);
+                    self.current_spans
+                        .push(Span::styled(rendered, style));
+                }
+                Event::DisplayMath(math) => {
+                    // Convert LaTeX to Unicode and render as a bordered
+                    // block labelled "math", mirroring the code-block
+                    // frame.
+                    let rendered = crate::markdown::math::latex_to_unicode(&math);
+                    self.flush_line();
+                    let border_style = Style::default().fg(self.code_border);
+                    let math_style = Style::default()
+                        .fg(self.code_fg)
+                        .bg(self.code_bg)
+                        .add_modifier(Modifier::ITALIC);
+                    let math_lines: Vec<&str> = rendered.lines().collect();
+                    let max_width = math_lines
+                        .iter()
+                        .map(|l| UnicodeWidthStr::width(*l))
+                        .max()
+                        .unwrap_or(0)
+                        .max(20);
+                    let inner_width = max_width + 1;
+                    let label = " math ";
+
+                    self.push_blank_line();
+                    // Top border with "math" label.
+                    self.lines.push(Line::from(vec![
+                        Span::styled("╭".to_string(), border_style),
+                        Span::styled(
+                            label.to_string(),
+                            Style::default().fg(self.inline_code).add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(
+                            format!(
+                                "{}╮",
+                                "─".repeat(inner_width + 1 - label.len().min(inner_width))
+                            ),
+                            border_style,
+                        ),
+                    ]));
+                    self.current_source_lines.push(self.current_source_line);
+                    // Content lines.
+                    for line in &math_lines {
+                        self.lines.push(Line::from(vec![
+                            Span::styled(
+                                "│ ".to_string(),
+                                Style::default().fg(self.code_border).bg(self.code_bg),
+                            ),
+                            Span::styled(
+                                format!("{:<inner_width$}", line),
+                                math_style,
+                            ),
+                            Span::styled(
+                                "│".to_string(),
+                                Style::default().fg(self.code_border).bg(self.code_bg),
+                            ),
+                        ]));
+                        self.current_source_lines.push(self.current_source_line);
+                    }
+                    // Bottom border.
+                    self.lines.push(Line::from(Span::styled(
+                        format!("╰{}╯", "─".repeat(inner_width + 1)),
+                        border_style,
+                    )));
+                    self.current_source_lines.push(self.current_source_line);
+                    self.push_blank_line();
                 }
                 _ => {}
             }

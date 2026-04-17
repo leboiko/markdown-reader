@@ -1,4 +1,5 @@
 pub mod highlight;
+pub mod math;
 pub mod renderer;
 
 use std::cell::Cell;

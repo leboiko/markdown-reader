@@ -61,6 +61,11 @@ drawn on the left of the viewer content when enabled.
   [syntect](https://crates.io/crates/syntect) with a pure-Rust regex backend
   (no C dependencies, no build-time grammars). Colors follow the active UI
   theme.
+- **LaTeX math rendering** — inline math (`$...$`) and display math
+  (`$$...$$`) are converted to Unicode approximations: Greek letters
+  (`α`, `π`, `σ`), operators (`∑`, `∫`, `∇`, `∞`), fractions (`a/b`),
+  roots (`√(x)`), super/subscripts (`x²`, `xᵢ`). Display math renders
+  in a bordered block labelled `math`. Zero external dependencies.
 - **Mermaid diagram rendering** — fenced ```` ```mermaid ```` blocks are
   rasterized in pure Rust (no Node, no Chromium) and displayed inline as
   real images using the Kitty graphics protocol, Sixel, iTerm2 inline

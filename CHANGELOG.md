@@ -5,6 +5,18 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-04-17
+
+### Added
+- **LaTeX math rendering.** Inline math (`$...$`) and display math
+  (`$$...$$`) are now parsed via pulldown-cmark's `ENABLE_MATH` option
+  and rendered as Unicode-approximated text. Greek letters (`α`, `β`,
+  `π`, …), operators (`∑`, `∫`, `∇`, `∞`, …), fractions (`a/b`),
+  square roots (`√(x)`), and super/subscripts (`x²`, `xᵢ`) display
+  as readable Unicode. Display math renders in a bordered block
+  labelled `math`, mirroring the code-block style. Zero new
+  dependencies — pure Rust string conversion in `src/markdown/math.rs`.
+
 ## [1.4.3] - 2026-04-16
 
 ### Fixed
