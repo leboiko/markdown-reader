@@ -1,4 +1,6 @@
+use ignore::{WalkBuilder, WalkState};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 /// A node in the discovered markdown file tree.
 ///
@@ -27,13 +29,8 @@ impl FileEntry {
     ///
     /// * `root` - The directory to start from.
     pub fn discover(root: &Path) -> Vec<FileEntry> {
-        let mut entries = Vec::new();
-        collect_entries(root, &mut entries);
-        entries.sort_by(|a, b| {
-            // Directories first, then alphabetical within each group.
-            b.is_dir.cmp(&a.is_dir).then(a.name.cmp(&b.name))
-        });
-        entries
+        let markdown_paths = walk_markdown_files(root);
+        build_tree(root, markdown_paths)
     }
 
     /// Collect all non-directory paths from the tree into a flat `Vec`.
@@ -56,66 +53,102 @@ fn collect_flat_paths(entries: &[FileEntry], out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Recursively collect one level of entries under `dir`, then recurse for
-/// subdirectories. Directories without any (nested) markdown files are pruned.
-fn collect_entries(dir: &Path, entries: &mut Vec<FileEntry>) {
-    let walker = ignore::WalkBuilder::new(dir)
-        .max_depth(Some(1))
+/// Run a single parallel walk of `root` and return every markdown file found.
+///
+/// Using `build_parallel()` amortises the gitignore/hidden-file filtering
+/// across worker threads. In contrast, a recursive per-directory walker with
+/// `max_depth(1)` re-reads and re-compiles the ignore matchers at every level,
+/// which is pathologically slow on large monorepos.
+fn walk_markdown_files(root: &Path) -> Vec<PathBuf> {
+    let paths: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+    WalkBuilder::new(root)
         .hidden(false)
-        .sort_by_file_name(|a, b| a.cmp(b))
-        .build();
+        .build_parallel()
+        .run(|| {
+            let paths = &paths;
+            Box::new(move |result| {
+                let Ok(entry) = result else {
+                    return WalkState::Continue;
+                };
+                if entry.file_type().is_some_and(|ft| ft.is_file())
+                    && entry
+                        .path()
+                        .extension()
+                        .is_some_and(|ext| ext == "md" || ext == "markdown")
+                {
+                    paths.lock().unwrap().push(entry.path().to_path_buf());
+                }
+                WalkState::Continue
+            })
+        });
+    paths.into_inner().unwrap_or_default()
+}
 
-    for result in walker {
-        let Ok(entry) = result else { continue };
-        let path = entry.path().to_path_buf();
+/// Fold a flat list of markdown paths into a sorted `FileEntry` tree rooted at
+/// `root`. Only directories that transitively contain a markdown file appear in
+/// the output — because every leaf inserted here is a markdown file, this falls
+/// out for free.
+fn build_tree(root: &Path, paths: Vec<PathBuf>) -> Vec<FileEntry> {
+    let mut root_entry = FileEntry {
+        path: root.to_path_buf(),
+        name: String::new(),
+        is_dir: true,
+        children: Vec::new(),
+    };
 
-        // Skip the directory itself (the walk always yields it as the first entry).
-        if path == dir {
+    for path in paths {
+        let Ok(rel) = path.strip_prefix(root) else {
             continue;
-        }
+        };
+        insert_path(&mut root_entry, root, rel);
+    }
 
-        let name = path
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
+    sort_entries(&mut root_entry.children);
+    root_entry.children
+}
 
-        if entry.file_type().is_some_and(|ft| ft.is_dir()) {
-            let mut children = Vec::new();
-            collect_entries(&path, &mut children);
-            children.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then(a.name.cmp(&b.name)));
+/// Insert `rel` (a path relative to `root`) into `parent`, creating directory
+/// nodes along the way.
+fn insert_path(parent: &mut FileEntry, root: &Path, rel: &Path) {
+    let mut current = parent;
+    let mut abs = root.to_path_buf();
+    let components: Vec<_> = rel.components().collect();
+    let last = components.len().saturating_sub(1);
 
-            // Only include directories that contain markdown files (directly or nested).
-            if has_markdown_files(&children) {
-                entries.push(FileEntry {
-                    path,
+    for (idx, comp) in components.iter().enumerate() {
+        let name = comp.as_os_str().to_string_lossy().to_string();
+        abs.push(&name);
+        let is_dir = idx < last;
+
+        let existing = current
+            .children
+            .iter()
+            .position(|child| child.name == name);
+
+        let child_idx = match existing {
+            Some(i) => i,
+            None => {
+                current.children.push(FileEntry {
+                    path: abs.clone(),
                     name,
-                    is_dir: true,
-                    children,
+                    is_dir,
+                    children: Vec::new(),
                 });
+                current.children.len() - 1
             }
-        } else if path
-            .extension()
-            .is_some_and(|ext| ext == "md" || ext == "markdown")
-        {
-            entries.push(FileEntry {
-                path,
-                name,
-                is_dir: false,
-                children: Vec::new(),
-            });
-        }
+        };
+
+        current = &mut current.children[child_idx];
     }
 }
 
-/// Return `true` if `entries` contains at least one non-directory file
-/// (searched recursively through nested directories).
-fn has_markdown_files(entries: &[FileEntry]) -> bool {
-    entries.iter().any(|e| {
-        if e.is_dir {
-            has_markdown_files(&e.children)
-        } else {
-            true
+/// Sort in-place: directories first, then files, alphabetical within each group.
+/// Recurses into every directory.
+fn sort_entries(entries: &mut Vec<FileEntry>) {
+    entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then(a.name.cmp(&b.name)));
+    for entry in entries {
+        if entry.is_dir {
+            sort_entries(&mut entry.children);
         }
-    })
+    }
 }

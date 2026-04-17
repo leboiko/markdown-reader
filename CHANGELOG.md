@@ -5,6 +5,17 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.1] - 2026-04-17
+
+### Fixed
+- **File-tree discovery is dramatically faster on large repos.** The
+  recursive per-directory walker (`max_depth(1)` + re-recurse) was
+  re-reading and re-compiling `.gitignore` matchers at every directory
+  level, which scaled pathologically on monorepos with deep trees.
+  Replaced with a single `ignore::WalkBuilder::build_parallel()` pass
+  that amortises the ignore-matcher cost across worker threads, then
+  folds the flat path list into a sorted `FileEntry` tree.
+
 ## [1.5.0] - 2026-04-17
 
 ### Added
