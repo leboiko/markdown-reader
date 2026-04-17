@@ -210,12 +210,14 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
         .flat_items
         .iter()
         .map(|item| {
-            let indent = "  ".repeat(item.depth);
+            // One space per depth level keeps the tree readable while
+            // maximising filename width on deep structures.
+            let indent = " ".repeat(item.depth);
             let (prefix, prefix_color) = if item.is_dir {
                 let marker = if app.tree.expanded.contains(&item.path) {
-                    "▼ "
+                    "▾ "
                 } else {
-                    "▶ "
+                    "▸ "
                 };
                 (marker, p.accent)
             } else {
