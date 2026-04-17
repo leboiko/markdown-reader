@@ -1,11 +1,28 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use image::{DynamicImage, RgbaImage};
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
 use resvg::usvg;
 
 use crate::markdown::MermaidBlockId;
+
+/// Maximum number of concurrent mermaid render tasks.  Each task runs
+/// `mermaid_rs_renderer::render()` + resvg rasterization on a blocking
+/// thread — both CPU-intensive.  Without a cap, opening a doc with many
+/// diagrams after a theme change (which clears the cache) would spawn
+/// one thread per diagram and saturate every core.
+const MAX_CONCURRENT_RENDERS: u32 = 2;
+
+/// Timeout for a single mermaid render.  `mermaid-rs-renderer` is
+/// pre-1.0 and can hang on certain diagram types; without a timeout the
+/// blocking thread runs forever at 100% CPU.
+const RENDER_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Global counter of in-flight mermaid render tasks.
+static IN_FLIGHT: AtomicU32 = AtomicU32::new(0);
 
 /// System fonts are loaded once on first use and reused for every diagram.
 /// Without this, resvg rasterizes shapes but cannot render any text in the SVG.
@@ -142,6 +159,15 @@ impl MermaidCache {
             return false;
         };
 
+        // Limit concurrent renders to avoid saturating every CPU core when
+        // many diagrams are queued (e.g. after a theme change clears the cache).
+        if IN_FLIGHT.load(Ordering::Relaxed) >= MAX_CONCURRENT_RENDERS {
+            // Don't insert Pending — the block stays un-cached and will be
+            // retried on the next draw frame when a slot frees up.
+            return false;
+        }
+        IN_FLIGHT.fetch_add(1, Ordering::Relaxed);
+
         self.entries.insert(id, MermaidEntry::Pending);
 
         let source = source.to_string();
@@ -149,7 +175,10 @@ impl MermaidCache {
         let tx = action_tx.clone();
 
         tokio::task::spawn_blocking(move || {
-            let result = render_blocking(&source, &picker, bg_rgb);
+            // Run the actual render in a sub-thread with a timeout so a
+            // hung mermaid-rs-renderer doesn't peg the CPU forever.
+            let result = render_with_timeout(&source, &picker, bg_rgb);
+            IN_FLIGHT.fetch_sub(1, Ordering::Relaxed);
             let entry = match result {
                 Ok((protocol, cell_height)) => MermaidEntry::Ready {
                     protocol: Box::new(protocol),
@@ -170,6 +199,32 @@ impl MermaidCache {
     pub fn retain(&mut self, alive: &std::collections::HashSet<MermaidBlockId>) {
         self.entries.retain(|id, _| alive.contains(id));
     }
+}
+
+/// Wrapper that runs [`render_blocking`] inside a sub-thread with a
+/// [`RENDER_TIMEOUT`] deadline.  If the mermaid parser hangs (known
+/// pre-1.0 issue), the sub-thread is detached and the caller gets a
+/// clean error instead of a permanently pegged CPU core.
+fn render_with_timeout(
+    source: &str,
+    picker: &Picker,
+    bg_rgb: (u8, u8, u8),
+) -> Result<(StatefulProtocol, u32), String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let source = source.to_string();
+    let picker = picker.clone();
+
+    std::thread::spawn(move || {
+        let result = render_blocking(&source, &picker, bg_rgb);
+        let _ = tx.send(result);
+    });
+
+    rx.recv_timeout(RENDER_TIMEOUT).map_err(|_| {
+        format!(
+            "mermaid render timed out after {}s — diagram may trigger a parser bug",
+            RENDER_TIMEOUT.as_secs()
+        )
+    })?
 }
 
 /// CPU-bound: render mermaid source → SVG → `DynamicImage` → `StatefulProtocol`.
