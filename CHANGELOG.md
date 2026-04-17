@@ -5,6 +5,25 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.4] - 2026-04-17
+
+### Fixed
+- **Mermaid renders no longer peg the CPU.** Added a 30-second timeout
+  per render and a cap of 2 concurrent render tasks.
+  `mermaid-rs-renderer` is pre-1.0 and can hang on certain diagram
+  types; previously a hung render would run forever at 100% CPU.  With
+  multiple diagrams queued (e.g. after a theme change clears the
+  cache), every core could be saturated.  Now: hung renders time out
+  cleanly (the diagram shows an error footer), and at most 2 render
+  threads run simultaneously.
+
+### Changed
+- **Compact tree indentation.** Reduced per-level indent from 2 spaces
+  to 1 space and switched expand/collapse markers from `▼`/`▶` to
+  the narrower `▾`/`▸`.  At depth 5, filenames now start 5 characters
+  earlier — enough to show the full name on most terminals instead of
+  truncating.
+
 ## [1.6.2] - 2026-04-17
 
 ### Fixed
