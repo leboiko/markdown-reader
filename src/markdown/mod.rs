@@ -285,10 +285,18 @@ pub fn logical_line_at_source(blocks: &[DocBlock], target_source: u32) -> Option
             DocBlock::Text { source_lines, .. } => {
                 // Do NOT break early here.  List item End-events can cause
                 // non-monotonic source_lines (e.g. [..., 165, 160, 167, ...])
-                // so a break would skip valid candidates after a dip.  The
-                // scan is bounded by the block's rendered-line count and is
-                // therefore O(visible lines), which is negligible.
+                // so a break would skip valid candidates after a dip.
+                //
+                // However, for EXACT matches we return the FIRST occurrence
+                // immediately.  The same source line can appear at multiple
+                // positions (heading + its trailing blank, or a list-End
+                // dip back to the list's start line).  The first occurrence
+                // is always the actual content; later occurrences are
+                // rendering artifacts.
                 for (i, &s) in source_lines.iter().enumerate() {
+                    if s == target_source {
+                        return Some(offset + i as u32);
+                    }
                     if s <= target_source {
                         best = Some(offset + i as u32);
                     }
@@ -779,6 +787,35 @@ mod tests {
         let block = text_block_with_sources(&["a", "b", "c"], &[165, 160, 167]);
         // target=163 should land on index 1 (s=160, the largest s <= 163).
         assert_eq!(logical_line_at_source(&[block], 163), Some(1));
+    }
+
+    /// When the same source line appears at multiple positions (e.g. a
+    /// heading line + its trailing blank, or a list-End dip), the FIRST
+    /// occurrence must win — it's the actual content, not the artifact.
+    #[test]
+    fn logical_line_at_source_duplicate_source_line_returns_first() {
+        // Source line 306 appears at indices 0 and 3 (simulating a heading
+        // at index 0 and a list-End dip at index 3).
+        let block = text_block_with_sources(
+            &["heading", "para1", "para2", "blank-after-list"],
+            &[306, 307, 308, 306],
+        );
+        // Must return the FIRST index (0), not the last (3).
+        assert_eq!(logical_line_at_source(&[block], 306), Some(0));
+    }
+
+    /// Same scenario across two blocks: block A has the real line, block B
+    /// has the duplicate from a dip. The function must return block A's
+    /// match.
+    #[test]
+    fn logical_line_at_source_duplicate_across_blocks_returns_first() {
+        let b1 = text_block_with_sources(&["real content"], &[306]);
+        let b2 = text_block_with_sources(
+            &["other", "dip-artifact"],
+            &[310, 306],
+        );
+        // b1 height=1, b2 starts at offset 1. Target 306 is in b1 at 0.
+        assert_eq!(logical_line_at_source(&[b1, b2], 306), Some(0));
     }
 
     #[test]

@@ -5,6 +5,18 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.3] - 2026-04-17
+
+### Fixed
+- **Search-jump now lands on the correct line.** `logical_line_at_source`
+  was returning the *last* logical line whose source number matched the
+  target, but the same source line can appear at multiple rendered
+  positions (heading + trailing blank, list End-event dip back to the
+  list's start line). The last occurrence is a rendering artifact; the
+  first is the actual content. Now exact matches return the first
+  occurrence immediately. Approximate matches (target inside a joined
+  paragraph) still scan the full vector for the closest preceding line.
+
 ## [1.5.2] - 2026-04-17
 
 ### Fixed
