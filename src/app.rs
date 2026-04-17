@@ -351,6 +351,10 @@ pub struct App {
     /// Set by [`open_or_focus`] when called from [`confirm_search`] with a
     /// non-`None` jump target.  Consumed (and cleared) in [`apply_file_loaded`].
     pub pending_jump: Option<(PathBuf, u32)>,
+    /// When the user passes a file path on the command line, we store it here
+    /// so [`run`] can open it once `action_tx` is wired up.  `None` when the
+    /// CLI path was a directory (the normal case).
+    pub initial_file: Option<PathBuf>,
 }
 
 impl App {
@@ -358,7 +362,14 @@ impl App {
     ///
     /// Loads persisted config and session state, then auto-restores the last
     /// open file if it still exists on disk.
-    pub fn new(root: PathBuf) -> Self {
+    ///
+    /// # Arguments
+    ///
+    /// * `root`         – directory used as the tree root.
+    /// * `initial_file` – when the user passes a *file* path on the CLI, that
+    ///   path is stored here and opened at the start of [`run`] once `action_tx`
+    ///   is available.  Pass `None` when the CLI argument is a directory.
+    pub fn new(root: PathBuf, initial_file: Option<PathBuf>) -> Self {
         let config = Config::load();
         let palette = Palette::from_theme(config.theme);
         let app_state = AppState::load();
@@ -410,6 +421,7 @@ impl App {
             last_file_save_at: None,
             status_message: None,
             pending_jump: None,
+            initial_file,
         };
 
         app.restore_session();
@@ -576,6 +588,14 @@ impl App {
         // This avoids blocking `App::new` (which runs on the tokio thread) on a
         // potentially slow `git status` subprocess call.
         self.refresh_git_status();
+
+        // If the user passed a file path on the CLI, open it now that action_tx
+        // is wired up (open_or_focus spawns a background read that requires it).
+        // reveal_path selects the file in the tree so it isn't left blank.
+        if let Some(file) = self.initial_file.take() {
+            self.expand_and_select(&file);
+            self.open_or_focus(file, true, None);
+        }
 
         let root_clone = self.root.clone();
         let _watcher = crate::fs::watcher::spawn_watcher(&root_clone, tx.clone());
@@ -1973,7 +1993,14 @@ impl App {
 
     /// Apply a completed async file reload to every tab open on `path`.
     ///
-    /// Preserves each tab's scroll offset (clamped to the new line count).
+    /// Skips the reload entirely when the content is byte-for-byte identical to
+    /// what is already displayed — this prevents spurious inotify `IN_ACCESS`
+    /// events (fired when we *read* a file, not just when it is *written*) from
+    /// resetting the cursor back to line 0.
+    ///
+    /// For genuine content changes, the cursor and scroll are preserved if the
+    /// cursor is still within the new line count (file was edited but not
+    /// truncated past where the cursor sat).
     fn apply_file_reloaded(&mut self, path: PathBuf, content: String) {
         let palette = self.palette;
         let theme = self.theme;
@@ -1982,15 +2009,27 @@ impl App {
             if tab.view.current_path.as_deref() != Some(&*path) {
                 continue;
             }
+
+            // Spurious watcher event: content is identical — skip the reload to
+            // avoid resetting cursor_line / scroll_offset to 0.
+            if content == tab.view.content {
+                continue;
+            }
+
             let name = path
                 .file_name()
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string();
-            let scroll = tab.view.scroll_offset;
+            let old_cursor = tab.view.cursor_line;
+            let old_scroll = tab.view.scroll_offset;
             tab.view
                 .load(path.clone(), name, content.clone(), &palette, theme);
-            tab.view.scroll_offset = scroll.min(tab.view.total_lines.saturating_sub(1));
+            // Restore cursor and scroll if still within the (potentially shorter)
+            // new document so the user's reading position is preserved on edits.
+            let last_line = tab.view.total_lines.saturating_sub(1);
+            tab.view.cursor_line = old_cursor.min(last_line);
+            tab.view.scroll_offset = old_scroll.min(last_line);
         }
 
         // Drop cache entries for mermaid blocks that no longer exist after the
@@ -2287,11 +2326,17 @@ impl App {
     }
 
     fn shrink_tree(&mut self) {
-        self.tree_width_pct = self.tree_width_pct.saturating_sub(5).max(10);
+        // No-op when the tree is hidden: there is nothing visible to resize.
+        if !self.tree_hidden {
+            self.tree_width_pct = self.tree_width_pct.saturating_sub(5).max(10);
+        }
     }
 
     fn grow_tree(&mut self) {
-        self.tree_width_pct = (self.tree_width_pct + 5).min(80);
+        // No-op when the tree is hidden: there is nothing visible to resize.
+        if !self.tree_hidden {
+            self.tree_width_pct = (self.tree_width_pct + 5).min(80);
+        }
     }
 
     fn perform_doc_search(&mut self) {
@@ -2816,7 +2861,7 @@ mod tests {
     /// widths and initial scroll positions.  Uses `"."` as the root so it runs
     /// without a special directory.
     fn make_app_with_modal(natural_widths: Vec<usize>, h_scroll: u16, v_scroll: u16) -> App {
-        let mut app = App::new(std::path::PathBuf::from("."));
+        let mut app = App::new(std::path::PathBuf::from("."), None);
         app.table_modal = Some(TableModalState {
             tab_id: crate::ui::tabs::TabId(0),
             h_scroll,
@@ -2977,7 +3022,7 @@ mod tests {
     /// Open a tab with known content and put the app in a state suitable for
     /// editor tests.  Returns the `App` and the path used.
     fn make_app_with_tab(content: &str) -> (App, PathBuf) {
-        let mut app = App::new(PathBuf::from("."));
+        let mut app = App::new(PathBuf::from("."), None);
         let path = PathBuf::from("/fake/test.md");
         // Use open_or_focus to create the tab, then manually set content.
         app.tabs.open_or_focus(&path, true);
@@ -3147,7 +3192,7 @@ mod tests {
         use crate::markdown::{DocBlock, HeadingAnchor, LinkInfo};
         use ratatui::text::{Line, Span, Text};
 
-        let mut app = App::new(std::path::PathBuf::from("."));
+        let mut app = App::new(std::path::PathBuf::from("."), None);
 
         // Open a tab with dummy content that has as many newlines as the
         // highest source line we reference (line 11 → 12 lines).
@@ -3202,7 +3247,7 @@ mod tests {
     /// configured `view_height`.  Cheaper than `make_app_with_tab` because it
     /// does not load + render real markdown content.
     fn make_app_with_view(total_lines: u32, view_height: u32) -> App {
-        let mut app = App::new(PathBuf::from("."));
+        let mut app = App::new(PathBuf::from("."), None);
         let path = PathBuf::from("/fake/nav_test.md");
         app.tabs.open_or_focus(&path, true);
         app.tabs.view_height = view_height;
@@ -3267,7 +3312,7 @@ mod tests {
     /// table rather than the first table visible on screen.
     #[test]
     fn try_open_table_modal_picks_table_under_cursor() {
-        let mut app = App::new(PathBuf::from("."));
+        let mut app = App::new(PathBuf::from("."), None);
         let path = PathBuf::from("/fake/tables.md");
         app.tabs.open_or_focus(&path, true);
         app.tabs.view_height = 30;
@@ -3297,7 +3342,10 @@ mod tests {
             modal.headers
         );
         assert_eq!(
-            modal.rows[0][0].iter().map(|s| s.content.as_ref()).collect::<String>(),
+            modal.rows[0][0]
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>(),
             "b-row-0",
             "modal should carry table B's data, not table A's",
         );
@@ -3307,7 +3355,7 @@ mod tests {
     /// fall back to the first table intersecting the viewport (old behaviour).
     #[test]
     fn try_open_table_modal_falls_back_to_first_visible_table() {
-        let mut app = App::new(PathBuf::from("."));
+        let mut app = App::new(PathBuf::from("."), None);
         let path = PathBuf::from("/fake/tables.md");
         app.tabs.open_or_focus(&path, true);
         app.tabs.view_height = 30;
@@ -3328,7 +3376,10 @@ mod tests {
         app.try_open_table_modal();
         let modal = app.table_modal.as_ref().expect("modal must open");
         assert_eq!(
-            modal.rows[0][0].iter().map(|s| s.content.as_ref()).collect::<String>(),
+            modal.rows[0][0]
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>(),
             "a-row-0",
             "modal should open table A (first visible) when cursor is on prose",
         );
@@ -3337,7 +3388,7 @@ mod tests {
     #[test]
     fn d_key_moves_cursor_with_real_loaded_content() {
         use crate::theme::{Palette, Theme};
-        let mut app = App::new(PathBuf::from("."));
+        let mut app = App::new(PathBuf::from("."), None);
         let path = PathBuf::from("/fake/nav_test.md");
         app.tabs.open_or_focus(&path, true);
         let content: String = (0..60).map(|i| format!("paragraph {i}\n\n")).collect();
@@ -3384,7 +3435,7 @@ mod tests {
         current_match: usize,
         total_lines: u32,
     ) -> App {
-        let mut app = App::new(PathBuf::from("."));
+        let mut app = App::new(PathBuf::from("."), None);
         let path = PathBuf::from("/fake/ds_test.md");
         app.tabs.open_or_focus(&path, true);
         app.tabs.view_height = 20;
@@ -3457,7 +3508,7 @@ mod tests {
         let lines: Vec<&str> = (0..10)
             .map(|i| if i == 4 { "hello world" } else { "other" })
             .collect();
-        let mut app = App::new(PathBuf::from("."));
+        let mut app = App::new(PathBuf::from("."), None);
         let path = PathBuf::from("/fake/search_test.md");
         app.tabs.open_or_focus(&path, true);
         app.tabs.view_height = 20;
@@ -3496,6 +3547,84 @@ mod tests {
         assert!(
             rx.try_recv().is_err(),
             "no FileReloaded should be sent when within the grace window"
+        );
+    }
+
+    // ── apply_file_reloaded cursor-preservation ──────────────────────────────
+
+    /// A `FileReloaded` event with unchanged content must not reset the cursor.
+    ///
+    /// On Linux, inotify fires `IN_ACCESS` when a file is *read*, producing a
+    /// spurious `FilesChanged` → `FileReloaded` round-trip.  The guard in
+    /// `apply_file_reloaded` compares byte content and skips the reload, so the
+    /// cursor stays wherever the user left it.
+    #[test]
+    fn reload_with_unchanged_content_preserves_cursor() {
+        use crate::theme::{Palette, Theme};
+        let palette = Palette::from_theme(Theme::Default);
+        let content: String = (0..20).map(|i| format!("line {i}\n\n")).collect();
+        let path = PathBuf::from("/fake/unchanged.md");
+
+        let mut app = App::new(PathBuf::from("."), None);
+        app.tabs.open_or_focus(&path, true);
+        if let Some(tab) = app.tabs.active_tab_mut() {
+            tab.view.load(
+                path.clone(),
+                "unchanged.md".to_string(),
+                content.clone(),
+                &palette,
+                Theme::Default,
+            );
+            tab.view.cursor_line = 10;
+            tab.view.scroll_offset = 5;
+        }
+
+        // Simulate FileReloaded arriving with identical content.
+        app.apply_file_reloaded(path.clone(), content);
+
+        let tab = app.tabs.active_tab().unwrap();
+        assert_eq!(
+            tab.view.cursor_line, 10,
+            "cursor must not reset on spurious reload (unchanged content)"
+        );
+        assert_eq!(
+            tab.view.scroll_offset, 5,
+            "scroll must not reset on spurious reload (unchanged content)"
+        );
+    }
+
+    /// A `FileReloaded` event with new content must restore the cursor to its
+    /// old position when that position is still valid (file grew or same size).
+    #[test]
+    fn reload_with_changed_content_restores_cursor_when_in_range() {
+        use crate::theme::{Palette, Theme};
+        let palette = Palette::from_theme(Theme::Default);
+        // 20 paragraphs → many display lines.
+        let content_v1: String = (0..20).map(|i| format!("line {i}\n\n")).collect();
+        let path = PathBuf::from("/fake/changed.md");
+
+        let mut app = App::new(PathBuf::from("."), None);
+        app.tabs.open_or_focus(&path, true);
+        if let Some(tab) = app.tabs.active_tab_mut() {
+            tab.view.load(
+                path.clone(),
+                "changed.md".to_string(),
+                content_v1,
+                &palette,
+                Theme::Default,
+            );
+            tab.view.cursor_line = 10;
+            tab.view.scroll_offset = 5;
+        }
+
+        // New content that is longer than 10 display lines — cursor stays.
+        let content_v2: String = (0..20).map(|i| format!("edited {i}\n\n")).collect();
+        app.apply_file_reloaded(path.clone(), content_v2);
+
+        let tab = app.tabs.active_tab().unwrap();
+        assert_eq!(
+            tab.view.cursor_line, 10,
+            "cursor must be restored after a genuine reload when still in range"
         );
     }
 
@@ -3540,7 +3669,7 @@ mod tests {
         use crate::theme::{Palette, Theme};
         let palette = Palette::from_theme(Theme::Default);
         let path = PathBuf::from("/fake/yank_test.md");
-        let mut app = App::new(PathBuf::from("."));
+        let mut app = App::new(PathBuf::from("."), None);
         app.tabs.open_or_focus(&path, true);
         app.tabs.view_height = 20;
         if let Some(tab) = app.tabs.active_tab_mut() {
@@ -3607,7 +3736,7 @@ mod tests {
     #[test]
     fn j_in_visual_mode_extends_range() {
         // Use a controlled tab with known total_lines to avoid renderer side-effects.
-        let mut app = App::new(PathBuf::from("."));
+        let mut app = App::new(PathBuf::from("."), None);
         let path = PathBuf::from("/fake/visual_j.md");
         app.tabs.open_or_focus(&path, true);
         app.tabs.view_height = 20;
@@ -3640,7 +3769,7 @@ mod tests {
         // Use a controlled tab with predictable source_lines mapping.
         // make_text_block assigns source_lines = [0, 1, 2, ...] sequentially.
         let content = "alpha\nbeta\ngamma\ndelta";
-        let mut app = App::new(PathBuf::from("."));
+        let mut app = App::new(PathBuf::from("."), None);
         let path = PathBuf::from("/fake/visual_yank.md");
         app.tabs.open_or_focus(&path, true);
         app.tabs.view_height = 20;
@@ -3683,7 +3812,7 @@ mod tests {
         // Set a pending jump and simulate a FileLoaded action for the same path.
         let path = PathBuf::from("/fake/jump_test.md");
         let content = "line0\nline1\nline2\nline3\nline4";
-        let mut app = App::new(PathBuf::from("."));
+        let mut app = App::new(PathBuf::from("."), None);
         app.tabs.open_or_focus(&path, true);
         // Seed the tab as empty (simulates a pending load).
         // pending_jump is set to source line 2.
@@ -3701,7 +3830,7 @@ mod tests {
         // A filename-mode result has first_match_line = None;
         // after the search confirm, pending_jump should remain None.
         use crate::ui::search_modal::{SearchMode, SearchResult};
-        let mut app = App::new(PathBuf::from("."));
+        let mut app = App::new(PathBuf::from("."), None);
         let path = PathBuf::from("/fake/fn_result.md");
         app.search.active = true;
         app.search.mode = SearchMode::FileName;
@@ -3730,7 +3859,7 @@ mod tests {
         // predict the mapping exactly.
         let content = "alpha\nbeta\ngamma\ndelta\nepsilon";
         let path = PathBuf::from("/fake/jump_cursor.md");
-        let mut app = App::new(PathBuf::from("."));
+        let mut app = App::new(PathBuf::from("."), None);
         app.tabs.open_or_focus(&path, true);
         app.tabs.view_height = 20;
 
@@ -3774,7 +3903,7 @@ mod tests {
     fn pending_jump_cleared_on_file_load_failure() {
         // A FileLoadFailed for the matching path must clear pending_jump.
         let path = PathBuf::from("/fake/nonexistent.md");
-        let mut app = App::new(PathBuf::from("."));
+        let mut app = App::new(PathBuf::from("."), None);
         app.pending_jump = Some((path.clone(), 5));
         app.handle_action(Action::FileLoadFailed { path: path.clone() });
         assert!(
@@ -3788,7 +3917,7 @@ mod tests {
         // A FileLoadFailed for a different path must not touch pending_jump.
         let path = PathBuf::from("/fake/target.md");
         let other = PathBuf::from("/fake/other.md");
-        let mut app = App::new(PathBuf::from("."));
+        let mut app = App::new(PathBuf::from("."), None);
         app.pending_jump = Some((path.clone(), 3));
         app.handle_action(Action::FileLoadFailed { path: other });
         assert!(

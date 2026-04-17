@@ -38,12 +38,34 @@ pub fn latex_to_unicode(input: &str) -> String {
                     // Single non-alpha char after backslash: \{, \}, \\, etc.
                     if start < len {
                         match chars[start] {
-                            '{' | '}' => { i = start + 1; continue; }
-                            '\\' => { out.push('\n'); i = start + 1; continue; }
-                            ',' => { out.push('\u{2009}'); i = start + 1; continue; } // thin space
-                            ';' => { out.push(' '); i = start + 1; continue; }
-                            '!' => { i = start + 1; continue; } // negative thin space → skip
-                            _ => { out.push(chars[start]); i = start + 1; continue; }
+                            '{' | '}' => {
+                                i = start + 1;
+                                continue;
+                            }
+                            '\\' => {
+                                out.push('\n');
+                                i = start + 1;
+                                continue;
+                            }
+                            ',' => {
+                                out.push('\u{2009}');
+                                i = start + 1;
+                                continue;
+                            } // thin space
+                            ';' => {
+                                out.push(' ');
+                                i = start + 1;
+                                continue;
+                            }
+                            '!' => {
+                                i = start + 1;
+                                continue;
+                            } // negative thin space → skip
+                            _ => {
+                                out.push(chars[start]);
+                                i = start + 1;
+                                continue;
+                            }
                         }
                     }
                     i += 1;
@@ -69,8 +91,12 @@ pub fn latex_to_unicode(input: &str) -> String {
                     let body = extract_brace_group(&chars, &mut i);
                     let body_u = latex_to_unicode(&body);
                     out.push_str(&format!("√({body_u})"));
-                } else if cmd == "text" || cmd == "mathrm" || cmd == "mathbf"
-                    || cmd == "mathit" || cmd == "mathbb" || cmd == "mathcal"
+                } else if cmd == "text"
+                    || cmd == "mathrm"
+                    || cmd == "mathbf"
+                    || cmd == "mathit"
+                    || cmd == "mathbb"
+                    || cmd == "mathcal"
                     || cmd == "operatorname"
                 {
                     let body = extract_brace_group(&chars, &mut i);
@@ -85,12 +111,18 @@ pub fn latex_to_unicode(input: &str) -> String {
                             }
                             '\\' if i + 1 < len => {
                                 // \left\{ or \right\}
-                                if chars[i + 1] == '{' { out.push('('); }
-                                else if chars[i + 1] == '}' { out.push(')'); }
-                                else if chars[i + 1] == '|' { out.push('‖'); }
+                                if chars[i + 1] == '{' {
+                                    out.push('(');
+                                } else if chars[i + 1] == '}' {
+                                    out.push(')');
+                                } else if chars[i + 1] == '|' {
+                                    out.push('‖');
+                                }
                                 i += 2;
                             }
-                            '.' => { i += 1; } // \left. or \right. = invisible delimiter
+                            '.' => {
+                                i += 1;
+                            } // \left. or \right. = invisible delimiter
                             _ => {}
                         }
                     }
@@ -201,60 +233,141 @@ fn extract_brace_group(chars: &[char], pos: &mut usize) -> String {
 fn command_to_unicode(cmd: &str) -> Option<&'static str> {
     Some(match cmd {
         // Greek lowercase
-        "alpha" => "α", "beta" => "β", "gamma" => "γ", "delta" => "δ",
-        "epsilon" | "varepsilon" => "ε", "zeta" => "ζ", "eta" => "η",
-        "theta" | "vartheta" => "θ", "iota" => "ι", "kappa" => "κ",
-        "lambda" => "λ", "mu" => "μ", "nu" => "ν", "xi" => "ξ",
-        "pi" => "π", "rho" | "varrho" => "ρ", "sigma" => "σ",
-        "varsigma" => "ς", "tau" => "τ", "upsilon" => "υ",
-        "phi" | "varphi" => "φ", "chi" => "χ", "psi" => "ψ", "omega" => "ω",
+        "alpha" => "α",
+        "beta" => "β",
+        "gamma" => "γ",
+        "delta" => "δ",
+        "epsilon" | "varepsilon" => "ε",
+        "zeta" => "ζ",
+        "eta" => "η",
+        "theta" | "vartheta" => "θ",
+        "iota" => "ι",
+        "kappa" => "κ",
+        "lambda" => "λ",
+        "mu" => "μ",
+        "nu" => "ν",
+        "xi" => "ξ",
+        "pi" => "π",
+        "rho" | "varrho" => "ρ",
+        "sigma" => "σ",
+        "varsigma" => "ς",
+        "tau" => "τ",
+        "upsilon" => "υ",
+        "phi" | "varphi" => "φ",
+        "chi" => "χ",
+        "psi" => "ψ",
+        "omega" => "ω",
         // Greek uppercase
-        "Gamma" => "Γ", "Delta" => "Δ", "Theta" => "Θ", "Lambda" => "Λ",
-        "Xi" => "Ξ", "Pi" => "Π", "Sigma" => "Σ", "Upsilon" => "Υ",
-        "Phi" => "Φ", "Psi" => "Ψ", "Omega" => "Ω",
+        "Gamma" => "Γ",
+        "Delta" => "Δ",
+        "Theta" => "Θ",
+        "Lambda" => "Λ",
+        "Xi" => "Ξ",
+        "Pi" => "Π",
+        "Sigma" => "Σ",
+        "Upsilon" => "Υ",
+        "Phi" => "Φ",
+        "Psi" => "Ψ",
+        "Omega" => "Ω",
         // Operators
-        "sum" => "∑", "prod" => "∏", "int" => "∫", "iint" => "∬",
-        "iiint" => "∭", "oint" => "∮", "coprod" => "∐",
-        "bigcup" => "⋃", "bigcap" => "⋂", "bigoplus" => "⊕",
+        "sum" => "∑",
+        "prod" => "∏",
+        "int" => "∫",
+        "iint" => "∬",
+        "iiint" => "∭",
+        "oint" => "∮",
+        "coprod" => "∐",
+        "bigcup" => "⋃",
+        "bigcap" => "⋂",
+        "bigoplus" => "⊕",
         "bigotimes" => "⊗",
         // Relations
-        "leq" | "le" => "≤", "geq" | "ge" => "≥", "neq" | "ne" => "≠",
-        "approx" => "≈", "equiv" => "≡", "sim" => "∼", "simeq" => "≃",
-        "cong" => "≅", "propto" => "∝", "ll" => "≪", "gg" => "≫",
-        "subset" => "⊂", "supset" => "⊃", "subseteq" => "⊆",
-        "supseteq" => "⊇", "in" => "∈", "notin" => "∉",
-        "ni" => "∋", "forall" => "∀", "exists" => "∃",
-        "nexists" => "∄", "emptyset" | "varnothing" => "∅",
+        "leq" | "le" => "≤",
+        "geq" | "ge" => "≥",
+        "neq" | "ne" => "≠",
+        "approx" => "≈",
+        "equiv" => "≡",
+        "sim" => "∼",
+        "simeq" => "≃",
+        "cong" => "≅",
+        "propto" => "∝",
+        "ll" => "≪",
+        "gg" => "≫",
+        "subset" => "⊂",
+        "supset" => "⊃",
+        "subseteq" => "⊆",
+        "supseteq" => "⊇",
+        "in" => "∈",
+        "notin" => "∉",
+        "ni" => "∋",
+        "forall" => "∀",
+        "exists" => "∃",
+        "nexists" => "∄",
+        "emptyset" | "varnothing" => "∅",
         // Arrows
-        "to" | "rightarrow" => "→", "leftarrow" => "←",
-        "leftrightarrow" => "↔", "Rightarrow" => "⇒",
-        "Leftarrow" => "⇐", "Leftrightarrow" => "⇔",
-        "uparrow" => "↑", "downarrow" => "↓",
-        "mapsto" => "↦", "hookrightarrow" => "↪",
-        "longrightarrow" => "⟶", "longleftarrow" => "⟵",
-        "Longrightarrow" => "⟹", "implies" => "⟹", "iff" => "⟺",
+        "to" | "rightarrow" => "→",
+        "leftarrow" => "←",
+        "leftrightarrow" => "↔",
+        "Rightarrow" => "⇒",
+        "Leftarrow" => "⇐",
+        "Leftrightarrow" => "⇔",
+        "uparrow" => "↑",
+        "downarrow" => "↓",
+        "mapsto" => "↦",
+        "hookrightarrow" => "↪",
+        "longrightarrow" => "⟶",
+        "longleftarrow" => "⟵",
+        "Longrightarrow" => "⟹",
+        "implies" => "⟹",
+        "iff" => "⟺",
         // Miscellaneous
-        "infty" => "∞", "partial" => "∂", "nabla" => "∇",
-        "pm" => "±", "mp" => "∓", "times" => "×", "div" => "÷",
-        "cdot" => "·", "star" => "⋆", "ast" => "∗",
-        "circ" => "∘", "bullet" => "•", "oplus" => "⊕",
-        "otimes" => "⊗", "dagger" => "†", "ddagger" => "‡",
-        "neg" | "lnot" => "¬", "land" | "wedge" => "∧",
+        "infty" => "∞",
+        "partial" => "∂",
+        "nabla" => "∇",
+        "pm" => "±",
+        "mp" => "∓",
+        "times" => "×",
+        "div" => "÷",
+        "cdot" => "·",
+        "star" => "⋆",
+        "ast" => "∗",
+        "circ" => "∘",
+        "bullet" => "•",
+        "oplus" => "⊕",
+        "otimes" => "⊗",
+        "dagger" => "†",
+        "ddagger" => "‡",
+        "neg" | "lnot" => "¬",
+        "land" | "wedge" => "∧",
         "lor" | "vee" => "∨",
-        "cap" => "∩", "cup" => "∪",
-        "ldots" | "dots" => "…", "cdots" => "⋯", "vdots" => "⋮", "ddots" => "⋱",
-        "angle" => "∠", "measuredangle" => "∡",
-        "perp" => "⊥", "parallel" => "∥",
-        "hbar" => "ℏ", "ell" => "ℓ", "Re" => "ℜ", "Im" => "ℑ",
-        "aleph" => "ℵ", "wp" => "℘",
+        "cap" => "∩",
+        "cup" => "∪",
+        "ldots" | "dots" => "…",
+        "cdots" => "⋯",
+        "vdots" => "⋮",
+        "ddots" => "⋱",
+        "angle" => "∠",
+        "measuredangle" => "∡",
+        "perp" => "⊥",
+        "parallel" => "∥",
+        "hbar" => "ℏ",
+        "ell" => "ℓ",
+        "Re" => "ℜ",
+        "Im" => "ℑ",
+        "aleph" => "ℵ",
+        "wp" => "℘",
         // Blackboard bold letters (common)
         "mathbb" => "", // handled separately via extract_brace_group
         // Spacing
-        "quad" => "  ", "qquad" => "    ",
+        "quad" => "  ",
+        "qquad" => "    ",
         // Misc text
-        "langle" => "⟨", "rangle" => "⟩",
-        "lceil" => "⌈", "rceil" => "⌉",
-        "lfloor" => "⌊", "rfloor" => "⌋",
+        "langle" => "⟨",
+        "rangle" => "⟩",
+        "lceil" => "⌈",
+        "rceil" => "⌉",
+        "lfloor" => "⌊",
+        "rfloor" => "⌋",
         _ => return None,
     })
 }
@@ -262,14 +375,45 @@ fn command_to_unicode(cmd: &str) -> Option<&'static str> {
 /// Best-effort mapping of a character to its Unicode superscript form.
 fn to_superscript(ch: char) -> char {
     match ch {
-        '0' => '⁰', '1' => '¹', '2' => '²', '3' => '³', '4' => '⁴',
-        '5' => '⁵', '6' => '⁶', '7' => '⁷', '8' => '⁸', '9' => '⁹',
-        '+' => '⁺', '-' | '−' => '⁻', '=' => '⁼', '(' => '⁽', ')' => '⁾',
-        'n' => 'ⁿ', 'i' => 'ⁱ', 'x' => 'ˣ', 'y' => 'ʸ',
-        'a' => 'ᵃ', 'b' => 'ᵇ', 'c' => 'ᶜ', 'd' => 'ᵈ', 'e' => 'ᵉ',
-        'f' => 'ᶠ', 'g' => 'ᵍ', 'h' => 'ʰ', 'k' => 'ᵏ', 'l' => 'ˡ',
-        'm' => 'ᵐ', 'o' => 'ᵒ', 'p' => 'ᵖ', 'r' => 'ʳ', 's' => 'ˢ',
-        't' => 'ᵗ', 'u' => 'ᵘ', 'v' => 'ᵛ', 'w' => 'ʷ', 'z' => 'ᶻ',
+        '0' => '⁰',
+        '1' => '¹',
+        '2' => '²',
+        '3' => '³',
+        '4' => '⁴',
+        '5' => '⁵',
+        '6' => '⁶',
+        '7' => '⁷',
+        '8' => '⁸',
+        '9' => '⁹',
+        '+' => '⁺',
+        '-' | '−' => '⁻',
+        '=' => '⁼',
+        '(' => '⁽',
+        ')' => '⁾',
+        'n' => 'ⁿ',
+        'i' => 'ⁱ',
+        'x' => 'ˣ',
+        'y' => 'ʸ',
+        'a' => 'ᵃ',
+        'b' => 'ᵇ',
+        'c' => 'ᶜ',
+        'd' => 'ᵈ',
+        'e' => 'ᵉ',
+        'f' => 'ᶠ',
+        'g' => 'ᵍ',
+        'h' => 'ʰ',
+        'k' => 'ᵏ',
+        'l' => 'ˡ',
+        'm' => 'ᵐ',
+        'o' => 'ᵒ',
+        'p' => 'ᵖ',
+        'r' => 'ʳ',
+        's' => 'ˢ',
+        't' => 'ᵗ',
+        'u' => 'ᵘ',
+        'v' => 'ᵛ',
+        'w' => 'ʷ',
+        'z' => 'ᶻ',
         'T' => 'ᵀ',
         _ => ch, // no superscript form available — pass through
     }
@@ -278,13 +422,38 @@ fn to_superscript(ch: char) -> char {
 /// Best-effort mapping of a character to its Unicode subscript form.
 fn to_subscript(ch: char) -> char {
     match ch {
-        '0' => '₀', '1' => '₁', '2' => '₂', '3' => '₃', '4' => '₄',
-        '5' => '₅', '6' => '₆', '7' => '₇', '8' => '₈', '9' => '₉',
-        '+' => '₊', '-' | '−' => '₋', '=' => '₌', '(' => '₍', ')' => '₎',
-        'a' => 'ₐ', 'e' => 'ₑ', 'h' => 'ₕ', 'i' => 'ᵢ', 'j' => 'ⱼ',
-        'k' => 'ₖ', 'l' => 'ₗ', 'm' => 'ₘ', 'n' => 'ₙ', 'o' => 'ₒ',
-        'p' => 'ₚ', 'r' => 'ᵣ', 's' => 'ₛ', 't' => 'ₜ', 'u' => 'ᵤ',
-        'v' => 'ᵥ', 'x' => 'ₓ',
+        '0' => '₀',
+        '1' => '₁',
+        '2' => '₂',
+        '3' => '₃',
+        '4' => '₄',
+        '5' => '₅',
+        '6' => '₆',
+        '7' => '₇',
+        '8' => '₈',
+        '9' => '₉',
+        '+' => '₊',
+        '-' | '−' => '₋',
+        '=' => '₌',
+        '(' => '₍',
+        ')' => '₎',
+        'a' => 'ₐ',
+        'e' => 'ₑ',
+        'h' => 'ₕ',
+        'i' => 'ᵢ',
+        'j' => 'ⱼ',
+        'k' => 'ₖ',
+        'l' => 'ₗ',
+        'm' => 'ₘ',
+        'n' => 'ₙ',
+        'o' => 'ₒ',
+        'p' => 'ₚ',
+        'r' => 'ᵣ',
+        's' => 'ₛ',
+        't' => 'ₜ',
+        'u' => 'ᵤ',
+        'v' => 'ᵥ',
+        'x' => 'ₓ',
         _ => ch,
     }
 }
@@ -323,7 +492,10 @@ mod tests {
     fn sum_with_limits() {
         let result = latex_to_unicode(r"\sum_{i=1}^{n} x_i");
         assert!(result.contains('∑'), "should contain sum symbol: {result}");
-        assert!(result.contains('ₙ') || result.contains('ⁿ'), "should have n: {result}");
+        assert!(
+            result.contains('ₙ') || result.contains('ⁿ'),
+            "should have n: {result}"
+        );
     }
 
     #[test]
@@ -350,7 +522,10 @@ mod tests {
     #[test]
     fn unknown_command_passes_through() {
         let result = latex_to_unicode(r"\unknowncmd{x}");
-        assert!(result.contains("unknowncmd"), "unknown command should pass through: {result}");
+        assert!(
+            result.contains("unknowncmd"),
+            "unknown command should pass through: {result}"
+        );
     }
 
     #[test]

@@ -210,7 +210,7 @@ reopening the same directory resumes where you left off.
 | `y` (visual) | Copy selected range to clipboard and exit visual mode |
 | `Ctrl+f` | Find in document |
 | `n` / `N` | Next / previous match |
-| `:` | Go to line (centred on target) |
+| `:` | Go to line (centred on target) — use `:5` to jump to line 5 (`<number>G` vim-style count register is not yet implemented) |
 | `f` | Open anchor link picker (jump to a heading) |
 | `Enter` | Expand the first visible table into the modal viewer |
 | `Tab` | Switch focus to tree |

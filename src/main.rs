@@ -44,7 +44,9 @@ impl Drop for TerminalGuard {
 #[derive(Parser, Debug)]
 #[command(name = "markdown-reader", about = "A TUI markdown file viewer")]
 struct Cli {
-    /// Root directory to browse (defaults to current directory)
+    /// Path to browse: a directory opens the tree at that root; a file opens
+    /// the tree at its parent directory and immediately displays the file.
+    /// Defaults to the current directory.
     #[arg(default_value = ".")]
     path: PathBuf,
 }
@@ -52,7 +54,25 @@ struct Cli {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    let root = cli.path.canonicalize()?;
+
+    // Resolve symlinks and relative components so all path comparisons inside
+    // the app use the same canonical form.
+    let canonical = cli.path.canonicalize()?;
+
+    // When the user passes a file, root the tree at its parent directory and
+    // remember the file so the event loop can open it once action_tx is ready.
+    // When the path is a directory (the common case) there is no initial file.
+    let (root, initial_file) = if canonical.is_file() {
+        let parent = canonical
+            .parent()
+            // A file always has a parent (at minimum "/"), so this is only None
+            // for the filesystem root itself, which cannot be a regular file.
+            .unwrap_or(std::path::Path::new("."))
+            .to_path_buf();
+        (parent, Some(canonical))
+    } else {
+        (canonical, None)
+    };
 
     enable_raw_mode()?;
     let mut stdout = std::io::stdout();
@@ -63,5 +83,5 @@ async fn main() -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    App::new(root).run(&mut terminal).await
+    App::new(root, initial_file).run(&mut terminal).await
 }

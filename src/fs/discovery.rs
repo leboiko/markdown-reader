@@ -120,10 +120,7 @@ fn insert_path(parent: &mut FileEntry, root: &Path, rel: &Path) {
         abs.push(&name);
         let is_dir = idx < last;
 
-        let existing = current
-            .children
-            .iter()
-            .position(|child| child.name == name);
+        let existing = current.children.iter().position(|child| child.name == name);
 
         let child_idx = match existing {
             Some(i) => i,

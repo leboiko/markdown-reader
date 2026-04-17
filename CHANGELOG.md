@@ -5,6 +5,33 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.2] - 2026-04-17
+
+### Fixed
+- **Cursor no longer jumps back to line 1 on Linux.** On Linux,
+  `inotify` fires `IN_ACCESS` events when a file is read (not just
+  modified). Our 500ms-debounced file watcher treated those as changes,
+  triggering a reload that reset the cursor and scroll to 0. Now
+  `reload_changed_tabs` compares the new content against the existing
+  `tab.view.content` and skips the reload when nothing actually changed.
+  Genuine reloads also preserve the cursor position (clamped to the new
+  document length) instead of always resetting to line 1.
+- **`markdown-reader path/file.md` now opens the file immediately.**
+  Previously, passing a file path (instead of a directory) produced an
+  empty tree because the app used the file itself as the tree root.
+  Now the root is set to the file's parent directory, the tree is
+  populated normally, and the file is opened in a tab on startup.
+- **Borderless viewer when the file tree is hidden.** Pressing
+  `Shift+H` to hide the tree now also removes the viewer's outer
+  border, giving the markdown content full terminal width and height.
+  `[` and `]` (tree width adjustment) are no-ops while the tree is
+  hidden. Pressing `Shift+H` again restores both the tree and the
+  border.
+
+### Changed
+- `App::new` now takes an optional `initial_file: Option<PathBuf>`
+  parameter for the file-path-as-argument feature.
+
 ## [1.5.1] - 2026-04-17
 
 ### Fixed

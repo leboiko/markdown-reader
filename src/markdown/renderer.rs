@@ -360,8 +360,7 @@ impl MdRenderer {
                         .current_style()
                         .fg(self.inline_code)
                         .add_modifier(Modifier::ITALIC);
-                    self.current_spans
-                        .push(Span::styled(rendered, style));
+                    self.current_spans.push(Span::styled(rendered, style));
                 }
                 Event::DisplayMath(math) => {
                     // Convert LaTeX to Unicode and render as a bordered
@@ -390,7 +389,9 @@ impl MdRenderer {
                         Span::styled("╭".to_string(), border_style),
                         Span::styled(
                             label.to_string(),
-                            Style::default().fg(self.inline_code).add_modifier(Modifier::BOLD),
+                            Style::default()
+                                .fg(self.inline_code)
+                                .add_modifier(Modifier::BOLD),
                         ),
                         Span::styled(
                             format!(
@@ -408,10 +409,7 @@ impl MdRenderer {
                                 "│ ".to_string(),
                                 Style::default().fg(self.code_border).bg(self.code_bg),
                             ),
-                            Span::styled(
-                                format!("{:<inner_width$}", line),
-                                math_style,
-                            ),
+                            Span::styled(format!("{:<inner_width$}", line), math_style),
                             Span::styled(
                                 "│".to_string(),
                                 Style::default().fg(self.code_border).bg(self.code_bg),

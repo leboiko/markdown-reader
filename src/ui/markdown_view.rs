@@ -286,29 +286,42 @@ impl MarkdownViewState {
 pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
     let p = app.palette;
 
-    let border_style = if focused {
-        p.border_focused_style()
-    } else {
-        p.border_style()
-    };
-
     let active_tab = app.tabs.active_tab();
     let file_name = active_tab.map(|t| t.view.file_name.as_str()).unwrap_or("");
 
+    // Build the title string before the block so its lifetime covers the block
+    // borrow.  It is only used in the bordered path, but must be declared in
+    // the outer scope regardless so the borrow checker is satisfied.
     let title: Cow<str> = if file_name.is_empty() {
         Cow::Borrowed(" Preview ")
     } else {
         Cow::Owned(format!(" {file_name} "))
     };
 
-    let block = Block::default()
-        .title(title.as_ref())
-        .title_style(p.title_style())
-        .borders(Borders::ALL)
-        .border_style(border_style)
-        .style(Style::default().bg(p.background));
+    // When the tree is hidden the viewer expands to the full terminal width.
+    // Drawing borders in that state wastes 2 columns and 2 rows, and the border
+    // box looks odd with nothing alongside it.  Skip borders entirely and let
+    // the tab bar (which already spans the full width) serve as the visual
+    // separator.
+    let block = if app.tree_hidden {
+        Block::default().style(Style::default().bg(p.background))
+    } else {
+        let border_style = if focused {
+            p.border_focused_style()
+        } else {
+            p.border_style()
+        };
+        Block::default()
+            .title(title.as_ref())
+            .title_style(p.title_style())
+            .borders(Borders::ALL)
+            .border_style(border_style)
+            .style(Style::default().bg(p.background))
+    };
 
-    app.tabs.view_height = area.height.saturating_sub(2) as u32;
+    // When borderless the inner area equals the outer area (no 1-cell border on
+    // each edge), so the viewport is 2 rows taller than in bordered mode.
+    app.tabs.view_height = block.inner(area).height as u32;
 
     let has_content = app
         .tabs
