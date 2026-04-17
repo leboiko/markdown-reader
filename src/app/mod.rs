@@ -1,6 +1,6 @@
 use crate::action::Action;
 use crate::cast::u32_sat;
-use crate::config::{Config, SearchPreview, TreePosition};
+use crate::config::{Config, MermaidMode, SearchPreview, TreePosition};
 use crate::event::EventHandler;
 use crate::fs::discovery::FileEntry;
 use crate::fs::git_status;
@@ -144,10 +144,13 @@ pub fn collect_match_lines(
             DocBlock::Mermaid { id, source, .. } => {
                 let block_height = block.height();
                 let show_as_source = match mermaid_cache.get(*id) {
-                    None | Some(MermaidEntry::Failed(_) | MermaidEntry::SourceOnly(_)) => {
-                        true
-                    }
-                    Some(MermaidEntry::Pending | MermaidEntry::Ready { .. }) => false,
+                    None | Some(MermaidEntry::Failed(_) | MermaidEntry::SourceOnly(_)) => true,
+                    // ASCII diagrams are rendered text, not searchable source.
+                    Some(
+                        MermaidEntry::Pending
+                        | MermaidEntry::Ready { .. }
+                        | MermaidEntry::AsciiDiagram { .. },
+                    ) => false,
                 };
                 if show_as_source {
                     let limit = block_height.saturating_sub(1) as usize;
@@ -237,6 +240,7 @@ impl ConfigPopupState {
         ("Markdown", 1),
         ("Panels", 2),
         ("Search", 2),
+        ("Mermaid", 3), // Auto / Text only / Image only
     ];
 
     /// Total number of rows across all sections.
@@ -313,6 +317,10 @@ pub struct App {
     pub tree_position: TreePosition,
     /// How to render the inline preview in content-search results.
     pub search_preview: SearchPreview,
+    /// User-configured mermaid rendering mode.
+    pub mermaid_mode: MermaidMode,
+    /// User-configured maximum height for mermaid diagram blocks (in display lines).
+    pub mermaid_max_height: u32,
     /// Copy-path popup state; `None` when the popup is closed.
     pub copy_menu: Option<CopyMenuState>,
     /// Persisted sessions (loaded once on startup, written on file open and quit).
@@ -419,6 +427,8 @@ impl App {
             show_line_numbers: config.show_line_numbers,
             tree_position: config.tree_position,
             search_preview: config.search_preview,
+            mermaid_mode: config.mermaid_mode,
+            mermaid_max_height: config.mermaid_max_height,
             copy_menu: None,
             app_state,
             action_tx: None,
@@ -456,6 +466,28 @@ impl App {
     /// Return a mutable reference to the active tab's doc-search state, if any tab is open.
     pub fn doc_search_mut(&mut self) -> Option<&mut crate::app::DocSearchState> {
         self.tabs.active_tab_mut().map(|t| &mut t.doc_search)
+    }
+
+    /// Walk every open tab's rendered blocks looking for the mermaid source
+    /// associated with `id`. Returns `Some(source)` on the first match.
+    ///
+    /// This is O(tabs × blocks) but is called only on image render failure, which
+    /// is a rare slow-path, so the linear scan is acceptable.
+    fn find_mermaid_source(&self, id: crate::markdown::MermaidBlockId) -> Option<String> {
+        for tab in self.tabs.iter() {
+            for block in &tab.view.rendered {
+                if let crate::markdown::DocBlock::Mermaid {
+                    id: block_id,
+                    source,
+                    ..
+                } = block
+                    && *block_id == id
+                {
+                    return Some(source.clone());
+                }
+            }
+        }
+        None
     }
 
     // ── Session ──────────────────────────────────────────────────────────────
@@ -571,6 +603,8 @@ impl App {
             show_line_numbers: self.show_line_numbers,
             tree_position: self.tree_position,
             search_preview: self.search_preview,
+            mermaid_mode: self.mermaid_mode,
+            mermaid_max_height: self.mermaid_max_height,
         };
         tokio::task::spawn_blocking(move || config.save());
     }
@@ -735,7 +769,37 @@ impl App {
             Action::Resize(_, _) => {}
             Action::Mouse(m) => self.handle_mouse(m),
             Action::MermaidReady(id, entry) => {
-                self.mermaid_cache.insert(id, *entry);
+                // Only apply the result if the cache still has a Pending
+                // entry for this id.  After a mode switch (e.g. Image → Text),
+                // cache.clear() runs and ensure_queued re-populates entries
+                // synchronously (AsciiDiagram or SourceOnly).  Stale image
+                // results arriving from pre-switch tasks must not overwrite
+                // the fresh entry.
+                if !matches!(
+                    self.mermaid_cache.get(id),
+                    Some(MermaidEntry::Pending)
+                ) {
+                    return;
+                }
+                let entry = *entry;
+                // When image rendering failed, try the text-mode renderer
+                // as a secondary fallback.
+                let entry = if let MermaidEntry::Failed(ref msg) = entry {
+                    if let Some(source) = self.find_mermaid_source(id) {
+                        match crate::mermaid::try_text_render_public(&source) {
+                            Ok(diagram) => MermaidEntry::AsciiDiagram {
+                                diagram,
+                                reason: format!("image failed: {msg}"),
+                            },
+                            Err(_) => entry,
+                        }
+                    } else {
+                        entry
+                    }
+                } else {
+                    entry
+                };
+                self.mermaid_cache.insert(id, entry);
             }
             Action::SearchResults {
                 generation,
@@ -1005,7 +1069,6 @@ impl App {
         }
     }
 }
-
 
 // ── Tests ──────────────────────────────────────────────────────────────────
 

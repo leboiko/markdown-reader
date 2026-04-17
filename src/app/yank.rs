@@ -69,9 +69,9 @@ impl App {
                                 .spans
                                 .iter()
                                 .map(|s| {
-                                    crate::cast::u16_sat(
-                                        unicode_width::UnicodeWidthStr::width(s.content.as_ref()),
-                                    )
+                                    crate::cast::u16_sat(unicode_width::UnicodeWidthStr::width(
+                                        s.content.as_ref(),
+                                    ))
                                 })
                                 .fold(0u16, u16::saturating_add);
                             if let Some((sc, ec)) = range.char_range_on_line(abs, line_width) {

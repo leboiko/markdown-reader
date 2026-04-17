@@ -22,10 +22,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         height: bar_height,
     };
 
-    let total_lines = app
-        .tabs
-        .active_tab()
-        .map_or(0, |t| t.view.total_lines);
+    let total_lines = app.tabs.active_tab().map_or(0, |t| t.view.total_lines);
 
     let total_info = if total_lines == 0 {
         String::new()

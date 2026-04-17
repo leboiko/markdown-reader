@@ -123,7 +123,24 @@ pub fn draw_mermaid_block(
         Some(MermaidEntry::SourceOnly(reason)) => {
             let footer = format!("[mermaid \u{2014} {reason}]");
             let mut text = render_mermaid_source_text(params.source, &footer, p);
-            // Apply cursor/selection highlight to the source-text fallback.
+            if params.focused {
+                apply_block_highlight(
+                    &mut text.lines,
+                    params.visual_mode,
+                    params.cursor_line,
+                    params.block_start,
+                    params.block_end,
+                    0,
+                    p.selection_bg,
+                );
+            }
+            render_mermaid_source_styled(f, rect, text, p);
+        }
+        Some(MermaidEntry::AsciiDiagram { diagram, reason }) => {
+            // figurehead rendered a Unicode box-drawing diagram — show it
+            // instead of the raw mermaid source.
+            let footer = format!("[mermaid \u{2014} {reason}, text-mode diagram]");
+            let mut text = render_mermaid_source_text(diagram.as_str(), &footer, p);
             if params.focused {
                 apply_block_highlight(
                     &mut text.lines,

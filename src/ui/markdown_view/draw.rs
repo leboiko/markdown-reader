@@ -5,6 +5,7 @@ use super::state::VisualRange;
 use crate::action::Action;
 use crate::app::App;
 use crate::markdown::{DocBlock, MermaidBlockId, update_mermaid_heights};
+use crate::mermaid::MermaidRenderConfig;
 use crate::ui::table_render::layout_table;
 use ratatui::{
     Frame,
@@ -155,7 +156,11 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
             // Only recompute positions (O(blocks)) when something actually moved —
             // calling it unconditionally every frame was the source of UI freezes on
             // large documents.
-            let mermaid_changed = update_mermaid_heights(&tab.view.rendered, &app.mermaid_cache);
+            let mermaid_changed = update_mermaid_heights(
+                &tab.view.rendered,
+                &app.mermaid_cache,
+                app.mermaid_max_height,
+            );
             if layout_changed || mermaid_changed {
                 tab.view.total_lines = tab
                     .view
@@ -182,7 +187,11 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
             }
 
             // Width changed — all block heights may have shifted; always recompute.
-            update_mermaid_heights(&tab.view.rendered, &app.mermaid_cache);
+            update_mermaid_heights(
+                &tab.view.rendered,
+                &app.mermaid_cache,
+                app.mermaid_max_height,
+            );
             tab.view.total_lines = tab
                 .view
                 .rendered
@@ -260,7 +269,9 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
 
                 // Y offset in the inner rect.
                 let y_in_viewport = block_start.saturating_sub(scroll_offset);
-                let rect_y = inner.y.saturating_add(crate::cast::u16_from_u32(y_in_viewport));
+                let rect_y = inner
+                    .y
+                    .saturating_add(crate::cast::u16_from_u32(y_in_viewport));
 
                 if rect_y < inner.y + inner.height && visible_lines > 0 {
                     let draw_height = crate::cast::u16_from_u32(
@@ -393,16 +404,20 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
             Color::Rgb(r, g, b) => (r, g, b),
             _ => (0, 0, 0),
         };
+        let render_cfg = MermaidRenderConfig {
+            picker: app.picker.as_ref(),
+            action_tx: &tx,
+            in_tmux,
+            bg_rgb,
+            mode: app.mermaid_mode,
+            max_height: app.mermaid_max_height,
+        };
         for (id, source) in mermaid_to_queue {
-            app.mermaid_cache
-                .ensure_queued(id, &source, app.picker.as_ref(), &tx, in_tmux, bg_rgb);
+            app.mermaid_cache.ensure_queued(id, &source, &render_cfg);
         }
     }
 
-    let total_doc_lines = app
-        .tabs
-        .active_tab()
-        .map_or(0, |t| t.view.total_lines);
+    let total_doc_lines = app.tabs.active_tab().map_or(0, |t| t.view.total_lines);
 
     // Render text blocks.
     for td in text_draws {

@@ -27,8 +27,11 @@ pub fn render_text_with_gutter(
     };
     let gutter_width = num_digits + 3;
 
-    let chunks = Layout::horizontal([Constraint::Length(crate::cast::u16_from_u32(gutter_width)), Constraint::Min(0)])
-        .split(rect);
+    let chunks = Layout::horizontal([
+        Constraint::Length(crate::cast::u16_from_u32(gutter_width)),
+        Constraint::Min(0),
+    ])
+    .split(rect);
 
     // The content pane uses `Paragraph::wrap(Wrap { trim: false })`, so a
     // single logical `Line` can occupy multiple visual rows on narrow

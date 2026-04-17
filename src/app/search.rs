@@ -6,7 +6,9 @@
 use super::*;
 use crate::action::Action;
 use crate::fs::discovery::FileEntry;
-use crate::ui::search_modal::{RESULT_CAP, SearchMode, SearchResult, build_preview, smartcase_is_sensitive};
+use crate::ui::search_modal::{
+    RESULT_CAP, SearchMode, SearchResult, build_preview, smartcase_is_sensitive,
+};
 use std::sync::{Arc, atomic::Ordering};
 
 impl App {

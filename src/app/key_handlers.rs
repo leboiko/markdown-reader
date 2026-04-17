@@ -42,18 +42,23 @@ impl App {
     /// toggle / select it.
     pub(super) fn apply_config_selection(&mut self, cursor: usize) {
         // Section offsets (cumulative row indices):
-        // [0, theme_count)      → Theme
-        // [markdown_start]      → Markdown: show_line_numbers
-        // [panels_start]        → Panels: tree_position left
-        // [panels_start + 1]    → Panels: tree_position right
-        // [search_start]        → Search: full_line preview
-        // [search_start + 1]    → Search: snippet preview
+        // [0, theme_count)       → Theme
+        // [markdown_start]       → Markdown: show_line_numbers
+        // [panels_start]         → Panels: tree_position left
+        // [panels_start + 1]     → Panels: tree_position right
+        // [search_start]         → Search: full_line preview
+        // [search_start + 1]     → Search: snippet preview
+        // [mermaid_start]        → Mermaid: Auto
+        // [mermaid_start + 1]    → Mermaid: Text only
+        // [mermaid_start + 2]    → Mermaid: Image only
         const MARKDOWN_ROWS: usize = 1; // "Show line numbers"
         const PANELS_ROWS: usize = 2; // "Tree left", "Tree right"
+        const SEARCH_ROWS: usize = 2; // "Full line preview", "Snippet preview"
         let theme_count = Theme::ALL.len();
         let markdown_start = theme_count;
         let panels_start = markdown_start + MARKDOWN_ROWS;
         let search_start = panels_start + PANELS_ROWS;
+        let mermaid_start = search_start + SEARCH_ROWS;
 
         if cursor < theme_count {
             let theme = Theme::ALL[cursor];
@@ -75,6 +80,20 @@ impl App {
             self.persist_config();
         } else if cursor == search_start + 1 {
             self.search_preview = crate::config::SearchPreview::Snippet;
+            self.persist_config();
+        } else if cursor == mermaid_start {
+            // Changing mode clears the cache so existing entries re-render
+            // under the new policy on the next draw frame.
+            self.mermaid_mode = crate::config::MermaidMode::Auto;
+            self.mermaid_cache.clear();
+            self.persist_config();
+        } else if cursor == mermaid_start + 1 {
+            self.mermaid_mode = crate::config::MermaidMode::Text;
+            self.mermaid_cache.clear();
+            self.persist_config();
+        } else if cursor == mermaid_start + 2 {
+            self.mermaid_mode = crate::config::MermaidMode::Image;
+            self.mermaid_cache.clear();
             self.persist_config();
         }
     }
@@ -617,9 +636,7 @@ impl App {
             // ── Editing mode ─────────────────────────────────────────────────
             // Intercept `:` only when edtui is in Normal mode so that insert
             // mode still inserts a literal colon (matching vim behaviour).
-            if key.code == KeyCode::Char(':')
-                && editor.state.mode == edtui::EditorMode::Normal
-            {
+            if key.code == KeyCode::Char(':') && editor.state.mode == edtui::EditorMode::Normal {
                 editor.command_line = Some(String::new());
                 editor.status_message = None;
                 return;
@@ -633,10 +650,7 @@ impl App {
     ///
     /// Must be called *after* `dispatch_command` returns.  `self.tabs` is
     /// fully accessible here because we're back in `&mut self` context.
-    pub(super) fn apply_command_outcome(
-        &mut self,
-        outcome: crate::ui::editor::CommandOutcome,
-    ) {
+    pub(super) fn apply_command_outcome(&mut self, outcome: crate::ui::editor::CommandOutcome) {
         match outcome {
             crate::ui::editor::CommandOutcome::Handled => {
                 // Nothing to do — `dispatch_command` already set any message.
@@ -778,9 +792,7 @@ impl App {
         let row = m.row;
         // If the rect hasn't been populated yet (first frame), treat the
         // event as inside so we don't inadvertently close on the first click.
-        let inside = self
-            .table_modal_rect
-            .is_none_or(|r| contains(r, col, row));
+        let inside = self.table_modal_rect.is_none_or(|r| contains(r, col, row));
 
         // view_height is used by max_h_scroll to determine the visible horizontal
         // extent; we reuse the viewer's stored height as an approximation.

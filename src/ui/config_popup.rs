@@ -7,8 +7,28 @@ use ratatui::{
 };
 
 use crate::app::ConfigPopupState;
-use crate::config::{SearchPreview, TreePosition};
+use crate::config::{Config, MermaidMode, SearchPreview, TreePosition};
 use crate::theme::{Palette, Theme};
+
+/// Parameters for [`render_config_popup`].
+///
+/// Grouping these avoids the `clippy::too_many_arguments` lint.
+pub struct ConfigPopupParams<'a> {
+    /// Currently highlighted row in the flat option list.
+    pub state: &'a ConfigPopupState,
+    /// Currently active theme.
+    pub theme: Theme,
+    /// Whether line numbers are shown in the viewer.
+    pub show_line_numbers: bool,
+    /// Which side the file-tree panel is on.
+    pub tree_position: TreePosition,
+    /// Active search-result preview mode.
+    pub search_preview: SearchPreview,
+    /// Active mermaid rendering mode.
+    pub mermaid_mode: MermaidMode,
+    /// Active colour palette.
+    pub palette: &'a Palette,
+}
 
 const ACTIVE_BULLET: &str = "●";
 const INACTIVE_BULLET: &str = "○";
@@ -17,55 +37,42 @@ const INACTIVE_BULLET: &str = "○";
 ///
 /// # Arguments
 ///
-/// * `f`              - Ratatui frame.
-/// * `state`          - Cursor position in the flat option list.
-/// * `theme`          - Currently active theme (for bullet state).
-/// * `show_line_numbers` - Whether line numbers are enabled.
-/// * `tree_position`  - Current tree panel position.
-/// * `search_preview` - Current search preview mode.
-/// * `palette`        - Active palette for border and accent colors.
-pub fn render_config_popup(
-    f: &mut Frame,
-    state: &ConfigPopupState,
-    theme: Theme,
-    show_line_numbers: bool,
-    tree_position: TreePosition,
-    search_preview: SearchPreview,
-    palette: &Palette,
-) {
-    // 22 rows: 1 blank + 1 section + 8 themes + 1 blank + 1 section + 1 line-numbers
-    // + 1 blank + 1 section + 2 panels + 1 blank + 1 section + 2 search + 1 blank + 1 footer
-    let area = centered_rect(46, 22, f.area());
+/// * `f`      - Ratatui frame to render into.
+/// * `params` - All display parameters (theme, flags, palette, etc.).
+pub fn render_config_popup(f: &mut Frame, params: &ConfigPopupParams<'_>) {
+    // 27 rows: original 22 + 1 blank + 1 "Mermaid" section header + 3 mode options
+    let area = centered_rect(46, 27, f.area());
     f.render_widget(Clear, area);
 
-    let lines = build_lines(
-        state,
-        theme,
-        show_line_numbers,
-        tree_position,
-        search_preview,
-        palette,
-    );
+    let lines = build_lines(params);
 
     let block = Block::default()
         .title(" Settings ")
-        .title_style(palette.title_style())
+        .title_style(params.palette.title_style())
         .borders(Borders::ALL)
-        .border_style(Style::new().fg(palette.border_focused))
-        .style(Style::default().bg(palette.help_bg));
+        .border_style(Style::new().fg(params.palette.border_focused))
+        .style(Style::default().bg(params.palette.help_bg));
 
     f.render_widget(Paragraph::new(lines).block(block), area);
 }
 
 #[allow(clippy::too_many_lines)]
-fn build_lines<'a>(
-    state: &ConfigPopupState,
-    theme: Theme,
-    show_line_numbers: bool,
-    tree_position: TreePosition,
-    search_preview: SearchPreview,
-    palette: &Palette,
-) -> Vec<Line<'a>> {
+fn build_lines<'a>(params: &ConfigPopupParams<'_>) -> Vec<Line<'a>> {
+    let ConfigPopupParams {
+        state,
+        theme,
+        show_line_numbers,
+        tree_position,
+        search_preview,
+        mermaid_mode,
+        palette,
+    } = params;
+    let theme = *theme;
+    let show_line_numbers = *show_line_numbers;
+    let tree_position = *tree_position;
+    let search_preview = *search_preview;
+    let mermaid_mode = *mermaid_mode;
+
     let section_style = Style::new()
         .fg(palette.accent_alt)
         .add_modifier(Modifier::BOLD);
@@ -171,6 +178,44 @@ fn build_lines<'a>(
         text_style,
         dim_style,
     ));
+    row += 1;
+
+    lines.push(Line::from(""));
+
+    // --- Mermaid section ---
+    lines.push(Line::from(vec![
+        Span::styled("  ", text_style),
+        Span::styled(ConfigPopupState::SECTIONS[4].0, section_style),
+    ]));
+    lines.push(option_line(
+        row == state.cursor,
+        mermaid_mode == MermaidMode::Auto,
+        Config::mermaid_mode_label(MermaidMode::Auto),
+        cursor_style,
+        active_style,
+        text_style,
+        dim_style,
+    ));
+    row += 1;
+    lines.push(option_line(
+        row == state.cursor,
+        mermaid_mode == MermaidMode::Text,
+        Config::mermaid_mode_label(MermaidMode::Text),
+        cursor_style,
+        active_style,
+        text_style,
+        dim_style,
+    ));
+    row += 1;
+    lines.push(option_line(
+        row == state.cursor,
+        mermaid_mode == MermaidMode::Image,
+        Config::mermaid_mode_label(MermaidMode::Image),
+        cursor_style,
+        active_style,
+        text_style,
+        dim_style,
+    ));
 
     lines.push(Line::from(""));
 
@@ -184,6 +229,10 @@ fn build_lines<'a>(
         Span::styled("Esc/c", cursor_style),
         Span::styled(" Close", dim_style),
     ]));
+
+    // Suppress unused variable warning: `row` is incremented to maintain the
+    // flat-index logic for future sections but is not read after the last option.
+    let _ = row;
 
     lines
 }

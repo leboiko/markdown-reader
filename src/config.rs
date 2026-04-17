@@ -8,6 +8,14 @@ use crate::theme::Theme;
 const APP_NAME: &str = "markdown-reader";
 const CONFIG_FILE: &str = "config.toml";
 
+/// Default value for [`Config::mermaid_max_height`].
+///
+/// 30 lines is a comfortable default — large enough to show a typical diagram
+/// without consuming the entire viewport.
+fn default_mermaid_max_height() -> u32 {
+    30
+}
+
 /// Which side of the viewer the file-tree panel is rendered on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -15,6 +23,29 @@ pub enum TreePosition {
     #[default]
     Left,
     Right,
+}
+
+/// Controls how mermaid diagrams are rendered in the viewer.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MermaidMode {
+    /// Try image rendering (when graphics are available), then figurehead
+    /// Unicode box-drawing text, then raw source as a last resort.
+    ///
+    /// For diagram types with known image-render issues (e.g. `stateDiagram`),
+    /// figurehead is tried first; the image pipeline is skipped for those types.
+    #[default]
+    Auto,
+    /// Always use figurehead Unicode text rendering. Never spawns image tasks.
+    ///
+    /// CPU-lighter than `Auto`, works inside tmux and any terminal without
+    /// graphics protocol support, but lower visual fidelity.
+    Text,
+    /// Only use the image pipeline when a graphics protocol is available.
+    ///
+    /// Falls back directly to raw source when graphics are not available —
+    /// figurehead is not tried. Useful when you want images or nothing.
+    Image,
 }
 
 /// How to render the inline preview for a content-search result.
@@ -34,7 +65,7 @@ pub enum SearchPreview {
 ///
 /// `#[serde(default)]` on every field ensures that config files written by
 /// older versions of the app (missing newer fields) still parse correctly.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
     pub theme: Theme,
@@ -44,6 +75,31 @@ pub struct Config {
     pub tree_position: TreePosition,
     #[serde(default)]
     pub search_preview: SearchPreview,
+    /// How mermaid diagrams are rendered. See [`MermaidMode`] for details.
+    #[serde(default)]
+    pub mermaid_mode: MermaidMode,
+    /// Maximum height of a mermaid diagram block in display lines.
+    ///
+    /// Diagrams taller than this are clamped. Tune this if your most common
+    /// diagrams are either clipped or consuming too much viewport space.
+    /// The minimum is always 8 lines regardless of this setting.
+    ///
+    /// There is no UI widget for this field — edit `config.toml` directly.
+    #[serde(default = "default_mermaid_max_height")]
+    pub mermaid_max_height: u32,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            theme: Theme::default(),
+            show_line_numbers: false,
+            tree_position: TreePosition::default(),
+            search_preview: SearchPreview::default(),
+            mermaid_mode: MermaidMode::default(),
+            mermaid_max_height: default_mermaid_max_height(),
+        }
+    }
 }
 
 impl Config {
@@ -73,6 +129,15 @@ impl Config {
         };
         let _ = fs::write(&path, text);
     }
+
+    /// Return a [`MermaidMode`] label suitable for display (e.g. in the UI).
+    pub fn mermaid_mode_label(mode: MermaidMode) -> &'static str {
+        match mode {
+            MermaidMode::Auto => "Auto",
+            MermaidMode::Text => "Text only",
+            MermaidMode::Image => "Image only",
+        }
+    }
 }
 
 fn config_path() -> Option<PathBuf> {
@@ -101,5 +166,45 @@ mod tests {
         let toml_str = r#"theme = "default""#;
         let config: Config = toml::from_str(toml_str).expect("deserialization failed");
         assert_eq!(config.search_preview, SearchPreview::default());
+    }
+
+    /// `mermaid_max_height` must survive a TOML round-trip with a custom value.
+    #[test]
+    fn mermaid_max_height_config_roundtrip() {
+        let config = Config {
+            mermaid_max_height: 25,
+            ..Config::default()
+        };
+        let serialized = toml::to_string_pretty(&config).expect("serialization failed");
+        let deserialized: Config = toml::from_str(&serialized).expect("deserialization failed");
+        assert_eq!(deserialized.mermaid_max_height, 25);
+    }
+
+    /// A TOML file without `mermaid_max_height` must use the default (30).
+    #[test]
+    fn mermaid_max_height_missing_field_defaults_to_30() {
+        let toml_str = r#"theme = "default""#;
+        let config: Config = toml::from_str(toml_str).expect("deserialization failed");
+        assert_eq!(config.mermaid_max_height, 30);
+    }
+
+    /// `MermaidMode` must round-trip through TOML.
+    #[test]
+    fn mermaid_mode_round_trips() {
+        let config = Config {
+            mermaid_mode: MermaidMode::Text,
+            ..Config::default()
+        };
+        let serialized = toml::to_string_pretty(&config).expect("serialization failed");
+        let deserialized: Config = toml::from_str(&serialized).expect("deserialization failed");
+        assert_eq!(deserialized.mermaid_mode, MermaidMode::Text);
+    }
+
+    /// A TOML file without `mermaid_mode` must default to `Auto`.
+    #[test]
+    fn mermaid_mode_missing_field_defaults_to_auto() {
+        let toml_str = r#"theme = "default""#;
+        let config: Config = toml::from_str(toml_str).expect("deserialization failed");
+        assert_eq!(config.mermaid_mode, MermaidMode::Auto);
     }
 }

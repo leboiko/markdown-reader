@@ -73,11 +73,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         viewer_area = content_chunks[1];
         app.viewer_area_rect = Some(viewer_area);
 
-        if app
-            .tabs
-            .active_tab()
-            .is_some_and(|t| t.editor.is_some())
-        {
+        if app.tabs.active_tab().is_some_and(|t| t.editor.is_some()) {
             editor::draw(f, app, viewer_area);
         } else {
             markdown_view::draw(f, app, viewer_area, is_viewer_focused(app.focus));
@@ -120,11 +116,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         viewer_area = viewer_col_chunks[1];
         app.viewer_area_rect = Some(viewer_area);
 
-        if app
-            .tabs
-            .active_tab()
-            .is_some_and(|t| t.editor.is_some())
-        {
+        if app.tabs.active_tab().is_some_and(|t| t.editor.is_some()) {
             editor::draw(f, app, viewer_area);
         } else {
             markdown_view::draw(f, app, viewer_area, is_viewer_focused(app.focus));
@@ -159,16 +151,16 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
 
     if let Some(popup_state) = &app.config_popup {
-        let popup_state = popup_state.clone();
-        config_popup::render_config_popup(
-            f,
-            &popup_state,
-            app.theme,
-            app.show_line_numbers,
-            app.tree_position,
-            app.search_preview,
-            &app.palette,
-        );
+        let params = config_popup::ConfigPopupParams {
+            state: popup_state,
+            theme: app.theme,
+            show_line_numbers: app.show_line_numbers,
+            tree_position: app.tree_position,
+            search_preview: app.search_preview,
+            mermaid_mode: app.mermaid_mode,
+            palette: &app.palette,
+        };
+        config_popup::render_config_popup(f, &params);
     }
 
     if let Some(state) = &app.copy_menu {

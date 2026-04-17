@@ -80,7 +80,9 @@ pub fn visual_row_to_logical_line(
             // Mermaid and Table blocks are opaque (no internal logical lines
             // that can hold links), so treat each visible row as 1 unit.
             DocBlock::Mermaid { cell_height, .. } => {
-                let visible_rows = cell_height.get().saturating_sub(crate::cast::u32_sat(clip_start));
+                let visible_rows = cell_height
+                    .get()
+                    .saturating_sub(crate::cast::u32_sat(clip_start));
                 if remaining_visual < visible_rows {
                     // Inside a mermaid block — no links here; return a sentinel
                     // that won't match any link line.
@@ -89,7 +91,9 @@ pub fn visual_row_to_logical_line(
                 remaining_visual -= visible_rows;
             }
             DocBlock::Table(t) => {
-                let visible_rows = t.rendered_height.saturating_sub(crate::cast::u32_sat(clip_start));
+                let visible_rows = t
+                    .rendered_height
+                    .saturating_sub(crate::cast::u32_sat(clip_start));
                 if remaining_visual < visible_rows {
                     return u32::MAX;
                 }

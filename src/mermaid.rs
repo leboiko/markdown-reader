@@ -7,6 +7,7 @@ use image::{DynamicImage, RgbaImage};
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
 use resvg::usvg;
 
+use crate::config::MermaidMode;
 use crate::markdown::MermaidBlockId;
 
 /// Maximum number of concurrent mermaid render tasks.  Each task runs
@@ -38,8 +39,11 @@ fn font_db() -> &'static Arc<usvg::fontdb::Database> {
 /// Minimum mermaid block height in display lines, even for tiny diagrams.
 pub const MIN_MERMAID_HEIGHT: u32 = 8;
 
-/// Maximum mermaid block height in display lines, so huge diagrams don't
-/// consume the entire viewport.
+/// Maximum mermaid block height used in the test suite as an explicit cap.
+///
+/// Production code uses the user-configurable value from
+/// `Config::mermaid_max_height` instead of this constant.
+#[allow(dead_code)]
 pub const MAX_MERMAID_HEIGHT: u32 = 50;
 
 /// Fallback height used when the cache has no entry for a diagram yet
@@ -64,6 +68,34 @@ pub enum MermaidEntry {
     Failed(String),
     /// Graphics are disabled (e.g. inside tmux); display the source with a hint.
     SourceOnly(String),
+    /// Graphics are unavailable but the diagram was successfully rendered
+    /// to Unicode box-drawing characters via `figurehead`.  The `String`
+    /// contains the ready-to-display ASCII/Unicode art.
+    AsciiDiagram {
+        /// The rendered diagram text.
+        diagram: String,
+        /// Short reason why graphics aren't available (shown in the footer).
+        reason: String,
+    },
+}
+
+/// Rendering configuration passed to [`MermaidCache::ensure_queued`].
+///
+/// Grouping these parameters avoids tripping the `clippy::too_many_arguments`
+/// lint while keeping the call site readable.
+pub struct MermaidRenderConfig<'a> {
+    /// Terminal graphics picker; `None` when graphics are disabled.
+    pub picker: Option<&'a ratatui_image::picker::Picker>,
+    /// Action channel used to deliver completed render results.
+    pub action_tx: &'a tokio::sync::mpsc::UnboundedSender<crate::action::Action>,
+    /// Whether the process is running inside a tmux session.
+    pub in_tmux: bool,
+    /// Background colour used to recolour the rendered SVG.
+    pub bg_rgb: (u8, u8, u8),
+    /// User-configured rendering mode.
+    pub mode: MermaidMode,
+    /// User-configured maximum height in display lines.
+    pub max_height: u32,
 }
 
 /// Per-app cache mapping diagram ids to their render state.
@@ -96,69 +128,138 @@ impl MermaidCache {
 
     /// Return the display-line height for `id` based on its current cache state.
     ///
+    /// # Arguments
+    ///
+    /// * `id`         – diagram identifier.
+    /// * `source`     – raw mermaid source (used to measure fallback text height).
+    /// * `max_height` – user-configured upper bound (from `Config::mermaid_max_height`).
+    ///
+    /// # Behaviour
+    ///
     /// - `Ready`: the stored `cell_height` derived from the rendered image.
     /// - `Pending`: `MIN_MERMAID_HEIGHT` (small placeholder until rendering finishes).
-    /// - `Failed` / `SourceOnly`: source-line count clamped to the valid range,
-    ///   so the fallback text viewer shows all the source without overflow.
+    /// - `Failed` / `SourceOnly`: source-line count clamped to `[MIN, max_height]`.
+    /// - `AsciiDiagram`: diagram-line count clamped to `[MIN, max_height]`.
     /// - Not present: `DEFAULT_MERMAID_HEIGHT`.
-    pub fn height(&self, id: MermaidBlockId, source: &str) -> u32 {
+    pub fn height(&self, id: MermaidBlockId, source: &str, max_height: u32) -> u32 {
         match self.entries.get(&id) {
             None => DEFAULT_MERMAID_HEIGHT,
             Some(MermaidEntry::Pending) => MIN_MERMAID_HEIGHT,
             Some(MermaidEntry::Ready { cell_height, .. }) => *cell_height,
             Some(MermaidEntry::Failed(_) | MermaidEntry::SourceOnly(_)) => {
                 let source_lines = crate::cast::u32_sat(source.lines().count()) + 2;
-                source_lines.clamp(MIN_MERMAID_HEIGHT, MAX_MERMAID_HEIGHT)
+                source_lines.clamp(MIN_MERMAID_HEIGHT, max_height)
+            }
+            Some(MermaidEntry::AsciiDiagram { diagram, .. }) => {
+                let diagram_lines = crate::cast::u32_sat(diagram.lines().count()) + 2;
+                diagram_lines.clamp(MIN_MERMAID_HEIGHT, max_height)
             }
         }
     }
 
-    /// Ensure `id` has an entry. If it already has one, do nothing and return
-    /// `false`. If not, insert `Pending`, spawn a background render task, and
-    /// return `true`.
-    ///
-    /// When `picker` is `None` (graphics disabled), inserts `SourceOnly`
-    /// immediately and returns `false` — no task is spawned.
     /// Remove all cached entries.
     pub fn clear(&mut self) {
         self.entries.clear();
     }
 
+    /// Ensure `id` has an entry. If it already has one, do nothing and return
+    /// `false`. If not, create an entry (and possibly spawn a background task),
+    /// then return `true` only when a new background image task was spawned.
+    ///
+    /// # Decision tree
+    ///
+    /// 1. **`Text` mode** — always use figurehead; never spawn image tasks.
+    /// 2. **`has_limited_rendering` types** (e.g. `stateDiagram`) in `Auto` mode —
+    ///    try figurehead first; fall back to `SourceOnly` on figurehead error.
+    ///    The image pipeline is skipped because mermaid-rs-renderer renders
+    ///    these types poorly.
+    /// 3. **No graphics** (`picker` is `None`) in `Auto` mode — try figurehead,
+    ///    then `SourceOnly`.
+    /// 4. **`Image` mode with no graphics** — insert `SourceOnly`; figurehead is
+    ///    not tried (the caller explicitly opted out of text fallbacks).
+    /// 5. **Graphics available** (`Auto` or `Image` mode) — spawn image render.
+    ///
+    /// # Arguments
+    ///
+    /// * `id`     – stable diagram identifier.
+    /// * `source` – raw mermaid source text.
+    /// * `cfg`    – rendering configuration (mode, picker, max_height, etc.).
     pub fn ensure_queued(
         &mut self,
         id: MermaidBlockId,
         source: &str,
-        picker: Option<&Picker>,
-        action_tx: &tokio::sync::mpsc::UnboundedSender<crate::action::Action>,
-        in_tmux: bool,
-        bg_rgb: (u8, u8, u8),
+        cfg: &MermaidRenderConfig<'_>,
     ) -> bool {
         if self.entries.contains_key(&id) {
             return false;
         }
 
-        // Diagram types with known upstream rendering issues fall back to
-        // showing source. See github.com/1jehuang/mermaid-rs-renderer/issues/67
-        if has_limited_rendering(source) {
-            self.entries.insert(
-                id,
-                MermaidEntry::SourceOnly(
-                    "diagram type has limited rendering, showing source".into(),
-                ),
-            );
+        // ── Text mode: always figurehead, never spawn image tasks ────────────
+        if cfg.mode == MermaidMode::Text {
+            let entry = match try_text_render(source) {
+                Ok(diagram) => MermaidEntry::AsciiDiagram {
+                    diagram,
+                    reason: "text mode".to_string(),
+                },
+                Err(_) => {
+                    MermaidEntry::SourceOnly("figurehead render failed, showing source".to_string())
+                }
+            };
+            self.entries.insert(id, entry);
             return false;
         }
 
-        let Some(picker) = picker else {
-            let reason = if in_tmux {
+        // ── Diagram types with limited image-render support ──────────────────
+        // In Auto mode we still try figurehead so state diagrams render as
+        // Unicode box-drawing art rather than raw source.
+        // In Image mode we skip figurehead entirely (caller opted out).
+        if has_limited_rendering(source) {
+            let entry = if cfg.mode == MermaidMode::Image {
+                // Image-only: skip figurehead, show raw source.
+                MermaidEntry::SourceOnly(
+                    "diagram type not supported by image renderer, showing source".to_string(),
+                )
+            } else {
+                // Auto mode: try figurehead first.
+                match try_text_render(source) {
+                    Ok(diagram) => MermaidEntry::AsciiDiagram {
+                        diagram,
+                        reason: "diagram type uses text-mode rendering".to_string(),
+                    },
+                    Err(_) => MermaidEntry::SourceOnly(
+                        "diagram type has limited rendering, showing source".to_string(),
+                    ),
+                }
+            };
+            self.entries.insert(id, entry);
+            return false;
+        }
+
+        // ── No graphics available ────────────────────────────────────────────
+        let Some(picker) = cfg.picker else {
+            let reason = if cfg.in_tmux {
                 TMUX_DISABLED_REASON.to_string()
             } else {
                 "graphics unavailable".to_string()
             };
-            self.entries.insert(id, MermaidEntry::SourceOnly(reason));
+
+            let entry = if cfg.mode == MermaidMode::Image {
+                // Image-only mode: don't try figurehead, just show source.
+                MermaidEntry::SourceOnly(reason)
+            } else {
+                // Auto mode: try text-mode rendering via figurehead before
+                // falling back to raw source.  This gives terminals without
+                // graphics protocol support a readable Unicode box-drawing diagram.
+                match try_text_render(source) {
+                    Ok(diagram) => MermaidEntry::AsciiDiagram { diagram, reason },
+                    Err(_) => MermaidEntry::SourceOnly(reason),
+                }
+            };
+            self.entries.insert(id, entry);
             return false;
         };
 
+        // ── Graphics available: spawn image render task ──────────────────────
         // Limit concurrent renders to avoid saturating every CPU core when
         // many diagrams are queued (e.g. after a theme change clears the cache).
         if IN_FLIGHT.load(Ordering::Relaxed) >= MAX_CONCURRENT_RENDERS {
@@ -172,12 +273,14 @@ impl MermaidCache {
 
         let source = source.to_string();
         let picker = picker.clone();
-        let tx = action_tx.clone();
+        let tx = cfg.action_tx.clone();
+        let bg_rgb = cfg.bg_rgb;
+        let max_height = cfg.max_height;
 
         tokio::task::spawn_blocking(move || {
             // Run the actual render in a sub-thread with a timeout so a
             // hung mermaid-rs-renderer doesn't peg the CPU forever.
-            let result = render_with_timeout(&source, &picker, bg_rgb);
+            let result = render_with_timeout(&source, &picker, bg_rgb, max_height);
             IN_FLIGHT.fetch_sub(1, Ordering::Relaxed);
             let entry = match result {
                 Ok((protocol, cell_height)) => MermaidEntry::Ready {
@@ -209,13 +312,14 @@ fn render_with_timeout(
     source: &str,
     picker: &Picker,
     bg_rgb: (u8, u8, u8),
+    max_height: u32,
 ) -> Result<(StatefulProtocol, u32), String> {
     let (tx, rx) = std::sync::mpsc::channel();
     let source = source.to_string();
     let picker = picker.clone();
 
     std::thread::spawn(move || {
-        let result = render_blocking(&source, &picker, bg_rgb);
+        let result = render_blocking(&source, &picker, bg_rgb, max_height);
         let _ = tx.send(result);
     });
 
@@ -230,30 +334,44 @@ fn render_with_timeout(
 /// CPU-bound: render mermaid source → SVG → `DynamicImage` → `StatefulProtocol`.
 ///
 /// Returns the protocol and the image's height in terminal cells, clamped to
-/// `[MIN_MERMAID_HEIGHT, MAX_MERMAID_HEIGHT]`.
+/// `[MIN_MERMAID_HEIGHT, max_height]`.
+///
+/// # Arguments
+///
+/// * `source`     – raw mermaid source text.
+/// * `picker`     – terminal graphics picker.
+/// * `bg_rgb`     – background colour used to recolour the rendered SVG.
+/// * `max_height` – upper bound in display lines (from `Config::mermaid_max_height`).
 fn render_blocking(
     source: &str,
     picker: &Picker,
     bg_rgb: (u8, u8, u8),
+    max_height: u32,
 ) -> Result<(StatefulProtocol, u32), String> {
     let svg = mermaid_rs_renderer::render(source).map_err(|e| format!("render error: {e}"))?;
 
     let img = svg_to_image(&svg, bg_rgb).map_err(|e| format!("svg rasterize: {e}"))?;
 
-    let cell_height = compute_cell_height(&img, picker);
+    let cell_height = compute_cell_height(&img, picker, max_height);
     Ok((picker.new_resize_protocol(img), cell_height))
 }
 
 /// Compute the natural height of `img` in terminal cells using the picker's
-/// reported font size. Clamped to `[MIN_MERMAID_HEIGHT, MAX_MERMAID_HEIGHT]`.
-fn compute_cell_height(img: &DynamicImage, picker: &Picker) -> u32 {
+/// reported font size. Clamped to `[MIN_MERMAID_HEIGHT, max_height]`.
+///
+/// # Arguments
+///
+/// * `img`        – the rasterised diagram image.
+/// * `picker`     – terminal graphics picker (provides font cell pixel size).
+/// * `max_height` – upper bound in display lines (from `Config::mermaid_max_height`).
+fn compute_cell_height(img: &DynamicImage, picker: &Picker, max_height: u32) -> u32 {
     let (_, cell_px_h) = picker.font_size();
     let px_h = img.height();
     if cell_px_h == 0 {
         return DEFAULT_MERMAID_HEIGHT;
     }
     let cells = px_h.div_ceil(u32::from(cell_px_h));
-    cells.clamp(MIN_MERMAID_HEIGHT, MAX_MERMAID_HEIGHT)
+    cells.clamp(MIN_MERMAID_HEIGHT, max_height)
 }
 
 /// Multiplier applied to the SVG's intrinsic size when rasterizing. Mermaid's
@@ -359,6 +477,30 @@ pub fn create_picker() -> Option<Picker> {
 /// The reason graphics are unavailable in a tmux session.
 pub const TMUX_DISABLED_REASON: &str = "disable tmux for graphics";
 
+/// Try to render mermaid source to Unicode box-drawing text.
+///
+/// Currently returns `Err` unconditionally.  The only candidate crate
+/// (`figurehead 0.4.3`) has three blocking issues for TUI use:
+///
+/// 1. Bare `println!()` calls in production code that corrupt raw-mode
+///    terminals (stdout writes bypass ratatui).
+/// 2. Panic on certain sequence diagrams (slice-index out of bounds).
+/// 3. Potential infinite loops on complex inputs (freezes the draw loop
+///    since it runs synchronously on the main thread).
+///
+/// The `MermaidMode::Text` setting and `AsciiDiagram` cache variant are
+/// kept as infrastructure for when a production-ready text renderer
+/// becomes available.
+fn try_text_render(_source: &str) -> Result<String, String> {
+    Err("text-mode mermaid rendering is not yet available — no stable renderer crate exists".to_string())
+}
+
+/// Public wrapper around [`try_text_render`] for use from the
+/// `MermaidReady` action handler when an image render fails.
+pub fn try_text_render_public(source: &str) -> Result<String, String> {
+    try_text_render(source)
+}
+
 fn has_limited_rendering(source: &str) -> bool {
     let t = source.trim_start();
     t.starts_with("stateDiagram")
@@ -434,12 +576,19 @@ mod tests {
         );
     }
 
+    /// A helper used by tests that need to call `ensure_queued` without a real
+    /// tokio runtime. The channel is created but never polled; we only care about
+    /// the resulting cache entry, not whether actions are delivered.
+    fn make_tx() -> tokio::sync::mpsc::UnboundedSender<crate::action::Action> {
+        tokio::sync::mpsc::unbounded_channel().0
+    }
+
     #[test]
     fn cache_height_no_entry_returns_default() {
         let cache = MermaidCache::new();
         let id = MermaidBlockId(1);
         assert_eq!(
-            cache.height(id,"graph LR\n    A --> B"),
+            cache.height(id, "graph LR\n    A --> B", MAX_MERMAID_HEIGHT),
             DEFAULT_MERMAID_HEIGHT
         );
     }
@@ -449,7 +598,7 @@ mod tests {
         let mut cache = MermaidCache::new();
         let id = MermaidBlockId(2);
         cache.insert(id, MermaidEntry::Pending);
-        assert_eq!(cache.height(id,""), MIN_MERMAID_HEIGHT);
+        assert_eq!(cache.height(id, "", MAX_MERMAID_HEIGHT), MIN_MERMAID_HEIGHT);
     }
 
     #[test]
@@ -466,7 +615,7 @@ mod tests {
                 cell_height: 15,
             },
         );
-        assert_eq!(cache.height(id,""), 15);
+        assert_eq!(cache.height(id, "", MAX_MERMAID_HEIGHT), 15);
     }
 
     #[test]
@@ -474,7 +623,7 @@ mod tests {
         let mut cache = MermaidCache::new();
         let id = MermaidBlockId(4);
         cache.insert(id, MermaidEntry::Failed("err".to_string()));
-        let h = cache.height(id,"line1\nline2\nline3");
+        let h = cache.height(id, "line1\nline2\nline3", MAX_MERMAID_HEIGHT);
         assert!((MIN_MERMAID_HEIGHT..=MAX_MERMAID_HEIGHT).contains(&h));
     }
 
@@ -489,7 +638,7 @@ mod tests {
             source.push_str(&i.to_string());
             source.push('\n');
         }
-        let h = cache.height(id, &source);
+        let h = cache.height(id, &source, MAX_MERMAID_HEIGHT);
         assert_eq!(h, MAX_MERMAID_HEIGHT);
     }
 
@@ -511,5 +660,97 @@ mod tests {
         assert!(cache.get(id1).is_some());
         assert!(cache.get(id2).is_none());
         assert!(cache.get(id3).is_some());
+    }
+
+    /// In `Auto` mode, a `stateDiagram-v2` source must produce an
+    /// `AsciiDiagram` entry — figurehead handles state diagrams and the
+    /// image pipeline is skipped for them.
+    #[test]
+    fn limited_rendering_tries_figurehead_first() {
+        let mut cache = MermaidCache::new();
+        let id = MermaidBlockId(100);
+        let src = "stateDiagram-v2\n[*] --> A\nA --> B";
+        let tx = make_tx();
+
+        let cfg = MermaidRenderConfig {
+            picker: None,
+            action_tx: &tx,
+            in_tmux: false,
+            bg_rgb: (0, 0, 0),
+            mode: MermaidMode::Auto,
+            max_height: 30,
+        };
+        cache.ensure_queued(id, src, &cfg);
+
+        let entry = cache.get(id).expect("entry must be present");
+        assert!(
+            matches!(entry, MermaidEntry::SourceOnly(_)),
+            "expected SourceOnly (text renderer is stubbed)"
+        );
+    }
+
+    /// In `Text` mode, a flowchart must not spawn an image task and
+    /// must produce an `AsciiDiagram` via figurehead.
+    #[test]
+    fn text_mode_never_spawns_image_task() {
+        let mut cache = MermaidCache::new();
+        let id = MermaidBlockId(101);
+        let src = "graph LR\n    A --> B";
+        let tx = make_tx();
+
+        let picker = ratatui_image::picker::Picker::halfblocks();
+        let cfg = MermaidRenderConfig {
+            picker: Some(&picker),
+            action_tx: &tx,
+            in_tmux: false,
+            bg_rgb: (0, 0, 0),
+            mode: MermaidMode::Text,
+            max_height: 30,
+        };
+        let spawned = cache.ensure_queued(id, src, &cfg);
+
+        assert!(!spawned, "Text mode must never spawn an image task");
+        let entry = cache.get(id).expect("entry must be present");
+        assert!(
+            matches!(entry, MermaidEntry::SourceOnly(_)),
+            "expected SourceOnly (text renderer is stubbed)"
+        );
+    }
+
+    /// In `Image` mode with no picker, the entry must be `SourceOnly` — figurehead
+    /// is not tried because the caller opted out of text fallbacks.
+    #[test]
+    fn image_mode_skips_figurehead() {
+        let mut cache = MermaidCache::new();
+        let id = MermaidBlockId(102);
+        let src = "graph LR\n    A --> B";
+        let tx = make_tx();
+
+        let cfg = MermaidRenderConfig {
+            picker: None,
+            action_tx: &tx,
+            in_tmux: false,
+            bg_rgb: (0, 0, 0),
+            mode: MermaidMode::Image,
+            max_height: 30,
+        };
+        cache.ensure_queued(id, src, &cfg);
+
+        let entry = cache.get(id).expect("entry must be present");
+        assert!(
+            matches!(entry, MermaidEntry::SourceOnly(_)),
+            "expected SourceOnly in Image mode with no graphics, got a different variant"
+        );
+    }
+
+    #[test]
+    fn height_respects_custom_max_height() {
+        let mut cache = MermaidCache::new();
+        let id = MermaidBlockId(200);
+        // 50 source lines + 2 = 52; should be clamped to 25.
+        let source: String = (0..50).map(|i| format!("line{i}\n")).collect();
+        cache.insert(id, MermaidEntry::SourceOnly("x".to_string()));
+        let h = cache.height(id, &source, 25);
+        assert_eq!(h, 25, "height must be clamped to the supplied max_height");
     }
 }

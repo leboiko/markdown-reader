@@ -329,15 +329,12 @@ impl MarkdownViewState {
             if self.cursor_line < offset + h {
                 let local = (self.cursor_line - offset) as usize;
                 let width = match block {
-                    DocBlock::Text { text, .. } => text
-                        .lines
-                        .get(local)
-                        .map_or(0, |l| {
-                            l.spans
-                                .iter()
-                                .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
-                                .sum::<usize>()
-                        }),
+                    DocBlock::Text { text, .. } => text.lines.get(local).map_or(0, |l| {
+                        l.spans
+                            .iter()
+                            .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+                            .sum::<usize>()
+                    }),
                     // Mermaid and Table blocks have opaque content — treat them
                     // as having no horizontal extent for cursor purposes.
                     DocBlock::Mermaid { .. } | DocBlock::Table(_) => 0,

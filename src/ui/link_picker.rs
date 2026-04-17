@@ -160,8 +160,8 @@ pub fn handle_key(app: &mut App, code: crossterm::event::KeyCode) -> bool {
                 if let Some(line) = target_line {
                     let vh = app.tabs.view_height;
                     if let Some(tab) = app.tabs.active_tab_mut() {
-                        let max = tab.view.total_lines.saturating_sub(vh / 2);
-                        tab.view.scroll_offset = line.saturating_sub(2).min(max);
+                        tab.view.cursor_line = line;
+                        tab.view.scroll_to_cursor_centered(vh);
                     }
                 }
             }

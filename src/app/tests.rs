@@ -3,10 +3,10 @@
 /// Kept in a dedicated file to keep `mod.rs` focused on production code.
 use super::*;
 use crate::markdown::{CellSpans, MermaidBlockId, TableBlock, TableBlockId};
-use crate::ui::editor::{CommandOutcome, dispatch_command};
-use std::time::Instant;
 use crate::mermaid::{DEFAULT_MERMAID_HEIGHT, MermaidEntry};
+use crate::ui::editor::{CommandOutcome, dispatch_command};
 use crate::ui::markdown_view::TableLayout;
+use std::time::Instant;
 // `MouseEvent` is not pulled in by `use super::*`; the others (KeyModifiers,
 // MouseButton, MouseEventKind) are already in scope from the parent module.
 use crossterm::event::MouseEvent;
@@ -538,7 +538,9 @@ fn enter_edit_mode_uses_cursor_for_source_line() {
     let content: String = {
         use std::fmt::Write as _;
         let mut s = String::new();
-        for i in 0..12usize { let _ = writeln!(s, "source line {i}"); }
+        for i in 0..12usize {
+            let _ = writeln!(s, "source line {i}");
+        }
         s
     };
     let tmp = tempfile::NamedTempFile::new().unwrap();
@@ -738,7 +740,9 @@ fn d_key_moves_cursor_with_real_loaded_content() {
     let content: String = {
         use std::fmt::Write as _;
         let mut s = String::new();
-        for i in 0..60usize { let _ = write!(s, "paragraph {i}\n\n"); }
+        for i in 0..60usize {
+            let _ = write!(s, "paragraph {i}\n\n");
+        }
         s
     };
     let palette = Palette::from_theme(Theme::Default);
@@ -779,11 +783,7 @@ fn d_key_moves_cursor_with_real_loaded_content() {
 /// Build an `App` with an active tab whose `doc_search` state has the
 /// given match lines and `current_match`, and whose view has the given
 /// `total_lines`.  `view_height` defaults to 20.
-fn make_app_with_doc_search(
-    match_lines: Vec<u32>,
-    current_match: usize,
-    total_lines: u32,
-) -> App {
+fn make_app_with_doc_search(match_lines: Vec<u32>, current_match: usize, total_lines: u32) -> App {
     let mut app = App::new(PathBuf::from("."), None);
     let path = PathBuf::from("/fake/ds_test.md");
     app.tabs.open_or_focus(&path, true);
@@ -914,7 +914,9 @@ fn reload_with_unchanged_content_preserves_cursor() {
     let content: String = {
         use std::fmt::Write as _;
         let mut s = String::new();
-        for i in 0..20usize { let _ = write!(s, "line {i}\n\n"); }
+        for i in 0..20usize {
+            let _ = write!(s, "line {i}\n\n");
+        }
         s
     };
     let path = PathBuf::from("/fake/unchanged.md");
@@ -957,7 +959,9 @@ fn reload_with_changed_content_restores_cursor_when_in_range() {
     let content_v1: String = {
         use std::fmt::Write as _;
         let mut s = String::new();
-        for i in 0..20usize { let _ = write!(s, "line {i}\n\n"); }
+        for i in 0..20usize {
+            let _ = write!(s, "line {i}\n\n");
+        }
         s
     };
     let path = PathBuf::from("/fake/changed.md");
@@ -980,7 +984,9 @@ fn reload_with_changed_content_restores_cursor_when_in_range() {
     let content_v2: String = {
         use std::fmt::Write as _;
         let mut s = String::new();
-        for i in 0..20usize { let _ = write!(s, "edited {i}\n\n"); }
+        for i in 0..20usize {
+            let _ = write!(s, "edited {i}\n\n");
+        }
         s
     };
     app.apply_file_reloaded(path.clone(), content_v2);

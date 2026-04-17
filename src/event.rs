@@ -41,9 +41,7 @@ impl EventHandler {
                         // Only handle key-down events. On Windows, crossterm
                         // emits both Press and Release for every keystroke;
                         // forwarding both would duplicate every action.
-                        Event::Key(key)
-                            if key.kind == crossterm::event::KeyEventKind::Press =>
-                        {
+                        Event::Key(key) if key.kind == crossterm::event::KeyEventKind::Press => {
                             Some(Action::RawKey(key))
                         }
                         Event::Resize(w, h) => Some(Action::Resize(w, h)),

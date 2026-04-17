@@ -5,6 +5,27 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-04-17
+
+### Added
+- **Mermaid rendering settings.** Press `c` → Mermaid section to choose
+  Auto / Text / Image rendering mode. `mermaid_max_height` in
+  config.toml caps diagram height (default 30 lines, was hardcoded 50).
+- **`has_limited_rendering` diagrams (state diagrams) now try
+  text-mode rendering** instead of falling through to raw source.
+  Infrastructure for `AsciiDiagram` cache variant is in place; the
+  text renderer is currently stubbed (the only candidate — figurehead
+  0.4.3 — has fatal bugs for TUI use: debug prints, panics, freezes).
+
+### Fixed
+- **Link picker (`f`) now updates the cursor.** Selecting a heading
+  via `f` jumped the scroll but left `cursor_line` at its old position.
+  The next `j`/`k` would snap back to the pre-jump location. Now uses
+  `cursor_line + scroll_to_cursor_centered` like all other jumps.
+- **Stale mermaid image results no longer overwrite text-mode entries.**
+  After switching rendering mode, in-flight image tasks that complete
+  are discarded if the cache entry is no longer `Pending`.
+
 ## [1.6.4] - 2026-04-17
 
 ### Fixed

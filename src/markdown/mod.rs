@@ -120,9 +120,19 @@ impl DocBlock {
 /// current cache. Call this before summing `total_lines` so scroll math reflects
 /// whatever the cache knows at the time of the draw.
 ///
+/// # Arguments
+///
+/// * `blocks`     – rendered document blocks for the active tab.
+/// * `cache`      – mermaid render cache.
+/// * `max_height` – upper bound in display lines (from `Config::mermaid_max_height`).
+///
 /// Returns `true` when at least one block's height changed, allowing callers to
 /// skip expensive downstream work (like `recompute_positions`) when nothing moved.
-pub fn update_mermaid_heights(blocks: &[DocBlock], cache: &crate::mermaid::MermaidCache) -> bool {
+pub fn update_mermaid_heights(
+    blocks: &[DocBlock],
+    cache: &crate::mermaid::MermaidCache,
+    max_height: u32,
+) -> bool {
     let mut changed = false;
     for block in blocks {
         if let DocBlock::Mermaid {
@@ -132,7 +142,7 @@ pub fn update_mermaid_heights(blocks: &[DocBlock], cache: &crate::mermaid::Merma
             ..
         } = block
         {
-            let new_h = cache.height(*id, source);
+            let new_h = cache.height(*id, source, max_height);
             if new_h != cell_height.get() {
                 cell_height.set(new_h);
                 changed = true;
@@ -533,10 +543,8 @@ mod tests {
                     // The renderer prefixes headings with "█ ", "▌ ", or "▎ ".
                     for prefix in &["█ ", "▌ ", "▎ "] {
                         if content.contains(prefix) {
-                            let text_after_prefix = content
-                                .split_once(prefix)
-                                .map_or("", |(_, t)| t)
-                                .trim();
+                            let text_after_prefix =
+                                content.split_once(prefix).map_or("", |(_, t)| t).trim();
                             if !text_after_prefix.is_empty() {
                                 let anchor = heading_to_anchor(text_after_prefix);
                                 result.push((anchor, abs_line));

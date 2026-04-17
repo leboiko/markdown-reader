@@ -784,7 +784,8 @@ impl MdRenderer {
         }
 
         // Bottom border maps to the line after the last content line.
-        let bottom_source_line = code_start_line + 1 + crate::cast::u32_sat(self.code_block_content.len());
+        let bottom_source_line =
+            code_start_line + 1 + crate::cast::u32_sat(self.code_block_content.len());
         self.lines.push(Line::from(Span::styled(
             format!("╰{}╯", "─".repeat(inner_width + 1)),
             border_style,
