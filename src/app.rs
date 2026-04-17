@@ -1658,18 +1658,59 @@ impl App {
                     self.pending_chord = Some('y');
                 }
             }
-            // `V` toggles visual-line mode.
-            KeyCode::Char('V') => {
+            // `v` toggles char-wise visual mode.
+            KeyCode::Char('v') => {
                 if let Some(tab) = self.tabs.active_tab_mut() {
-                    if tab.view.visual_mode.is_some() {
-                        // Already in visual mode — toggle off.
+                    use crate::ui::markdown_view::{VisualMode, VisualRange};
+                    if tab.view.visual_mode.as_ref().map(|r| r.mode) == Some(VisualMode::Char) {
                         tab.view.visual_mode = None;
                     } else {
                         let line = tab.view.cursor_line;
-                        tab.view.visual_mode = Some(crate::ui::markdown_view::VisualRange {
-                            anchor: line,
-                            cursor: line,
+                        let col = tab.view.cursor_col;
+                        tab.view.visual_mode = Some(VisualRange {
+                            mode: VisualMode::Char,
+                            anchor_line: line,
+                            anchor_col: col,
+                            cursor_line: line,
+                            cursor_col: col,
                         });
+                    }
+                }
+            }
+            // `V` toggles visual-line mode.
+            KeyCode::Char('V') => {
+                if let Some(tab) = self.tabs.active_tab_mut() {
+                    use crate::ui::markdown_view::{VisualMode, VisualRange};
+                    if tab.view.visual_mode.as_ref().map(|r| r.mode) == Some(VisualMode::Line) {
+                        tab.view.visual_mode = None;
+                    } else {
+                        let line = tab.view.cursor_line;
+                        tab.view.visual_mode = Some(VisualRange {
+                            mode: VisualMode::Line,
+                            anchor_line: line,
+                            anchor_col: 0,
+                            cursor_line: line,
+                            cursor_col: 0,
+                        });
+                    }
+                }
+            }
+            // `h` / Left — move cursor column left (only in viewer focus, not tree).
+            KeyCode::Char('h') | KeyCode::Left => {
+                if let Some(tab) = self.tabs.active_tab_mut() {
+                    tab.view.cursor_col = tab.view.cursor_col.saturating_sub(1);
+                    if let Some(range) = tab.view.visual_mode.as_mut() {
+                        range.cursor_col = tab.view.cursor_col;
+                    }
+                }
+            }
+            // `l` / Right — move cursor column right, clamped to line width.
+            KeyCode::Char('l') | KeyCode::Right => {
+                if let Some(tab) = self.tabs.active_tab_mut() {
+                    let max = tab.view.current_line_width().saturating_sub(1);
+                    tab.view.cursor_col = (tab.view.cursor_col + 1).min(max);
+                    if let Some(range) = tab.view.visual_mode.as_mut() {
+                        range.cursor_col = tab.view.cursor_col;
                     }
                 }
             }
@@ -2312,15 +2353,66 @@ impl App {
     /// Copy the source-level text covered by the current visual-line selection
     /// to the system clipboard, then exit visual mode.  Invoked by `y` in visual mode.
     fn yank_visual_selection(&mut self) {
+        use crate::ui::markdown_view::{VisualMode, extract_line_text_range};
         let Some(tab) = self.tabs.active_tab_mut() else {
             return;
         };
         let Some(range) = tab.view.visual_mode else {
             return;
         };
-        let top_source = crate::markdown::source_line_at(&tab.view.rendered, range.top());
-        let bottom_source = crate::markdown::source_line_at(&tab.view.rendered, range.bottom());
-        let text = build_yank_text(&tab.view.content, top_source, bottom_source);
+        let text = match range.mode {
+            VisualMode::Line => {
+                // Line mode: yank whole source lines (existing behaviour).
+                let top_source =
+                    crate::markdown::source_line_at(&tab.view.rendered, range.top_line());
+                let bottom_source =
+                    crate::markdown::source_line_at(&tab.view.rendered, range.bottom_line());
+                build_yank_text(&tab.view.content, top_source, bottom_source)
+            }
+            VisualMode::Char => {
+                // Char mode: extract rendered text from only the selected columns.
+                // Walk each line in [top_line, bottom_line] and extract the column
+                // range reported by char_range_on_line.
+                let mut parts: Vec<String> = Vec::new();
+                let mut block_offset = 0u32;
+                let top = range.top_line();
+                let bottom = range.bottom_line();
+                'blocks: for block in &tab.view.rendered {
+                    let height = block.height();
+                    let block_end = block_offset + height;
+                    if block_end <= top {
+                        block_offset = block_end;
+                        continue;
+                    }
+                    if block_offset > bottom {
+                        break;
+                    }
+                    if let crate::markdown::DocBlock::Text { text, .. } = block {
+                        for (local_idx, line) in text.lines.iter().enumerate() {
+                            let abs = block_offset + local_idx as u32;
+                            if abs > bottom {
+                                break 'blocks;
+                            }
+                            // Compute display width of this line from its spans.
+                            let line_width: u16 = line
+                                .spans
+                                .iter()
+                                .map(|s| {
+                                    unicode_width::UnicodeWidthStr::width(s.content.as_ref())
+                                        .min(u16::MAX as usize)
+                                        as u16
+                                })
+                                .fold(0u16, |acc, w| acc.saturating_add(w));
+                            if let Some((sc, ec)) = range.char_range_on_line(abs, line_width) {
+                                parts.push(extract_line_text_range(line, sc, ec));
+                            }
+                        }
+                    }
+                    block_offset = block_end;
+                }
+                parts.join("\n")
+            }
+        };
         copy_to_clipboard(&text);
         tab.view.visual_mode = None;
     }
@@ -3685,9 +3777,22 @@ mod tests {
         (app, path)
     }
 
+    /// Helper to build a line-mode `VisualRange` for tests.
+    fn line_vrange(anchor: u32, cursor: u32) -> crate::ui::markdown_view::VisualRange {
+        use crate::ui::markdown_view::{VisualMode, VisualRange};
+        VisualRange {
+            mode: VisualMode::Line,
+            anchor_line: anchor,
+            anchor_col: 0,
+            cursor_line: cursor,
+            cursor_col: 0,
+        }
+    }
+
     #[test]
-    fn v_enters_visual_mode() {
+    fn capital_v_enters_line_visual_mode() {
         let (mut app, _path) = make_rendered_app("line0\nline1\nline2");
+        use crate::ui::markdown_view::{VisualMode, VisualRange};
         // Move cursor to line 2.
         if let Some(tab) = app.tabs.active_tab_mut() {
             tab.view.cursor_line = 2;
@@ -3696,37 +3801,60 @@ mod tests {
         let tab = app.tabs.active_tab().unwrap();
         assert_eq!(
             tab.view.visual_mode,
-            Some(crate::ui::markdown_view::VisualRange {
-                anchor: 2,
-                cursor: 2
+            Some(VisualRange {
+                mode: VisualMode::Line,
+                anchor_line: 2,
+                anchor_col: 0,
+                cursor_line: 2,
+                cursor_col: 0,
             }),
-            "V must enter visual mode at current cursor"
+            "V must enter line visual mode at current cursor"
+        );
+    }
+
+    #[test]
+    fn lowercase_v_enters_char_visual_mode() {
+        let (mut app, _path) = make_rendered_app("line0\nline1\nline2");
+        use crate::ui::markdown_view::{VisualMode, VisualRange};
+        if let Some(tab) = app.tabs.active_tab_mut() {
+            tab.view.cursor_line = 1;
+            tab.view.cursor_col = 3;
+        }
+        app.handle_key(KeyCode::Char('v'), KeyModifiers::NONE);
+        let tab = app.tabs.active_tab().unwrap();
+        assert_eq!(
+            tab.view.visual_mode,
+            Some(VisualRange {
+                mode: VisualMode::Char,
+                anchor_line: 1,
+                anchor_col: 3,
+                cursor_line: 1,
+                cursor_col: 3,
+            }),
+            "v must enter char visual mode at current cursor/col"
         );
     }
 
     #[test]
     fn v_in_visual_mode_exits_visual_mode() {
         let (mut app, _path) = make_rendered_app("line0\nline1\nline2");
-        // Enter visual mode manually.
+        // Enter line visual mode manually, then press V again to exit.
         if let Some(tab) = app.tabs.active_tab_mut() {
-            tab.view.visual_mode = Some(crate::ui::markdown_view::VisualRange {
-                anchor: 1,
-                cursor: 2,
-            });
+            tab.view.visual_mode = Some(line_vrange(1, 2));
         }
         app.handle_key(KeyCode::Char('V'), KeyModifiers::NONE);
         let tab = app.tabs.active_tab().unwrap();
-        assert_eq!(tab.view.visual_mode, None, "V in visual mode must exit it");
+        assert_eq!(
+            tab.view.visual_mode, None,
+            "V in line visual mode must exit it"
+        );
     }
 
     #[test]
     fn esc_in_visual_mode_exits_visual_mode() {
         let (mut app, _path) = make_rendered_app("line0\nline1");
         if let Some(tab) = app.tabs.active_tab_mut() {
-            tab.view.visual_mode = Some(crate::ui::markdown_view::VisualRange {
-                anchor: 0,
-                cursor: 1,
-            });
+            tab.view.visual_mode = Some(line_vrange(0, 1));
         }
         app.handle_key(KeyCode::Esc, KeyModifiers::NONE);
         let tab = app.tabs.active_tab().unwrap();
@@ -3747,10 +3875,7 @@ mod tests {
             tab.view.rendered = vec![block];
             tab.view.total_lines = total;
             tab.view.cursor_line = 2;
-            tab.view.visual_mode = Some(crate::ui::markdown_view::VisualRange {
-                anchor: 2,
-                cursor: 2,
-            });
+            tab.view.visual_mode = Some(line_vrange(2, 2));
         }
         app.focus = Focus::Viewer;
         // Press j to move down.
@@ -3760,8 +3885,8 @@ mod tests {
             .view
             .visual_mode
             .expect("visual mode must still be active");
-        assert_eq!(range.anchor, 2, "anchor must stay at 2");
-        assert_eq!(range.cursor, 3, "cursor must extend to 3 after j");
+        assert_eq!(range.anchor_line, 2, "anchor must stay at 2");
+        assert_eq!(range.cursor_line, 3, "cursor must extend to 3 after j");
     }
 
     #[test]
@@ -3782,10 +3907,7 @@ mod tests {
             tab.view.current_path = Some(path.clone());
             // Select logical lines 1..=2 (source lines 1="beta", 2="gamma").
             tab.view.cursor_line = 1;
-            tab.view.visual_mode = Some(crate::ui::markdown_view::VisualRange {
-                anchor: 1,
-                cursor: 2,
-            });
+            tab.view.visual_mode = Some(line_vrange(1, 2));
         }
         app.focus = Focus::Viewer;
         // Press y — should yank and exit visual mode.
@@ -3802,6 +3924,49 @@ mod tests {
         assert_eq!(
             expected, "beta\ngamma",
             "yank text must span visual selection"
+        );
+    }
+
+    // ── New: h/l cursor column movement ─────────────────────────────────────
+
+    #[test]
+    fn h_moves_cursor_col_left() {
+        let mut app = App::new(PathBuf::from("."), None);
+        let path = PathBuf::from("/fake/hl_test.md");
+        app.tabs.open_or_focus(&path, true);
+        app.tabs.view_height = 20;
+        // Build a line wide enough to have horizontal room.
+        if let Some(tab) = app.tabs.active_tab_mut() {
+            let block = make_text_block(&["hello world"]);
+            tab.view.rendered = vec![block];
+            tab.view.total_lines = 1;
+            tab.view.cursor_col = 5;
+        }
+        app.focus = Focus::Viewer;
+        app.handle_key(KeyCode::Char('h'), KeyModifiers::NONE);
+        let tab = app.tabs.active_tab().unwrap();
+        assert_eq!(tab.view.cursor_col, 4, "h must decrement cursor_col");
+    }
+
+    #[test]
+    fn l_moves_cursor_col_right_clamped() {
+        let mut app = App::new(PathBuf::from("."), None);
+        let path = PathBuf::from("/fake/hl_clamp.md");
+        app.tabs.open_or_focus(&path, true);
+        app.tabs.view_height = 20;
+        // "abc" is 3 cells wide — max cursor_col = 2.
+        if let Some(tab) = app.tabs.active_tab_mut() {
+            let block = make_text_block(&["abc"]);
+            tab.view.rendered = vec![block];
+            tab.view.total_lines = 1;
+            tab.view.cursor_col = 2; // already at end
+        }
+        app.focus = Focus::Viewer;
+        app.handle_key(KeyCode::Char('l'), KeyModifiers::NONE);
+        let tab = app.tabs.active_tab().unwrap();
+        assert_eq!(
+            tab.view.cursor_col, 2,
+            "l at end of line must not exceed line_width-1"
         );
     }
 

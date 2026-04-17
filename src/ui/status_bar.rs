@@ -25,16 +25,21 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         Focus::Editor => "EDIT",
     };
 
-    // Override the label with "VISUAL" when the viewer has an active visual-line
-    // selection, so the user always knows they are in selection mode.
-    let focus_label = if app.focus == Focus::Viewer
-        && app
+    // Override the label when the viewer has an active visual selection.
+    // Char-wise mode (`v`) shows "VISUAL"; line-wise mode (`V`) shows "VISUAL LINE".
+    // This matches vim's convention so users can tell the two modes apart.
+    let focus_label = if app.focus == Focus::Viewer {
+        use crate::ui::markdown_view::VisualMode;
+        match app
             .tabs
             .active_tab()
             .and_then(|t| t.view.visual_mode.as_ref())
-            .is_some()
-    {
-        "VISUAL"
+            .map(|r| r.mode)
+        {
+            Some(VisualMode::Char) => "VISUAL",
+            Some(VisualMode::Line) => "VISUAL LINE",
+            None => focus_label,
+        }
     } else {
         focus_label
     };
@@ -46,14 +51,14 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         let total = tab.view.total_lines.max(1);
         let pct = (tab.view.cursor_line * 100 / total).min(100);
         let tab_idx = app.tabs.active_index().map(|i| i + 1).unwrap_or(0);
-        // Show both the absolute cursor line (1-indexed for humans) and the
-        // percentage through the document so users can see `j`/`k`/`d`/`u`
-        // navigation reflected immediately.
+        // Show line (1-indexed), column (1-indexed), total lines, and percentage so
+        // users can see j/k/h/l navigation reflected immediately in the status bar.
         format!(
-            " | [{tab_idx}/{tab_count}] {} ({}/{}, {}%)",
+            " | [{tab_idx}/{tab_count}] {} ({}/{}, col {}, {}%)",
             tab.view.file_name,
             tab.view.cursor_line + 1,
             tab.view.total_lines,
+            tab.view.cursor_col + 1,
             pct
         )
     } else {

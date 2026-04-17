@@ -810,10 +810,7 @@ mod tests {
     #[test]
     fn logical_line_at_source_duplicate_across_blocks_returns_first() {
         let b1 = text_block_with_sources(&["real content"], &[306]);
-        let b2 = text_block_with_sources(
-            &["other", "dip-artifact"],
-            &[310, 306],
-        );
+        let b2 = text_block_with_sources(&["other", "dip-artifact"], &[310, 306]);
         // b1 height=1, b2 starts at offset 1. Target 306 is in b1 at 0.
         assert_eq!(logical_line_at_source(&[b1, b2], 306), Some(0));
     }

@@ -17,6 +17,7 @@ use ratatui::{
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Cached rendering of a single table at a given layout width.
 #[derive(Debug)]
@@ -24,35 +25,102 @@ pub struct TableLayout {
     pub text: Text<'static>,
 }
 
-/// Anchor and cursor bounds of a visual-line selection in the viewer.
+/// Whether the visual selection is character-wise or line-wise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VisualMode {
+    /// `v` — selection spans a character range across lines.
+    Char,
+    /// `V` — selection spans full logical lines.
+    Line,
+}
+
+/// Anchor and cursor bounds of a visual selection in the viewer.
 ///
-/// Both values are absolute logical line indices in the rendered output
-/// (same coordinate space as `cursor_line`).  The selected range is
-/// `min(anchor, cursor)..=max(anchor, cursor)` — inclusive on both ends,
-/// normalising the direction of selection so callers need not distinguish
-/// upward from downward selections.
+/// Absolute logical line indices are in the same coordinate space as
+/// `cursor_line`. For line mode the selected range is
+/// `min(anchor_line, cursor_line)..=max(anchor_line, cursor_line)` covering
+/// every column. For char mode the first and last lines may be partial.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VisualRange {
+    /// Whether the selection is character-wise or line-wise.
+    pub mode: VisualMode,
     /// The line where the selection began (does not move during extension).
-    pub anchor: u32,
-    /// The current end of the selection, tracking the cursor.
-    pub cursor: u32,
+    pub anchor_line: u32,
+    /// The display column where the selection began (0-based terminal cells).
+    pub anchor_col: u16,
+    /// The current end line, tracking the cursor.
+    pub cursor_line: u32,
+    /// The current end column, tracking the cursor (0-based terminal cells).
+    pub cursor_col: u16,
 }
 
 impl VisualRange {
-    /// Smaller of `anchor` and `cursor` — the top of the selection.
-    pub fn top(&self) -> u32 {
-        self.anchor.min(self.cursor)
+    /// Smaller of `anchor_line` and `cursor_line` — the top line of the selection.
+    pub fn top_line(&self) -> u32 {
+        self.anchor_line.min(self.cursor_line)
     }
 
-    /// Larger of `anchor` and `cursor` — the bottom of the selection.
-    pub fn bottom(&self) -> u32 {
-        self.anchor.max(self.cursor)
+    /// Larger of `anchor_line` and `cursor_line` — the bottom line of the selection.
+    pub fn bottom_line(&self) -> u32 {
+        self.anchor_line.max(self.cursor_line)
     }
 
-    /// `true` if the absolute logical `line` is inside the selection (inclusive).
+    /// `true` if the absolute logical `line` is inside the selection range
+    /// (inclusive on both ends).
+    ///
+    /// This checks line containment only — use [`char_range_on_line`] for
+    /// column-precise testing in char mode.
     pub fn contains(&self, line: u32) -> bool {
-        line >= self.top() && line <= self.bottom()
+        line >= self.top_line() && line <= self.bottom_line()
+    }
+
+    /// Return the `(start_col, end_col_exclusive)` range on `line` that is
+    /// selected, or `None` if `line` is outside the selection.
+    ///
+    /// `line_width` is the display width (in terminal cells) of the logical
+    /// line at `line`; it is used to compute the end of a full-line selection.
+    pub fn char_range_on_line(&self, line: u32, line_width: u16) -> Option<(u16, u16)> {
+        if line < self.top_line() || line > self.bottom_line() {
+            return None;
+        }
+        match self.mode {
+            VisualMode::Line => Some((0, line_width)),
+            VisualMode::Char => {
+                let (start_line, start_col, end_line, end_col) = self.ordered();
+                if self.top_line() == self.bottom_line() {
+                    // Same-line selection: highlight [start_col, end_col] inclusive.
+                    Some((start_col, end_col + 1))
+                } else if line == start_line {
+                    Some((start_col, line_width))
+                } else if line == end_line {
+                    Some((0, end_col + 1))
+                } else {
+                    Some((0, line_width)) // middle line — fully selected
+                }
+            }
+        }
+    }
+
+    /// Return `(start_line, start_col, end_line, end_col)` ordered so that
+    /// `(start_line, start_col)` is positionally before `(end_line, end_col)`.
+    fn ordered(&self) -> (u32, u16, u32, u16) {
+        let anchor_before = self.anchor_line < self.cursor_line
+            || (self.anchor_line == self.cursor_line && self.anchor_col <= self.cursor_col);
+        if anchor_before {
+            (
+                self.anchor_line,
+                self.anchor_col,
+                self.cursor_line,
+                self.cursor_col,
+            )
+        } else {
+            (
+                self.cursor_line,
+                self.cursor_col,
+                self.anchor_line,
+                self.anchor_col,
+            )
+        }
     }
 }
 
@@ -87,6 +155,11 @@ pub struct MarkdownViewState {
     /// Current cursor position as an absolute rendered logical-line index.
     /// Same coordinate space as `scroll_offset`. Defaults to 0.
     pub cursor_line: u32,
+    /// Horizontal cursor position within the current logical line, measured in
+    /// terminal display cells (0-based). Used for char-wise visual mode (`v`)
+    /// and displayed in the status bar. Clamped to the line width on vertical
+    /// moves. Defaults to 0.
+    pub cursor_col: u16,
     /// Display name shown in the panel title.
     pub file_name: String,
     /// Absolute path of the loaded file.
@@ -174,6 +247,7 @@ impl MarkdownViewState {
         self.current_path = Some(path);
         self.scroll_offset = 0;
         self.cursor_line = 0;
+        self.cursor_col = 0;
         // Always clear visual-line selection when loading a new file so the
         // previous document's selection doesn't appear in the new one.
         self.visual_mode = None;
@@ -189,27 +263,33 @@ impl MarkdownViewState {
     /// Move the cursor down by `n` logical lines, clamped to the last line.
     ///
     /// When visual mode is active, the selection's `cursor` end is extended to
-    /// track the new cursor position; the `anchor` stays fixed.
+    /// track the new cursor position; the `anchor` stays fixed. `cursor_col`
+    /// is clamped to the new line's display width (vim-style column clamping).
     ///
     /// Does not update `scroll_offset`; call [`scroll_to_cursor`] afterward.
     pub fn cursor_down(&mut self, n: u32) {
         let max = self.total_lines.saturating_sub(1);
         self.cursor_line = self.cursor_line.saturating_add(n).min(max);
+        self.clamp_cursor_col();
         if let Some(range) = self.visual_mode.as_mut() {
-            range.cursor = self.cursor_line;
+            range.cursor_line = self.cursor_line;
+            range.cursor_col = self.cursor_col;
         }
     }
 
     /// Move the cursor up by `n` logical lines, saturating at 0.
     ///
     /// When visual mode is active, the selection's `cursor` end is extended to
-    /// track the new cursor position; the `anchor` stays fixed.
+    /// track the new cursor position; the `anchor` stays fixed. `cursor_col`
+    /// is clamped to the new line's display width.
     ///
     /// Does not update `scroll_offset`; call [`scroll_to_cursor`] afterward.
     pub fn cursor_up(&mut self, n: u32) {
         self.cursor_line = self.cursor_line.saturating_sub(n);
+        self.clamp_cursor_col();
         if let Some(range) = self.visual_mode.as_mut() {
-            range.cursor = self.cursor_line;
+            range.cursor_line = self.cursor_line;
+            range.cursor_col = self.cursor_col;
         }
     }
 
@@ -219,8 +299,10 @@ impl MarkdownViewState {
     pub fn cursor_to_top(&mut self) {
         self.cursor_line = 0;
         self.scroll_offset = 0;
+        self.clamp_cursor_col();
         if let Some(range) = self.visual_mode.as_mut() {
-            range.cursor = 0;
+            range.cursor_line = 0;
+            range.cursor_col = self.cursor_col;
         }
     }
 
@@ -234,9 +316,58 @@ impl MarkdownViewState {
     pub fn cursor_to_bottom(&mut self, view_height: u32) {
         self.cursor_line = self.total_lines.saturating_sub(1);
         self.scroll_to_cursor(view_height);
+        self.clamp_cursor_col();
         if let Some(range) = self.visual_mode.as_mut() {
-            range.cursor = self.cursor_line;
+            range.cursor_line = self.cursor_line;
+            range.cursor_col = self.cursor_col;
         }
+    }
+
+    /// Clamp `cursor_col` to `min(cursor_col, line_width - 1)` for the
+    /// current `cursor_line`. Called after every vertical move to match vim's
+    /// column-clamping behaviour.
+    pub fn clamp_cursor_col(&mut self) {
+        let width = self.current_line_width();
+        if width == 0 {
+            self.cursor_col = 0;
+        } else {
+            self.cursor_col = self.cursor_col.min(width - 1);
+        }
+    }
+
+    /// Display width (in terminal cells) of the logical line at `cursor_line`.
+    ///
+    /// Walks the rendered blocks to find the [`Line`] at `cursor_line` and sums
+    /// the display width of each span's content via `UnicodeWidthStr`. Returns 0
+    /// for empty lines or when `cursor_line` is out of range.
+    ///
+    /// Not cached — only called on key events, not per frame.
+    pub fn current_line_width(&self) -> u16 {
+        let mut offset = 0u32;
+        for block in &self.rendered {
+            let h = block.height();
+            if self.cursor_line < offset + h {
+                let local = (self.cursor_line - offset) as usize;
+                let width = match block {
+                    DocBlock::Text { text, .. } => text
+                        .lines
+                        .get(local)
+                        .map(|l| {
+                            l.spans
+                                .iter()
+                                .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+                                .sum::<usize>()
+                        })
+                        .unwrap_or(0),
+                    // Mermaid and Table blocks have opaque content — treat them
+                    // as having no horizontal extent for cursor purposes.
+                    DocBlock::Mermaid { .. } | DocBlock::Table(_) => 0,
+                };
+                return width.min(u16::MAX as usize) as u16;
+            }
+            offset += h;
+        }
+        0
     }
 
     /// Adjust `scroll_offset` so the cursor sits as close to the vertical
@@ -733,12 +864,9 @@ fn draw_mermaid_block(
                 // draw one bar for the cursor row.  The image overwrites most of
                 // each bar, leaving only a thin coloured strip around the padding.
                 let highlighted_rows: Vec<u32> = match params.visual_mode {
-                    Some(range) => {
-                        let top = range.top().max(params.block_start) - params.block_start;
-                        let bottom = range.bottom().min(params.block_end.saturating_sub(1))
-                            - params.block_start;
-                        (top..=bottom).collect()
-                    }
+                    Some(range) => (0..params.block_end.saturating_sub(params.block_start))
+                        .filter(|&offset| range.contains(params.block_start + offset))
+                        .collect(),
                     None if cursor_in_block => {
                         vec![params.cursor_line - params.block_start]
                     }
@@ -924,8 +1052,10 @@ fn render_text_with_gutter(
 /// background colour to each.
 ///
 /// In **visual mode** every absolute logical line that falls inside the
-/// `VisualRange` and is also within the visible clip is highlighted.  In
-/// **normal mode** only the single cursor row is highlighted.
+/// [`VisualRange`] and is also within the visible clip is highlighted. For
+/// line-wise mode (`V`) the full line is patched; for char-wise mode (`v`)
+/// only the selected column range is patched via [`highlight_columns`].
+/// In **normal mode** only the single cursor row is highlighted (full-line).
 ///
 /// # Arguments
 ///
@@ -948,20 +1078,38 @@ fn apply_block_highlight(
 ) {
     match visual_mode {
         Some(range) => {
-            // Highlight every visible line inside the selection range.
             // Iterate over absolute logical lines that belong to this block
             // and fall within the visible clip.
             let block_visible_start = block_start + clip_start as u32;
             let block_visible_end = block_start + clip_start as u32 + lines.len() as u32;
             for abs in block_visible_start..block_visible_end {
-                if range.contains(abs) {
-                    let idx = (abs - block_visible_start) as usize;
-                    patch_cursor_highlight(lines, idx, bg);
+                let idx = (abs - block_visible_start) as usize;
+                // Compute the display width of this logical line from the current span content.
+                let line_width = lines
+                    .get(idx)
+                    .map(|l| {
+                        l.spans
+                            .iter()
+                            .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+                            .sum::<usize>()
+                            .min(u16::MAX as usize) as u16
+                    })
+                    .unwrap_or(0);
+                if let Some((sc, ec)) = range.char_range_on_line(abs, line_width) {
+                    if sc == 0 && ec >= line_width {
+                        // Full-line highlight — covers line mode and char-mode middle lines.
+                        patch_cursor_highlight(lines, idx, bg);
+                    } else {
+                        // Partial-line highlight — char mode first/last line.
+                        if let Some(line) = lines.get(idx) {
+                            lines[idx] = highlight_columns(line, sc, ec, bg);
+                        }
+                    }
                 }
             }
         }
         None => {
-            // Normal mode: highlight only the cursor row.
+            // Normal mode: highlight only the cursor row (full line).
             if cursor_line >= block_start && cursor_line < block_end {
                 let cursor_relative = (cursor_line - block_start) as usize;
                 if cursor_relative >= clip_start {
@@ -971,6 +1119,136 @@ fn apply_block_highlight(
             }
         }
     }
+}
+
+/// Highlight a column range within a single rendered line by splitting spans
+/// at the `start_col` and `end_col` boundaries and patching the background of
+/// the selected portion.
+///
+/// Returns a new [`Line`] with the highlight applied. Spans outside the range
+/// keep their original style; spans inside get `bg` patched; spans that straddle
+/// a boundary are split by walking characters with [`UnicodeWidthChar`], building
+/// separate before/inside/after buffers while preserving each span's base style.
+///
+/// # Arguments
+///
+/// * `line`      – the rendered line to highlight.
+/// * `start_col` – first selected display column (0-based, inclusive).
+/// * `end_col`   – one past the last selected display column (exclusive).
+/// * `bg`        – background colour for the selected portion.
+fn highlight_columns(
+    line: &Line<'static>,
+    start_col: u16,
+    end_col: u16,
+    bg: Color,
+) -> Line<'static> {
+    if start_col >= end_col {
+        return line.clone();
+    }
+    let sel_style = Style::default().bg(bg);
+    let mut out: Vec<Span<'static>> = Vec::new();
+    let mut col: u16 = 0;
+
+    for span in &line.spans {
+        let span_start_col = col;
+        let span_text = span.content.as_ref();
+        // Fast path: entire span is outside the selection.
+        let span_width = UnicodeWidthStr::width(span_text) as u16;
+        let span_end_col = col + span_width;
+
+        if span_end_col <= start_col || span_start_col >= end_col {
+            // Fully outside: clone unchanged.
+            out.push(span.clone());
+            col = span_end_col;
+            continue;
+        }
+        if span_start_col >= start_col && span_end_col <= end_col {
+            // Fully inside: patch background.
+            out.push(Span::styled(
+                span.content.clone(),
+                span.style.patch(sel_style),
+            ));
+            col = span_end_col;
+            continue;
+        }
+
+        // Straddles a boundary — walk characters individually.
+        // We build three string buffers: before, inside, after.
+        let mut before = String::new();
+        let mut inside = String::new();
+        let mut after = String::new();
+        let mut c_col = span_start_col;
+        for ch in span_text.chars() {
+            // unicode_width returns 0 for control characters; treat as 1 cell.
+            let w = UnicodeWidthChar::width(ch).unwrap_or(1) as u16;
+            let next = c_col + w;
+            if next <= start_col {
+                before.push(ch);
+            } else if c_col >= end_col {
+                after.push(ch);
+            } else {
+                // Character overlaps the selection boundary or is inside.
+                // Put the whole character in whichever region its start falls in.
+                if c_col < start_col {
+                    // Straddles start boundary: put in `before`.
+                    before.push(ch);
+                } else {
+                    inside.push(ch);
+                }
+            }
+            c_col = next;
+        }
+        if !before.is_empty() {
+            out.push(Span::styled(before, span.style));
+        }
+        if !inside.is_empty() {
+            out.push(Span::styled(inside, span.style.patch(sel_style)));
+        }
+        if !after.is_empty() {
+            out.push(Span::styled(after, span.style));
+        }
+        col = span_end_col;
+    }
+
+    Line::from(out)
+}
+
+/// Extract the plain-text content of a rendered line within a display-column
+/// range `[start_col, end_col)`.
+///
+/// Walks spans character-by-character, tracking cumulative display-column
+/// position with [`UnicodeWidthChar`]. Characters whose display range falls
+/// entirely within `[start_col, end_col)` are collected into the returned
+/// [`String`].
+///
+/// # Arguments
+///
+/// * `line`      – the rendered line to extract from.
+/// * `start_col` – first selected display column (0-based, inclusive).
+/// * `end_col`   – one past the last selected display column (exclusive).
+pub fn extract_line_text_range(line: &Line<'static>, start_col: u16, end_col: u16) -> String {
+    if start_col >= end_col {
+        return String::new();
+    }
+    let mut out = String::new();
+    let mut col: u16 = 0;
+    for span in &line.spans {
+        for ch in span.content.as_ref().chars() {
+            let w = UnicodeWidthChar::width(ch).unwrap_or(1) as u16;
+            let next = col + w;
+            if col >= end_col {
+                break;
+            }
+            if next > start_col {
+                out.push(ch);
+            }
+            col = next;
+        }
+        if col >= end_col {
+            break;
+        }
+    }
+    out
 }
 
 /// Apply the cursor-highlight background to one row inside a visible slice.
@@ -1107,7 +1385,7 @@ fn line_visual_rows(line: &Line, content_width: u16) -> u32 {
     let width: usize = line
         .spans
         .iter()
-        .map(|s| unicode_width::UnicodeWidthStr::width(s.content.as_ref()))
+        .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
         .sum();
     if width == 0 {
         return 1;
@@ -1203,14 +1481,23 @@ mod tests {
 
     // ── VisualRange ──────────────────────────────────────────────────────────
 
+    /// Helper to build a line-mode `VisualRange` for tests that only care about
+    /// line containment (no column logic).
+    fn line_range(anchor: u32, cursor: u32) -> VisualRange {
+        VisualRange {
+            mode: VisualMode::Line,
+            anchor_line: anchor,
+            anchor_col: 0,
+            cursor_line: cursor,
+            cursor_col: 0,
+        }
+    }
+
     /// A selection anchored at 3 with cursor at 5 should contain 3, 4, 5 and
     /// exclude lines outside the range.
     #[test]
     fn visual_range_contains_inclusive() {
-        let r = VisualRange {
-            anchor: 3,
-            cursor: 5,
-        };
+        let r = line_range(3, 5);
         assert!(r.contains(3), "should contain anchor");
         assert!(r.contains(4), "should contain middle");
         assert!(r.contains(5), "should contain cursor");
@@ -1219,13 +1506,10 @@ mod tests {
     }
 
     /// A reversed selection (anchor > cursor) should behave identically because
-    /// `top()`/`bottom()` normalise the direction.
+    /// `top_line()`/`bottom_line()` normalise the direction.
     #[test]
     fn visual_range_contains_reversed() {
-        let r = VisualRange {
-            anchor: 5,
-            cursor: 3,
-        };
+        let r = line_range(5, 3);
         assert!(r.contains(3));
         assert!(r.contains(4));
         assert!(r.contains(5));
@@ -1240,10 +1524,7 @@ mod tests {
         use crate::theme::{Palette, Theme};
         let palette = Palette::from_theme(Theme::Default);
         let mut view = MarkdownViewState {
-            visual_mode: Some(VisualRange {
-                anchor: 2,
-                cursor: 4,
-            }),
+            visual_mode: Some(line_range(2, 4)),
             ..Default::default()
         };
         view.load(
@@ -1263,16 +1544,13 @@ mod tests {
         let mut v = MarkdownViewState {
             total_lines: 10,
             cursor_line: 3,
-            visual_mode: Some(VisualRange {
-                anchor: 3,
-                cursor: 3,
-            }),
+            visual_mode: Some(line_range(3, 3)),
             ..Default::default()
         };
         v.cursor_down(2);
         let range = v.visual_mode.unwrap();
-        assert_eq!(range.anchor, 3, "anchor must stay fixed");
-        assert_eq!(range.cursor, 5, "cursor must extend down");
+        assert_eq!(range.anchor_line, 3, "anchor must stay fixed");
+        assert_eq!(range.cursor_line, 5, "cursor must extend down");
     }
 
     #[test]
@@ -1280,16 +1558,183 @@ mod tests {
         let mut v = MarkdownViewState {
             total_lines: 10,
             cursor_line: 5,
-            visual_mode: Some(VisualRange {
-                anchor: 5,
-                cursor: 5,
-            }),
+            visual_mode: Some(line_range(5, 5)),
             ..Default::default()
         };
         v.cursor_up(3);
         let range = v.visual_mode.unwrap();
-        assert_eq!(range.anchor, 5, "anchor must stay fixed");
-        assert_eq!(range.cursor, 2, "cursor must move up");
+        assert_eq!(range.anchor_line, 5, "anchor must stay fixed");
+        assert_eq!(range.cursor_line, 2, "cursor must move up");
+    }
+
+    // ── highlight_columns ────────────────────────────────────────────────────
+
+    /// Full-line highlight: start=0, end=width → every span gets bg patched.
+    #[test]
+    fn highlight_columns_full_line() {
+        use ratatui::style::Color;
+        let bg = Color::Rgb(100, 0, 0);
+        let line = Line::from(vec![Span::raw("hello"), Span::raw(" world")]);
+        let result = highlight_columns(&line, 0, 11, bg);
+        for span in &result.spans {
+            assert_eq!(span.style.bg, Some(bg), "all spans must carry bg");
+        }
+    }
+
+    /// Partial single-span selection should produce (before, highlighted, after).
+    #[test]
+    fn highlight_columns_partial_single_span() {
+        use ratatui::style::Color;
+        let bg = Color::Rgb(0, 100, 0);
+        // "hello" is 5 cells wide; select cols 1..=3 → "ell"
+        let line = Line::from(Span::raw("hello"));
+        let result = highlight_columns(&line, 1, 4, bg);
+        // Expect: "h" (no bg), "ell" (bg), "o" (no bg)
+        assert_eq!(result.spans.len(), 3, "must split into 3 spans");
+        assert_eq!(result.spans[0].content.as_ref(), "h");
+        assert_eq!(result.spans[0].style.bg, None);
+        assert_eq!(result.spans[1].content.as_ref(), "ell");
+        assert_eq!(result.spans[1].style.bg, Some(bg));
+        assert_eq!(result.spans[2].content.as_ref(), "o");
+        assert_eq!(result.spans[2].style.bg, None);
+    }
+
+    /// Selection across two spans: each span's base style must be preserved on
+    /// the non-selected portion and patched with bg on the selected portion.
+    #[test]
+    fn highlight_columns_across_spans() {
+        use ratatui::style::{Color, Style};
+        let bg = Color::Rgb(0, 0, 200);
+        let s1 = Style::default().fg(Color::Red);
+        let s2 = Style::default().fg(Color::Green);
+        // "abc" (3) + "def" (3) = 6 cols total; select cols 1..5 → "bcde"
+        let line = Line::from(vec![Span::styled("abc", s1), Span::styled("def", s2)]);
+        let result = highlight_columns(&line, 1, 5, bg);
+        // Expect: "a"(s1), "bc"(s1+bg), "de"(s2+bg), "f"(s2)
+        assert_eq!(result.spans.len(), 4);
+        assert_eq!(result.spans[0].content.as_ref(), "a");
+        assert_eq!(result.spans[0].style.fg, Some(Color::Red));
+        assert_eq!(result.spans[0].style.bg, None);
+        assert_eq!(result.spans[1].content.as_ref(), "bc");
+        assert_eq!(result.spans[1].style.bg, Some(bg));
+        assert_eq!(result.spans[2].content.as_ref(), "de");
+        assert_eq!(result.spans[2].style.bg, Some(bg));
+        assert_eq!(result.spans[3].content.as_ref(), "f");
+        assert_eq!(result.spans[3].style.fg, Some(Color::Green));
+        assert_eq!(result.spans[3].style.bg, None);
+    }
+
+    /// Empty line: highlight_columns must return an empty line without panicking.
+    #[test]
+    fn highlight_columns_empty_line() {
+        use ratatui::style::Color;
+        let bg = Color::Rgb(1, 2, 3);
+        let line = Line::from(vec![]);
+        let result = highlight_columns(&line, 0, 5, bg);
+        assert!(result.spans.is_empty(), "empty line stays empty");
+    }
+
+    // ── VisualRange::char_range_on_line ──────────────────────────────────────
+
+    /// Same-line char selection returns [start_col, end_col+1).
+    #[test]
+    fn visual_range_char_same_line() {
+        let r = VisualRange {
+            mode: VisualMode::Char,
+            anchor_line: 2,
+            anchor_col: 3,
+            cursor_line: 2,
+            cursor_col: 7,
+        };
+        assert_eq!(r.char_range_on_line(2, 20), Some((3, 8)));
+        assert_eq!(r.char_range_on_line(1, 20), None);
+        assert_eq!(r.char_range_on_line(3, 20), None);
+    }
+
+    /// Multi-line char selection: first line partial, middle full, last partial.
+    #[test]
+    fn visual_range_char_multi_line() {
+        let r = VisualRange {
+            mode: VisualMode::Char,
+            anchor_line: 1,
+            anchor_col: 4,
+            cursor_line: 3,
+            cursor_col: 2,
+        };
+        // Line 0: outside selection.
+        assert_eq!(r.char_range_on_line(0, 10), None);
+        // Line 1 (start line): from anchor_col to end of line.
+        assert_eq!(r.char_range_on_line(1, 10), Some((4, 10)));
+        // Line 2 (middle): full line.
+        assert_eq!(r.char_range_on_line(2, 8), Some((0, 8)));
+        // Line 3 (end line): from 0 to cursor_col+1.
+        assert_eq!(r.char_range_on_line(3, 10), Some((0, 3)));
+        // Line 4: outside.
+        assert_eq!(r.char_range_on_line(4, 10), None);
+    }
+
+    /// Line mode always returns (0, line_width) regardless of column fields.
+    #[test]
+    fn visual_range_line_mode_ignores_columns() {
+        let r = VisualRange {
+            mode: VisualMode::Line,
+            anchor_line: 2,
+            anchor_col: 5,
+            cursor_line: 4,
+            cursor_col: 9,
+        };
+        assert_eq!(r.char_range_on_line(2, 15), Some((0, 15)));
+        assert_eq!(r.char_range_on_line(3, 12), Some((0, 12)));
+        assert_eq!(r.char_range_on_line(4, 7), Some((0, 7)));
+        assert_eq!(r.char_range_on_line(1, 10), None);
+    }
+
+    // ── extract_line_text_range ──────────────────────────────────────────────
+
+    /// Basic substring extraction from a single-span line.
+    #[test]
+    fn extract_line_text_range_basic() {
+        let line = Line::from(Span::raw("hello world"));
+        // Extract "ello" (cols 1..5)
+        let s = extract_line_text_range(&line, 1, 5);
+        assert_eq!(s, "ello");
+    }
+
+    /// Extract across two spans.
+    #[test]
+    fn extract_line_text_range_across_spans() {
+        let line = Line::from(vec![Span::raw("abc"), Span::raw("def")]);
+        // "bcd" = cols 1..4
+        let s = extract_line_text_range(&line, 1, 4);
+        assert_eq!(s, "bcd");
+    }
+
+    // ── clamp_cursor_col ─────────────────────────────────────────────────────
+
+    /// Moving to a shorter line must clamp cursor_col to line_width-1.
+    #[test]
+    fn clamp_cursor_col_on_short_line() {
+        // Build a view with one 10-char line followed by one 3-char line.
+        let block = DocBlock::Text {
+            text: Text::from(vec![
+                Line::from(Span::raw("0123456789")), // line 0: width=10
+                Line::from(Span::raw("abc")),        // line 1: width=3
+            ]),
+            links: vec![],
+            heading_anchors: vec![],
+            source_lines: vec![0, 1],
+        };
+        let mut v = MarkdownViewState {
+            total_lines: 2,
+            cursor_line: 0,
+            cursor_col: 9, // at end of line 0
+            rendered: vec![block],
+            ..Default::default()
+        };
+        // Move down to line 1 — cursor_col must clamp from 9 to 2.
+        v.cursor_down(1);
+        assert_eq!(v.cursor_line, 1);
+        assert_eq!(v.cursor_col, 2, "cursor_col must clamp to width-1=2");
     }
 
     /// Helper: build a MarkdownViewState with a given total_lines and

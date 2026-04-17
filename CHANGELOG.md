@@ -5,6 +5,31 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-04-17
+
+### Added
+- **Character-wise visual mode (`v`).** Press `v` in the viewer to
+  start a character-level selection. `h`/`l`/`Left`/`Right` move the
+  cursor horizontally within the line; `j`/`k`/`d`/`u`/`gg`/`G` move
+  vertically and clamp the column to the new line's width. `y` yanks
+  the exact character range to the clipboard; `Esc`/`v` cancels.
+  First/last lines of the selection are partially highlighted; middle
+  lines are fully highlighted. Spans are split at column boundaries
+  preserving per-span styles.
+- **Horizontal cursor (`cursor_col`).** The viewer now tracks a
+  column position within the current logical line. `h`/`l` move it
+  left/right. The status bar shows `col N` so the position is always
+  visible.
+- **Line-wise visual mode is now `V`** (uppercase, was also `V`
+  before) and shows `VISUAL LINE` in the status bar. `v` (lowercase)
+  is character-wise and shows `VISUAL`. Matches vim convention.
+
+### Changed
+- `VisualRange` now carries `mode` (`Char`/`Line`), `anchor_col`,
+  and `cursor_col` fields alongside the existing line fields.
+  `char_range_on_line` is the single method callers use to determine
+  highlighting — no mode-branching in the rendering pipeline.
+
 ## [1.5.3] - 2026-04-17
 
 ### Fixed
