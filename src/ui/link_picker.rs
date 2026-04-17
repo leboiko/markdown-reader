@@ -60,7 +60,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
 
     let area = f.area();
-    let height = (n.min((area.height as usize).saturating_sub(4)) + 2) as u16;
+    let height = crate::cast::u16_sat(n.min((area.height as usize).saturating_sub(4)) + 2);
     let width = 72u16.min(area.width.saturating_sub(2));
 
     let popup_area = centered_rect(width, height, area);

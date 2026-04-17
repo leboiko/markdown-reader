@@ -1,5 +1,6 @@
 mod action;
 mod app;
+mod cast;
 mod config;
 mod event;
 mod fs;

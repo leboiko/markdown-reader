@@ -87,7 +87,7 @@ pub fn extract_text(state: &EditorState) -> String {
 
 /// The outcome of dispatching an ex command.
 #[must_use]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandOutcome {
     /// The command was handled; editor should remain open.
     Handled,
@@ -199,11 +199,9 @@ pub fn draw(f: &mut Frame, app: &mut App, viewer_area: Rect) {
 
     // Build the footer line.
     let mode_label = match editor.state.mode {
-        EditorMode::Normal => "-- NORMAL --",
+        EditorMode::Normal | EditorMode::Search => "-- NORMAL --",
         EditorMode::Insert => "-- INSERT --",
         EditorMode::Visual => "-- VISUAL --",
-        // Search is an internal edtui mode; display it as NORMAL to avoid confusion.
-        EditorMode::Search => "-- NORMAL --",
     };
     let dirty_marker = if editor.is_dirty() { " [+]" } else { "" };
 

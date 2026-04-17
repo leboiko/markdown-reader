@@ -5,6 +5,25 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.1] - 2026-04-17
+
+### Changed
+- **Code quality: zero clippy pedantic warnings.** Eliminated all 181
+  pedantic lint warnings across the codebase: 62 integer-cast warnings
+  resolved via new saturating-cast helpers in `src/cast.rs`
+  (`u32_sat`, `u16_sat`, `u16_from_u32`); 19 infallible casts replaced
+  with `From` trait calls; remaining 100 warnings fixed mechanically
+  (redundant closures, `let...else`, inlined format vars, merged match
+  arms, items-before-statements, etc.).
+- **Module split: `app.rs` (4093 lines) → `src/app/` (7 files,
+  largest 1009 lines).** Key handlers, search, file operations, yank,
+  table-modal logic, and tests each live in focused submodules.
+  `App` struct and top-level dispatch stay in `mod.rs`.
+- **Module split: `markdown_view.rs` (2000 lines) → `src/ui/markdown_view/`
+  (8 files, largest 528 lines).** Draw, state, highlight, mermaid draw,
+  gutter, visual-row math, and tests each in their own file.
+- **All production `unwrap()` calls replaced** with `let Some(...) else { return }` guards.
+
 ## [1.6.0] - 2026-04-17
 
 ### Added

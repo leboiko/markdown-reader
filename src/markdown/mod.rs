@@ -109,7 +109,7 @@ impl DocBlock {
     /// Number of display lines this block occupies.
     pub fn height(&self) -> u32 {
         match self {
-            DocBlock::Text { text, .. } => text.lines.len() as u32,
+            DocBlock::Text { text, .. } => crate::cast::u32_sat(text.lines.len()),
             DocBlock::Mermaid { cell_height, .. } => cell_height.get(),
             DocBlock::Table(t) => t.rendered_height,
         }
@@ -132,7 +132,7 @@ pub fn update_mermaid_heights(blocks: &[DocBlock], cache: &crate::mermaid::Merma
             ..
         } = block
         {
-            let new_h = cache.height(id, source);
+            let new_h = cache.height(*id, source);
             if new_h != cell_height.get() {
                 cell_height.set(new_h);
                 changed = true;
@@ -225,9 +225,9 @@ pub fn source_line_at(blocks: &[DocBlock], logical_line: u32) -> u32 {
                         // `source.lines().count()` is O(n) in the source length, but
                         // this function is only called from `enter_edit_mode`, never
                         // per frame, so the cost is acceptable.
-                        let content_count = source.lines().count() as u32;
+                        let content_count = crate::cast::u32_sat(source.lines().count());
                         let content_offset =
-                            (local as u32 - 1).min(content_count.saturating_sub(1));
+                            (crate::cast::u32_sat(local) - 1).min(content_count.saturating_sub(1));
                         *source_line + 1 + content_offset
                     }
                 }
@@ -295,10 +295,10 @@ pub fn logical_line_at_source(blocks: &[DocBlock], target_source: u32) -> Option
                 // rendering artifacts.
                 for (i, &s) in source_lines.iter().enumerate() {
                     if s == target_source {
-                        return Some(offset + i as u32);
+                        return Some(offset + crate::cast::u32_sat(i));
                     }
                     if s <= target_source {
-                        best = Some(offset + i as u32);
+                        best = Some(offset + crate::cast::u32_sat(i));
                     }
                 }
             }
@@ -307,7 +307,7 @@ pub fn logical_line_at_source(blocks: &[DocBlock], target_source: u32) -> Option
                 source,
                 ..
             } => {
-                let content_count = source.lines().count() as u32;
+                let content_count = crate::cast::u32_sat(source.lines().count());
                 let block_end_source = *source_line + 1 + content_count;
                 if target_source >= *source_line && target_source < block_end_source {
                     let local = target_source - *source_line;
@@ -328,7 +328,7 @@ pub fn logical_line_at_source(blocks: &[DocBlock], target_source: u32) -> Option
                     let rendered_row = if row_idx == 0 {
                         1u32 // header is at rendered index 1
                     } else {
-                        3 + (row_idx - 1) as u32 // body rows start at rendered index 3
+                        3 + crate::cast::u32_sat(row_idx - 1) // body rows start at rendered index 3
                     };
                     // row_idx increases monotonically and so does rendered_row;
                     // no later row can fit either, so stop scanning.
@@ -535,8 +535,7 @@ mod tests {
                         if content.contains(prefix) {
                             let text_after_prefix = content
                                 .split_once(prefix)
-                                .map(|(_, t)| t)
-                                .unwrap_or("")
+                                .map_or("", |(_, t)| t)
                                 .trim();
                             if !text_after_prefix.is_empty() {
                                 let anchor = heading_to_anchor(text_after_prefix);

@@ -23,7 +23,7 @@ pub fn layout_table(
     let num_cols = table
         .headers
         .len()
-        .max(table.rows.iter().map(|r| r.len()).max().unwrap_or(0));
+        .max(table.rows.iter().map(Vec::len).max().unwrap_or(0));
 
     if num_cols == 0 {
         return (Text::from(""), 0, false);
@@ -39,7 +39,7 @@ pub fn layout_table(
     // Too-narrow check: need at least 1 char per cell + 2 padding + borders.
     // Minimum layout: num_cols + 1 borders + 2*num_cols padding + num_cols*1 content
     // = num_cols*3 + num_cols + 1
-    let min_width = (num_cols as u16) * 3 + (num_cols as u16) + 1;
+    let min_width = crate::cast::u16_sat(num_cols) * 3 + crate::cast::u16_sat(num_cols) + 1;
     if inner_width < min_width {
         let placeholder = Line::from(Span::styled(
             "[ table \u{2014} too narrow, press \u{23ce} to expand ]".to_string(),
@@ -101,14 +101,14 @@ pub fn layout_table(
         )));
     }
 
-    let height = lines.len() as u32;
+    let height = crate::cast::u32_sat(lines.len());
     (Text::from(lines), height, was_truncated)
 }
 
 /// Compute column widths using a proportional fair-share algorithm.
 ///
 /// If all naturals fit within `target`, returns natural widths (clamped to >= 1).
-/// Otherwise, each column gets a minimum of min(6, natural_width), and remaining
+/// Otherwise, each column gets a minimum of `min(6, natural_width)`, and remaining
 /// space is distributed proportionally to each column's excess over its minimum.
 fn fair_share_widths(natural_widths: &[usize], num_cols: usize, target: usize) -> Vec<usize> {
     let naturals: Vec<usize> = (0..num_cols)
@@ -329,7 +329,7 @@ mod tests {
         // Stub row_source_lines: header at line 0, body rows at 2, 3, ...
         // Exact values don't matter for layout tests.
         let row_source_lines: Vec<u32> = std::iter::once(0)
-            .chain((2..).take(rows.len()).map(|i| i as u32))
+            .chain((2u32..).take(rows.len()))
             .collect();
         TableBlock {
             id: TableBlockId(0),

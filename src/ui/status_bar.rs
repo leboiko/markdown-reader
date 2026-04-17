@@ -50,7 +50,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     {
         let total = tab.view.total_lines.max(1);
         let pct = (tab.view.cursor_line * 100 / total).min(100);
-        let tab_idx = app.tabs.active_index().map(|i| i + 1).unwrap_or(0);
+        let tab_idx = app.tabs.active_index().map_or(0, |i| i + 1);
         // Show line (1-indexed), column (1-indexed), total lines, and percentage so
         // users can see j/k/h/l navigation reflected immediately in the status bar.
         format!(

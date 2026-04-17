@@ -44,6 +44,7 @@ impl TabPickerState {
 /// Render the tab picker overlay.
 ///
 /// Writes per-row Rects into `app.tab_picker_rects` for mouse hit-testing.
+#[allow(clippy::too_many_lines)]
 pub fn draw(f: &mut Frame, app: &mut App) {
     app.tab_picker_rects.clear();
 
@@ -53,15 +54,14 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
 
     let p = &app.palette;
-    let picker = match &app.tab_picker {
-        Some(s) => s,
-        None => return,
+    let Some(picker) = &app.tab_picker else {
+        return;
     };
     let cursor = picker.cursor;
     let active_idx = app.tabs.active_index();
 
     let area = f.area();
-    let height = (n.min((area.height as usize).saturating_sub(4)) + 2) as u16;
+    let height = crate::cast::u16_sat(n.min((area.height as usize).saturating_sub(4)) + 2);
     let width = 64u16.min(area.width.saturating_sub(2));
 
     let popup_area = centered_rect(width, height, area);
@@ -161,7 +161,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     {
         let row_rect = Rect {
             x: inner.x,
-            y: inner.y + slot as u16,
+            y: inner.y + crate::cast::u16_sat(slot),
             width: inner.width,
             height: 1,
         };
@@ -199,7 +199,7 @@ pub fn handle_key(app: &mut App, code: crossterm::event::KeyCode) -> bool {
             true
         }
         crossterm::event::KeyCode::Enter => {
-            let cursor = app.tab_picker.as_ref().map(|p| p.cursor).unwrap_or(0);
+            let cursor = app.tab_picker.as_ref().map_or(0, |p| p.cursor);
             if let Some(tab) = app.tabs.tabs.get(cursor) {
                 let id = tab.id;
                 app.tabs.set_active(id);
@@ -208,7 +208,7 @@ pub fn handle_key(app: &mut App, code: crossterm::event::KeyCode) -> bool {
             false
         }
         crossterm::event::KeyCode::Char('x') => {
-            let cursor = app.tab_picker.as_ref().map(|p| p.cursor).unwrap_or(0);
+            let cursor = app.tab_picker.as_ref().map_or(0, |p| p.cursor);
             if let Some(tab) = app.tabs.tabs.get(cursor) {
                 let id = tab.id;
                 app.tabs.close(id);

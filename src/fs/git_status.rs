@@ -31,9 +31,8 @@ pub fn collect(dir: &Path) -> HashMap<PathBuf, GitFileStatus> {
         _ => return HashMap::new(),
     };
 
-    let text = match std::str::from_utf8(&output) {
-        Ok(s) => s,
-        Err(_) => return HashMap::new(),
+    let Ok(text) = std::str::from_utf8(&output) else {
+        return HashMap::new();
     };
 
     let mut map: HashMap<PathBuf, GitFileStatus> = HashMap::new();
@@ -62,8 +61,7 @@ pub fn collect(dir: &Path) -> HashMap<PathBuf, GitFileStatus> {
 /// Map a two-character porcelain XY code to a [`GitFileStatus`].
 fn xy_to_status(xy: &str) -> GitFileStatus {
     match xy {
-        "??" => GitFileStatus::New,
-        "A " => GitFileStatus::New,
+        "??" | "A " => GitFileStatus::New,
         _ => GitFileStatus::Modified,
     }
 }
@@ -73,6 +71,7 @@ fn xy_to_status(xy: &str) -> GitFileStatus {
 ///
 /// A directory already stored as `New` is upgraded to `Modified` only when the
 /// caller provides `Modified`; `New` is never downgraded.
+#[allow(clippy::needless_pass_by_value)]
 fn insert_with_ancestors(
     map: &mut HashMap<PathBuf, GitFileStatus>,
     path: PathBuf,

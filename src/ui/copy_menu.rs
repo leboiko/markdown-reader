@@ -69,15 +69,15 @@ pub fn draw(f: &mut Frame, state: &CopyMenuState, palette: &Palette) {
     f.render_widget(Paragraph::new(lines).block(block), area);
 }
 
-fn option_line<'a>(
+fn option_line(
     is_cursor: bool,
     is_active: bool,
-    label: &'a str,
+    label: &str,
     cursor_style: Style,
     active_style: Style,
     text_style: Style,
     dim_style: Style,
-) -> Line<'a> {
+) -> Line<'_> {
     let arrow = if is_cursor { "> " } else { "  " };
     let bullet = if is_active {
         ACTIVE_BULLET

@@ -29,6 +29,7 @@ pub struct Tab {
 ///
 /// `view_height` is a viewport property shared across all tabs; it is updated
 /// once per draw call and used by every tab's scroll methods.
+#[allow(clippy::struct_field_names)]
 pub struct Tabs {
     pub tabs: Vec<Tab>,
     /// The currently visible tab.

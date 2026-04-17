@@ -53,12 +53,12 @@ pub struct SearchResult {
     /// File name component (for display).
     pub name: String,
     /// For Content mode: total number of line matches across the file.
-    /// Always `0` for FileName mode.
+    /// Always `0` for `FileName` mode.
     pub match_count: usize,
     /// For Content mode: formatted preview of the first match line.
-    /// Empty for FileName mode.
+    /// Empty for `FileName` mode.
     pub preview: String,
-    /// 0-based line index of the first match.  `None` for FileName mode.
+    /// 0-based line index of the first match.  `None` for `FileName` mode.
     ///
     /// Stored as 0-based so consumers can pass it directly to source-line
     /// coordinates without adjustment.  Display code should add 1 for
@@ -140,7 +140,7 @@ const SNIPPET_WINDOW: usize = 80;
 /// assert!(!smartcase_is_sensitive(""));
 /// ```
 pub fn smartcase_is_sensitive(query: &str) -> bool {
-    query.chars().any(|c| c.is_uppercase())
+    query.chars().any(char::is_uppercase)
 }
 
 /// Build a display preview for a single matched line.
@@ -210,6 +210,7 @@ pub fn build_preview(line: &str, query: &str, mode: SearchPreview) -> String {
 ///
 /// Writes per-row [`Rect`]s into `app.search_result_rects` for mouse
 /// hit-testing.  Clears the vec at the start of each draw.
+#[allow(clippy::too_many_lines)]
 pub fn draw(f: &mut Frame, app: &mut App) {
     app.search_result_rects.clear();
 
@@ -311,7 +312,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     {
         let row_rect = Rect {
             x: results_area.x,
-            y: results_area.y + (slot - scroll_offset) as u16,
+            y: results_area.y + crate::cast::u16_sat(slot - scroll_offset),
             width: results_area.width,
             height: 1,
         };

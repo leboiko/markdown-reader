@@ -16,9 +16,8 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 /// Caches `popup` into `app.table_modal_rect` each frame so the mouse handler
 /// can do hit-testing without re-computing the layout.
 pub fn draw(f: &mut Frame, app: &mut App) {
-    let state = match &app.table_modal {
-        Some(s) => s,
-        None => return,
+    let Some(state) = &app.table_modal else {
+        return;
     };
     let p = &app.palette;
 
@@ -82,7 +81,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         x: inner.x,
         y: inner.y,
         width: inner.width,
-        height: content_height as u16,
+        height: crate::cast::u16_sat(content_height),
     };
 
     f.render_widget(Paragraph::new(Text::from(sliced_lines)), content_rect);
@@ -186,20 +185,20 @@ fn emit_wrapped_row(
 ) {
     let wrapped: Vec<Vec<CellSpans>> = (0..num_cols)
         .map(|i| {
-            let spans = cells.get(i).map(|s| s.as_slice()).unwrap_or(&[]);
+            let spans = cells.get(i).map_or(&[] as &[_], |s| s.as_slice());
             let w = col_widths.get(i).copied().unwrap_or(1).max(1);
             wrap_cell_spans(spans, w)
         })
         .collect();
 
-    let row_height = wrapped.iter().map(|c| c.len()).max().unwrap_or(1);
+    let row_height = wrapped.iter().map(Vec::len).max().unwrap_or(1);
 
     for sub in 0..row_height {
         let mut spans: Vec<Span<'static>> = Vec::with_capacity(num_cols * 3 + 1);
         spans.push(Span::styled("│".to_string(), border_style));
         for (i, &w) in col_widths.iter().enumerate().take(num_cols) {
             let alignment = alignments.get(i).copied().unwrap_or(Alignment::None);
-            let cell_line = wrapped[i].get(sub).map(|s| s.as_slice()).unwrap_or(&[]);
+            let cell_line = wrapped[i].get(sub).map_or(&[] as &[_], |s| s.as_slice());
             let cell_width: usize = cell_line
                 .iter()
                 .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
@@ -286,8 +285,7 @@ pub fn wrap_cell_spans(cell: &[Span<'static>], width: usize) -> Vec<CellSpans> {
         let line_end = styled[line_start..]
             .iter()
             .position(|sc| sc.ch == '\n')
-            .map(|p| line_start + p)
-            .unwrap_or(styled.len());
+            .map_or(styled.len(), |p| line_start + p);
 
         let hard_line = &styled[line_start..line_end];
         emit_wrapped_hard_line(hard_line, width, &mut result);
@@ -496,7 +494,7 @@ pub fn max_h_scroll(state: &TableModalState, visible_width: u16) -> u16 {
     let total_table_width: usize = state.natural_widths.iter().sum::<usize>()
         + state.natural_widths.len() * 3  // padding + borders per col
         + 1; // right border
-    (total_table_width.saturating_sub(visible_width as usize)) as u16
+    crate::cast::u16_sat(total_table_width.saturating_sub(visible_width as usize))
 }
 
 /// Return the column-start offsets (in display columns) for each column.
@@ -511,7 +509,7 @@ fn col_boundaries(widths: &[usize]) -> Vec<u16> {
     let mut offsets = Vec::with_capacity(widths.len());
     let mut acc: usize = 0;
     for &w in widths {
-        offsets.push(acc as u16);
+        offsets.push(crate::cast::u16_sat(acc));
         // Each column occupies: 1 leading space + w content + 1 trailing space
         // + 1 border = w + 3 display columns.
         acc += w + 3;

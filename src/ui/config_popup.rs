@@ -57,6 +57,7 @@ pub fn render_config_popup(
     f.render_widget(Paragraph::new(lines).block(block), area);
 }
 
+#[allow(clippy::too_many_lines)]
 fn build_lines<'a>(
     state: &ConfigPopupState,
     theme: Theme,
@@ -187,15 +188,15 @@ fn build_lines<'a>(
     lines
 }
 
-fn option_line<'a>(
+fn option_line(
     is_cursor: bool,
     is_active: bool,
-    label: &'a str,
+    label: &str,
     cursor_style: Style,
     active_style: Style,
     text_style: Style,
     dim_style: Style,
-) -> Line<'a> {
+) -> Line<'_> {
     let arrow = if is_cursor { "> " } else { "  " };
     let bullet = if is_active {
         ACTIVE_BULLET

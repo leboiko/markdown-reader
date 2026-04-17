@@ -122,17 +122,16 @@ fn insert_path(parent: &mut FileEntry, root: &Path, rel: &Path) {
 
         let existing = current.children.iter().position(|child| child.name == name);
 
-        let child_idx = match existing {
-            Some(i) => i,
-            None => {
-                current.children.push(FileEntry {
-                    path: abs.clone(),
-                    name,
-                    is_dir,
-                    children: Vec::new(),
-                });
-                current.children.len() - 1
-            }
+        let child_idx = if let Some(i) = existing {
+            i
+        } else {
+            current.children.push(FileEntry {
+                path: abs.clone(),
+                name,
+                is_dir,
+                children: Vec::new(),
+            });
+            current.children.len() - 1
         };
 
         current = &mut current.children[child_idx];

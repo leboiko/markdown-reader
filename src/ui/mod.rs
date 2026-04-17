@@ -25,6 +25,7 @@ use ratatui::{
 };
 
 /// Render the full application UI for one frame.
+#[allow(clippy::too_many_lines)]
 pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
 
@@ -54,7 +55,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .split(area);
 
     let has_tabs = !app.tabs.is_empty();
-    let tab_bar_height: u16 = if has_tabs { 1 } else { 0 };
+    let tab_bar_height: u16 = u16::from(has_tabs);
 
     let viewer_area;
 
@@ -75,8 +76,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         if app
             .tabs
             .active_tab()
-            .map(|t| t.editor.is_some())
-            .unwrap_or(false)
+            .is_some_and(|t| t.editor.is_some())
         {
             editor::draw(f, app, viewer_area);
         } else {
@@ -123,8 +123,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         if app
             .tabs
             .active_tab()
-            .map(|t| t.editor.is_some())
-            .unwrap_or(false)
+            .is_some_and(|t| t.editor.is_some())
         {
             editor::draw(f, app, viewer_area);
         } else {
@@ -134,7 +133,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     status_bar::draw(f, app, outer_chunks[1]);
 
-    let doc_search_active = app.doc_search().map(|ds| ds.active).unwrap_or(false);
+    let doc_search_active = app.doc_search().is_some_and(|ds| ds.active);
     if doc_search_active {
         doc_search_bar::draw(f, app, viewer_area);
     }

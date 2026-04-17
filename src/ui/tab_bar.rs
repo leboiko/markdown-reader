@@ -71,7 +71,7 @@ fn collect_cells(s: &str, limit: usize) -> String {
 ///
 /// Uses `unicode_width` so that multi-byte or wide characters count correctly.
 fn label_display_width(label: &str) -> u16 {
-    label.width() as u16
+    crate::cast::u16_sat(label.width())
 }
 
 /// Render the tab bar into `area`.
@@ -79,6 +79,9 @@ fn label_display_width(label: &str) -> u16 {
 /// Writes per-tab rects into `app.tab_bar_rects` for mouse hit-testing.
 /// Does nothing if there are no open tabs.
 pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
+    // `+K` overflow indicator occupies at most 5 cells " +32 ".
+    const OVERFLOW_MAX: u16 = 5;
+
     app.tab_bar_rects.clear();
 
     if app.tabs.is_empty() {
@@ -115,8 +118,6 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     let label_widths: Vec<u16> = labels.iter().map(|l| label_display_width(l)).collect();
     // CLOSE_WIDTH cells per tab for the " × " close button.
     let widths: Vec<u16> = label_widths.iter().map(|w| w + CLOSE_WIDTH).collect();
-    // `+K` overflow indicator occupies at most 5 cells " +32 ".
-    const OVERFLOW_MAX: u16 = 5;
 
     let (start, end) = visible_window(&widths, active_idx, area.width, OVERFLOW_MAX);
 
@@ -127,7 +128,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     // left of the first tab.  We must account for its width in x_cursor so that
     // the hit-test rects stay aligned with what ratatui actually renders.
     let overflow_before_w: u16 = if hidden_before > 0 {
-        format!(" +{hidden_before} ").width() as u16
+        crate::cast::u16_sat(format!(" +{hidden_before} ").width())
     } else {
         0
     };

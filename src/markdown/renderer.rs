@@ -69,15 +69,16 @@ fn build_line_boundaries(content: &str) -> Vec<usize> {
 fn byte_offset_to_line(offset: usize, boundaries: &[usize]) -> u32 {
     match boundaries.binary_search(&offset) {
         // Exact match: the offset is itself the start of a line.
-        Ok(i) => i as u32,
+        Ok(i) => crate::cast::u32_sat(i),
         // No exact match: `i` is the insertion point — the line that started
         // before `offset` is at index `i - 1`.
-        Err(i) => i.saturating_sub(1) as u32,
+        Err(i) => crate::cast::u32_sat(i.saturating_sub(1)),
     }
 }
 
 // ── Internal renderer ────────────────────────────────────────────────────────
 
+#[allow(clippy::struct_excessive_bools)]
 struct MdRenderer {
     /// Accumulates lines for the current `Text` block.
     lines: Vec<Line<'static>>,
@@ -259,8 +260,13 @@ impl MdRenderer {
     ///
     /// Invariant: `source_lines.len() == text.lines.len()` is enforced by a
     /// debug assertion before pushing the block.
+    #[allow(clippy::similar_names)]
     fn flush_text_block(&mut self) {
-        if !self.lines.is_empty() {
+        if self.lines.is_empty() {
+            // Drop orphaned source_lines that accumulated without any matching
+            // rendered line (can happen around pure-table sections).
+            self.current_source_lines.clear();
+        } else {
             let lines = std::mem::take(&mut self.lines);
             let source_lines = std::mem::take(&mut self.current_source_lines);
             let links = std::mem::take(&mut self.pending_links);
@@ -280,10 +286,6 @@ impl MdRenderer {
                 heading_anchors,
                 source_lines,
             });
-        } else {
-            // Drop orphaned source_lines that accumulated without any matching
-            // rendered line (can happen around pure-table sections).
-            self.current_source_lines.clear();
         }
     }
 
@@ -295,7 +297,7 @@ impl MdRenderer {
     fn current_col_width(&self) -> u16 {
         self.current_spans
             .iter()
-            .map(|s| s.content.chars().count() as u16)
+            .map(|s| crate::cast::u16_sat(s.content.chars().count()))
             .sum()
     }
 
@@ -304,6 +306,7 @@ impl MdRenderer {
     /// `content` is the raw markdown string; it is used to build the
     /// `line_boundaries` table for byte-offset-to-line translation.
     /// `parser` is the pulldown-cmark parser constructed from the same string.
+    #[allow(clippy::too_many_lines)]
     fn render(mut self, content: &str, parser: Parser) -> Vec<DocBlock> {
         // Build the line boundary table once.  O(n) in the source length.
         self.line_boundaries = build_line_boundaries(content);
@@ -409,7 +412,7 @@ impl MdRenderer {
                                 "│ ".to_string(),
                                 Style::default().fg(self.code_border).bg(self.code_bg),
                             ),
-                            Span::styled(format!("{:<inner_width$}", line), math_style),
+                            Span::styled(format!("{line:<inner_width$}"), math_style),
                             Span::styled(
                                 "│".to_string(),
                                 Style::default().fg(self.code_border).bg(self.code_bg),
@@ -435,6 +438,8 @@ impl MdRenderer {
         self.blocks
     }
 
+    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::match_same_arms)]
     fn start_tag(&mut self, tag: Tag, span: &Range<usize>) {
         match tag {
             Tag::Heading { level, .. } => {
@@ -564,7 +569,7 @@ impl MdRenderer {
                 let anchor = heading_to_anchor(&self.heading_text);
                 self.pending_heading_anchors.push(HeadingAnchor {
                     anchor,
-                    line: self.lines.len() as u32,
+                    line: crate::cast::u32_sat(self.lines.len()),
                 });
                 self.flush_line();
                 self.push_blank_line();
@@ -616,7 +621,7 @@ impl MdRenderer {
                         .skip(self.link_col_start as usize)
                         .collect();
                     self.pending_links.push(LinkInfo {
-                        line: self.lines.len() as u32,
+                        line: crate::cast::u32_sat(self.lines.len()),
                         col_start: self.link_col_start,
                         col_end,
                         url,
@@ -657,7 +662,7 @@ impl MdRenderer {
             for line in text.split('\n') {
                 self.code_block_content.push(line.to_string());
             }
-            if self.code_block_content.last().is_some_and(|l| l.is_empty()) {
+            if self.code_block_content.last().is_some_and(String::is_empty) {
                 self.code_block_content.pop();
             }
         } else {
@@ -775,11 +780,11 @@ impl MdRenderer {
             self.lines.push(Line::from(spans));
             // Content line i (0-indexed) lives one source line after the fence.
             self.current_source_lines
-                .push(code_start_line + 1 + i as u32);
+                .push(code_start_line + 1 + crate::cast::u32_sat(i));
         }
 
         // Bottom border maps to the line after the last content line.
-        let bottom_source_line = code_start_line + 1 + self.code_block_content.len() as u32;
+        let bottom_source_line = code_start_line + 1 + crate::cast::u32_sat(self.code_block_content.len());
         self.lines.push(Line::from(Span::styled(
             format!("╰{}╯", "─".repeat(inner_width + 1)),
             border_style,
@@ -798,7 +803,7 @@ impl MdRenderer {
 
         let num_cols = headers
             .len()
-            .max(rows.iter().map(|r| r.len()).max().unwrap_or(0));
+            .max(rows.iter().map(Vec::len).max().unwrap_or(0));
 
         if num_cols == 0 {
             return;
@@ -834,7 +839,7 @@ impl MdRenderer {
 
         // Pessimistic height: top + header + separator + rows + bottom.
         // layout_table will refine this on first draw; this seeds the scrolling math.
-        let rendered_height = (rows.len() as u32 + 3).max(3);
+        let rendered_height = (crate::cast::u32_sat(rows.len()) + 3).max(3);
 
         self.flush_text_block();
         self.blocks.push(DocBlock::Table(TableBlock {
@@ -1343,7 +1348,7 @@ mod tests {
     // ── mermaid source_line_at precision ────────────────────────────────────
 
     /// `source_line_at` must map each cursor row inside a mermaid block to
-    /// the corresponding source line (fence + 1 + row_offset), clamped to the
+    /// the corresponding source line (fence + 1 + `row_offset`), clamped to the
     /// last content line.
     ///
     /// Markdown input (0-indexed lines):

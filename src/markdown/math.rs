@@ -19,7 +19,9 @@
 /// assert_eq!(latex_to_unicode(r"E = mc^2"), "E = mc²");
 /// assert_eq!(latex_to_unicode(r"\sum_{i=1}^{n} x_i"), "∑ᵢ₌₁ⁿ xᵢ");
 /// ```
+#[allow(clippy::too_many_lines)]
 pub fn latex_to_unicode(input: &str) -> String {
+    use std::fmt::Write as _;
     let mut out = String::with_capacity(input.len());
     let chars: Vec<char> = input.chars().collect();
     let len = chars.len();
@@ -38,7 +40,8 @@ pub fn latex_to_unicode(input: &str) -> String {
                     // Single non-alpha char after backslash: \{, \}, \\, etc.
                     if start < len {
                         match chars[start] {
-                            '{' | '}' => {
+                            // Bare braces or negative thin space → skip silently.
+                            '{' | '}' | '!' => {
                                 i = start + 1;
                                 continue;
                             }
@@ -48,19 +51,16 @@ pub fn latex_to_unicode(input: &str) -> String {
                                 continue;
                             }
                             ',' => {
+                                // Thin space.
                                 out.push('\u{2009}');
                                 i = start + 1;
                                 continue;
-                            } // thin space
+                            }
                             ';' => {
                                 out.push(' ');
                                 i = start + 1;
                                 continue;
                             }
-                            '!' => {
-                                i = start + 1;
-                                continue;
-                            } // negative thin space → skip
                             _ => {
                                 out.push(chars[start]);
                                 i = start + 1;
@@ -83,14 +83,14 @@ pub fn latex_to_unicode(input: &str) -> String {
                     let num_u = latex_to_unicode(&num);
                     let den_u = latex_to_unicode(&den);
                     if num_u.len() <= 1 && den_u.len() <= 1 {
-                        out.push_str(&format!("{num_u}/{den_u}"));
+                        let _ = write!(out, "{num_u}/{den_u}");
                     } else {
-                        out.push_str(&format!("({num_u})/({den_u})"));
+                        let _ = write!(out, "({num_u})/({den_u})");
                     }
                 } else if cmd == "sqrt" {
                     let body = extract_brace_group(&chars, &mut i);
                     let body_u = latex_to_unicode(&body);
-                    out.push_str(&format!("√({body_u})"));
+                    let _ = write!(out, "√({body_u})");
                 } else if cmd == "text"
                     || cmd == "mathrm"
                     || cmd == "mathbf"
@@ -230,6 +230,7 @@ fn extract_brace_group(chars: &[char], pos: &mut usize) -> String {
 }
 
 /// Map a LaTeX command name (without backslash) to a Unicode string.
+#[allow(clippy::too_many_lines)]
 fn command_to_unicode(cmd: &str) -> Option<&'static str> {
     Some(match cmd {
         // Greek lowercase
@@ -279,8 +280,8 @@ fn command_to_unicode(cmd: &str) -> Option<&'static str> {
         "coprod" => "∐",
         "bigcup" => "⋃",
         "bigcap" => "⋂",
-        "bigoplus" => "⊕",
-        "bigotimes" => "⊗",
+        "bigoplus" | "oplus" => "⊕",
+        "bigotimes" | "otimes" => "⊗",
         // Relations
         "leq" | "le" => "≤",
         "geq" | "ge" => "≥",
@@ -317,8 +318,7 @@ fn command_to_unicode(cmd: &str) -> Option<&'static str> {
         "hookrightarrow" => "↪",
         "longrightarrow" => "⟶",
         "longleftarrow" => "⟵",
-        "Longrightarrow" => "⟹",
-        "implies" => "⟹",
+        "Longrightarrow" | "implies" => "⟹",
         "iff" => "⟺",
         // Miscellaneous
         "infty" => "∞",
@@ -333,8 +333,6 @@ fn command_to_unicode(cmd: &str) -> Option<&'static str> {
         "ast" => "∗",
         "circ" => "∘",
         "bullet" => "•",
-        "oplus" => "⊕",
-        "otimes" => "⊗",
         "dagger" => "†",
         "ddagger" => "‡",
         "neg" | "lnot" => "¬",

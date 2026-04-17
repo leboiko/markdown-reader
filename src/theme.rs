@@ -112,6 +112,7 @@ pub struct Palette {
 
 impl Palette {
     /// Construct the color palette for the given theme.
+    #[allow(clippy::too_many_lines)]
     pub fn from_theme(theme: Theme) -> Self {
         match theme {
             Theme::Default => Self {
@@ -470,8 +471,7 @@ mod tests {
             let p = Palette::from_theme(theme);
             assert_ne!(
                 p.on_accent_fg, p.accent,
-                "Theme {:?}: on_accent_fg == accent — text would be invisible",
-                theme,
+                "Theme {theme:?}: on_accent_fg == accent — text would be invisible",
             );
         }
     }

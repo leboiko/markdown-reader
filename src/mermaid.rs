@@ -63,13 +63,13 @@ impl MermaidCache {
     }
 
     /// Return a shared reference to the entry for `id`, if any.
-    pub fn get(&self, id: &MermaidBlockId) -> Option<&MermaidEntry> {
-        self.entries.get(id)
+    pub fn get(&self, id: MermaidBlockId) -> Option<&MermaidEntry> {
+        self.entries.get(&id)
     }
 
     /// Return a mutable reference to the entry for `id`, if any.
-    pub fn get_mut(&mut self, id: &MermaidBlockId) -> Option<&mut MermaidEntry> {
-        self.entries.get_mut(id)
+    pub fn get_mut(&mut self, id: MermaidBlockId) -> Option<&mut MermaidEntry> {
+        self.entries.get_mut(&id)
     }
 
     /// Insert a new entry, overwriting any existing one.
@@ -84,13 +84,13 @@ impl MermaidCache {
     /// - `Failed` / `SourceOnly`: source-line count clamped to the valid range,
     ///   so the fallback text viewer shows all the source without overflow.
     /// - Not present: `DEFAULT_MERMAID_HEIGHT`.
-    pub fn height(&self, id: &MermaidBlockId, source: &str) -> u32 {
-        match self.entries.get(id) {
+    pub fn height(&self, id: MermaidBlockId, source: &str) -> u32 {
+        match self.entries.get(&id) {
             None => DEFAULT_MERMAID_HEIGHT,
             Some(MermaidEntry::Pending) => MIN_MERMAID_HEIGHT,
             Some(MermaidEntry::Ready { cell_height, .. }) => *cell_height,
-            Some(MermaidEntry::Failed(_)) | Some(MermaidEntry::SourceOnly(_)) => {
-                let source_lines = source.lines().count() as u32 + 2;
+            Some(MermaidEntry::Failed(_) | MermaidEntry::SourceOnly(_)) => {
+                let source_lines = crate::cast::u32_sat(source.lines().count()) + 2;
                 source_lines.clamp(MIN_MERMAID_HEIGHT, MAX_MERMAID_HEIGHT)
             }
         }
@@ -149,7 +149,7 @@ impl MermaidCache {
         let tx = action_tx.clone();
 
         tokio::task::spawn_blocking(move || {
-            let result = render_blocking(source, &picker, bg_rgb);
+            let result = render_blocking(&source, &picker, bg_rgb);
             let entry = match result {
                 Ok((protocol, cell_height)) => MermaidEntry::Ready {
                     protocol: Box::new(protocol),
@@ -172,16 +172,16 @@ impl MermaidCache {
     }
 }
 
-/// CPU-bound: render mermaid source → SVG → DynamicImage → StatefulProtocol.
+/// CPU-bound: render mermaid source → SVG → `DynamicImage` → `StatefulProtocol`.
 ///
 /// Returns the protocol and the image's height in terminal cells, clamped to
 /// `[MIN_MERMAID_HEIGHT, MAX_MERMAID_HEIGHT]`.
 fn render_blocking(
-    source: String,
+    source: &str,
     picker: &Picker,
     bg_rgb: (u8, u8, u8),
 ) -> Result<(StatefulProtocol, u32), String> {
-    let svg = mermaid_rs_renderer::render(&source).map_err(|e| format!("render error: {e}"))?;
+    let svg = mermaid_rs_renderer::render(source).map_err(|e| format!("render error: {e}"))?;
 
     let img = svg_to_image(&svg, bg_rgb).map_err(|e| format!("svg rasterize: {e}"))?;
 
@@ -197,7 +197,7 @@ fn compute_cell_height(img: &DynamicImage, picker: &Picker) -> u32 {
     if cell_px_h == 0 {
         return DEFAULT_MERMAID_HEIGHT;
     }
-    let cells = px_h.div_ceil(cell_px_h as u32);
+    let cells = px_h.div_ceil(u32::from(cell_px_h));
     cells.clamp(MIN_MERMAID_HEIGHT, MAX_MERMAID_HEIGHT)
 }
 
@@ -216,7 +216,7 @@ fn svg_to_image(svg: &str, bg_rgb: (u8, u8, u8)) -> Result<DynamicImage, String>
     let bg_hex = format!("#{:02X}{:02X}{:02X}", bg_rgb.0, bg_rgb.1, bg_rgb.2);
     let svg = svg.replacen("fill=\"#FFFFFF\"", &format!("fill=\"{bg_hex}\""), 1);
 
-    let is_dark = (bg_rgb.0 as u16 + bg_rgb.1 as u16 + bg_rgb.2 as u16) / 3 < 128;
+    let is_dark = (u16::from(bg_rgb.0) + u16::from(bg_rgb.1) + u16::from(bg_rgb.2)) / 3 < 128;
     let svg = if is_dark {
         svg.replace("fill=\"#F8FAFC\"", "fill=\"#1e293b\"")
             .replace("stroke=\"#94A3B8\"", "stroke=\"#64748b\"")
@@ -234,7 +234,11 @@ fn svg_to_image(svg: &str, bg_rgb: (u8, u8, u8)) -> Result<DynamicImage, String>
     let tree = usvg::Tree::from_str(&svg, &opts).map_err(|e| format!("usvg parse: {e}"))?;
 
     let size = tree.size();
+    // SVG dimensions are always non-negative and bounded in practice; `.ceil()` followed
+    // by clamping to u32 is intentional — suppress pedantic cast warnings here.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let width = (size.width() * SVG_RENDER_SCALE).ceil() as u32;
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let height = (size.height() * SVG_RENDER_SCALE).ceil() as u32;
     if width == 0 || height == 0 {
         return Err("empty SVG dimensions".to_string());
@@ -252,21 +256,26 @@ fn svg_to_image(svg: &str, bg_rgb: (u8, u8, u8)) -> Result<DynamicImage, String>
     // tiny_skia's pixmap is RGBA premultiplied; image::RgbaImage is RGBA
     // straight-alpha. Demultiply each pixel.
     let raw = pixmap.take();
-    let rgba = demultiply_alpha(raw, width, height)?;
+    let rgba = demultiply_alpha(&raw, width, height)?;
     Ok(DynamicImage::ImageRgba8(rgba))
 }
 
-fn demultiply_alpha(data: Vec<u8>, width: u32, height: u32) -> Result<RgbaImage, String> {
+fn demultiply_alpha(data: &[u8], width: u32, height: u32) -> Result<RgbaImage, String> {
     let mut out = Vec::with_capacity(data.len());
     for pixel in data.chunks_exact(4) {
         let (r, g, b, a) = (pixel[0], pixel[1], pixel[2], pixel[3]);
         if a == 0 {
             out.extend_from_slice(&[0, 0, 0, 0]);
         } else {
-            let factor = 255.0 / a as f32;
-            out.push((r as f32 * factor).min(255.0) as u8);
-            out.push((g as f32 * factor).min(255.0) as u8);
-            out.push((b as f32 * factor).min(255.0) as u8);
+            // f32 arithmetic for premultiplied-alpha demultiplication; values are
+            // always in [0.0, 255.0] after `.min(255.0)`, so the cast to u8 is safe.
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            {
+                let factor = 255.0 / f32::from(a);
+                out.push((f32::from(r) * factor).min(255.0) as u8);
+                out.push((f32::from(g) * factor).min(255.0) as u8);
+                out.push((f32::from(b) * factor).min(255.0) as u8);
+            }
             out.push(a);
         }
     }
@@ -304,16 +313,16 @@ fn has_limited_rendering(source: &str) -> bool {
 mod tests {
     use super::*;
 
-    const SEQUENCE_DIAGRAM: &str = r#"sequenceDiagram
+    const SEQUENCE_DIAGRAM: &str = r"sequenceDiagram
     participant W as Worker
     participant CP as CheckpointStore
     participant ES as EventReader
     W->>CP: Read checkpoint (last sequence)
     CP-->>W: sequence_number
     W->>ES: Poll events (after sequence, limit 500)
-    ES-->>W: batch of StoredEvents"#;
+    ES-->>W: batch of StoredEvents";
 
-    const GRAPH_LR_1: &str = r#"graph LR
+    const GRAPH_LR_1: &str = r"graph LR
     subgraph Supervisor
         direction TB
         F[Factory] -->|creates| W[Worker]
@@ -323,21 +332,21 @@ mod tests {
     HB -->|checked every 10s| WD[Watchdog]
     WD -->|stall > 120s| CT[Cancel Token]
     CT -->|stops| W
-    style WD fill:#c82,stroke:#fff,color:#fff"#;
+    style WD fill:#c82,stroke:#fff,color:#fff";
 
-    const STATE_DIAGRAM: &str = r#"stateDiagram-v2
+    const STATE_DIAGRAM: &str = r"stateDiagram-v2
     [*] --> CLOSED
     CLOSED --> OPEN : 5 consecutive failures
     OPEN --> HALF_OPEN : probe interval elapsed
     HALF_OPEN --> CLOSED : probe succeeds
-    HALF_OPEN --> OPEN : probe fails (increased backoff)"#;
+    HALF_OPEN --> OPEN : probe fails (increased backoff)";
 
-    const GRAPH_LR_2: &str = r#"graph LR
+    const GRAPH_LR_2: &str = r"graph LR
     subgraph projections-pg [projections-pg :9092]
         PG_W[event_log, account_registry]
     end
     PG_W --> PG[(PostgreSQL)]
-    style PG fill:#336,stroke:#fff,color:#fff"#;
+    style PG fill:#336,stroke:#fff,color:#fff";
 
     #[test]
     fn render_four_target_diagrams() {
@@ -375,7 +384,7 @@ mod tests {
         let cache = MermaidCache::new();
         let id = MermaidBlockId(1);
         assert_eq!(
-            cache.height(&id, "graph LR\n    A --> B"),
+            cache.height(id,"graph LR\n    A --> B"),
             DEFAULT_MERMAID_HEIGHT
         );
     }
@@ -385,7 +394,7 @@ mod tests {
         let mut cache = MermaidCache::new();
         let id = MermaidBlockId(2);
         cache.insert(id, MermaidEntry::Pending);
-        assert_eq!(cache.height(&id, ""), MIN_MERMAID_HEIGHT);
+        assert_eq!(cache.height(id,""), MIN_MERMAID_HEIGHT);
     }
 
     #[test]
@@ -402,7 +411,7 @@ mod tests {
                 cell_height: 15,
             },
         );
-        assert_eq!(cache.height(&id, ""), 15);
+        assert_eq!(cache.height(id,""), 15);
     }
 
     #[test]
@@ -410,7 +419,7 @@ mod tests {
         let mut cache = MermaidCache::new();
         let id = MermaidBlockId(4);
         cache.insert(id, MermaidEntry::Failed("err".to_string()));
-        let h = cache.height(&id, "line1\nline2\nline3");
+        let h = cache.height(id,"line1\nline2\nline3");
         assert!((MIN_MERMAID_HEIGHT..=MAX_MERMAID_HEIGHT).contains(&h));
     }
 
@@ -419,8 +428,13 @@ mod tests {
         let mut cache = MermaidCache::new();
         let id = MermaidBlockId(5);
         cache.insert(id, MermaidEntry::SourceOnly("tmux".to_string()));
-        let source: String = (0..100).map(|i| format!("line{i}\n")).collect();
-        let h = cache.height(&id, &source);
+        let mut source = String::new();
+        for i in 0..100usize {
+            source.push_str("line");
+            source.push_str(&i.to_string());
+            source.push('\n');
+        }
+        let h = cache.height(id, &source);
         assert_eq!(h, MAX_MERMAID_HEIGHT);
     }
 
@@ -439,8 +453,8 @@ mod tests {
         alive.insert(id3);
         cache.retain(&alive);
 
-        assert!(cache.get(&id1).is_some());
-        assert!(cache.get(&id2).is_none());
-        assert!(cache.get(&id3).is_some());
+        assert!(cache.get(id1).is_some());
+        assert!(cache.get(id2).is_none());
+        assert!(cache.get(id3).is_some());
     }
 }

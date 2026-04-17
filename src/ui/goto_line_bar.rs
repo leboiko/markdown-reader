@@ -25,8 +25,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     let total_lines = app
         .tabs
         .active_tab()
-        .map(|t| t.view.total_lines)
-        .unwrap_or(0);
+        .map_or(0, |t| t.view.total_lines);
 
     let total_info = if total_lines == 0 {
         String::new()

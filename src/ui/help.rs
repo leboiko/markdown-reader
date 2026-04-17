@@ -8,6 +8,7 @@ use ratatui::{
 };
 
 /// Render a centered help overlay listing all keyboard shortcuts.
+#[allow(clippy::too_many_lines)]
 pub fn draw(f: &mut Frame, app: &App) {
     let p = &app.palette;
 
@@ -117,7 +118,7 @@ pub fn draw(f: &mut Frame, app: &App) {
         Line::from(Span::styled("Press any key to close", dim_style)),
     ];
 
-    let height = lines.len() as u16 + 2;
+    let height = crate::cast::u16_sat(lines.len()) + 2;
     let width = 54;
 
     let area = centered_rect(width, height, f.area());
@@ -136,7 +137,7 @@ pub fn draw(f: &mut Frame, app: &App) {
 
 fn shortcut_line<'a>(key: &'a str, desc: &'a str, key_style: Style, desc_style: Style) -> Line<'a> {
     Line::from(vec![
-        Span::styled(format!("  {:<20}", key), key_style),
+        Span::styled(format!("  {key:<20}"), key_style),
         Span::styled(desc, desc_style),
     ])
 }
