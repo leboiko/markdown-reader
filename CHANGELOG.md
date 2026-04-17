@@ -5,6 +5,33 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.1] - 2026-04-17
+
+### Added
+- **`mermaid-text` library crate** (`crates/mermaid-text/`). A standalone
+  MIT Rust library that renders Mermaid flowcharts as Unicode box-drawing
+  text — no browser, no image protocols, pure Rust. Supports
+  `graph`/`flowchart` with LR/TD/RL/BT directions, node shapes
+  (rectangle, rounded, diamond, circle), edge labels, and Sugiyama-style
+  layered layout. Published as a workspace member; will be released as
+  an independent crate.
+- **Text-mode mermaid rendering** via `mermaid-text`. Flowcharts in
+  Text mode or on non-graphics terminals render as Unicode art instead
+  of raw source. Sequence/state/class diagrams still fall back to source
+  (Phase 2-3 of `mermaid-text`).
+- **Visible block cursor** at `(cursor_line, cursor_col)`. A single-cell
+  highlight in `accent` colour shows the exact horizontal position in
+  both normal and visual modes, making `h`/`l` movement and `v`
+  character selection visually trackable.
+
+### Fixed
+- **Mermaid cache invalidated on resize.** Cached `AsciiDiagram` text
+  is fixed-width; resizing the viewer now clears the mermaid cache so
+  diagrams re-render at the new width.
+- **Flowchart parser skips mermaid keywords.** `subgraph`, `direction`,
+  `end`, `style`, `classDef`, `click`, `linkStyle` are no longer
+  treated as node definitions. `<br/>` tags are stripped from labels.
+
 ## [1.7.0] - 2026-04-17
 
 ### Added

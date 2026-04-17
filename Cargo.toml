@@ -1,6 +1,9 @@
+[workspace]
+members = [".", "crates/mermaid-text"]
+
 [package]
 name = "markdown-tui-explorer"
-version = "1.7.0"
+version = "1.7.1"
 edition = "2024"
 description = "A terminal-based markdown file browser and viewer with search, syntax highlighting, and live reload"
 license = "MIT"
@@ -39,3 +42,4 @@ base64 = "0.22"
 syntect = { version = "5.3.0", default-features = false, features = ["default-fancy"] }
 edtui = { version = "0.11.2", default-features = false }
 tempfile = "3.27.0"
+mermaid-text = { version = "0.1.0", path = "crates/mermaid-text" }

@@ -477,22 +477,14 @@ pub fn create_picker() -> Option<Picker> {
 /// The reason graphics are unavailable in a tmux session.
 pub const TMUX_DISABLED_REASON: &str = "disable tmux for graphics";
 
-/// Try to render mermaid source to Unicode box-drawing text.
+/// Render mermaid source to Unicode box-drawing text via `mermaid-text`.
 ///
-/// Currently returns `Err` unconditionally.  The only candidate crate
-/// (`figurehead 0.4.3`) has three blocking issues for TUI use:
-///
-/// 1. Bare `println!()` calls in production code that corrupt raw-mode
-///    terminals (stdout writes bypass ratatui).
-/// 2. Panic on certain sequence diagrams (slice-index out of bounds).
-/// 3. Potential infinite loops on complex inputs (freezes the draw loop
-///    since it runs synchronously on the main thread).
-///
-/// The `MermaidMode::Text` setting and `AsciiDiagram` cache variant are
-/// kept as infrastructure for when a production-ready text renderer
-/// becomes available.
-fn try_text_render(_source: &str) -> Result<String, String> {
-    Err("text-mode mermaid rendering is not yet available — no stable renderer crate exists".to_string())
+/// `mermaid-text` is our own library crate (MIT, zero unsafe, no stdout
+/// writes, no panics on valid input).  Currently supports flowcharts
+/// (`graph`/`flowchart` with LR/TD/RL/BT).  Unsupported diagram types
+/// return `Err` and fall back to showing raw source.
+fn try_text_render(source: &str) -> Result<String, String> {
+    mermaid_text::render(source).map_err(|e| format!("{e}"))
 }
 
 /// Public wrapper around [`try_text_render`] for use from the
@@ -711,9 +703,10 @@ mod tests {
 
         assert!(!spawned, "Text mode must never spawn an image task");
         let entry = cache.get(id).expect("entry must be present");
+        // mermaid-text handles flowcharts → AsciiDiagram.
         assert!(
-            matches!(entry, MermaidEntry::SourceOnly(_)),
-            "expected SourceOnly (text renderer is stubbed)"
+            matches!(entry, MermaidEntry::AsciiDiagram { .. }),
+            "expected AsciiDiagram from mermaid-text in Text mode"
         );
     }
 

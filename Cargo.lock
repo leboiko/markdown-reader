@@ -1176,7 +1176,7 @@ dependencies = [
 
 [[package]]
 name = "markdown-tui-explorer"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "anyhow",
  "base64",
@@ -1187,6 +1187,7 @@ dependencies = [
  "ignore",
  "image",
  "mermaid-rs-renderer",
+ "mermaid-text",
  "notify-debouncer-mini",
  "pulldown-cmark",
  "ratatui",
@@ -1248,6 +1249,13 @@ dependencies = [
  "thiserror 2.0.18",
  "ttf-parser",
  "usvg",
+]
+
+[[package]]
+name = "mermaid-text"
+version = "0.1.0"
+dependencies = [
+ "unicode-width",
 ]
 
 [[package]]

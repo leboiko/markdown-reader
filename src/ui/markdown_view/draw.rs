@@ -175,6 +175,11 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
         } else {
             tab.view.layout_width = effective_width;
             tab.view.table_layouts.clear();
+            // AsciiDiagram entries are fixed-width text — they need to
+            // re-render at the new width.  Clearing the whole cache is
+            // cheap; image entries will re-populate via ensure_queued on
+            // the next draw, and text entries re-render synchronously.
+            app.mermaid_cache.clear();
 
             for doc_block in &mut tab.view.rendered {
                 if let DocBlock::Table(table) = doc_block {
@@ -311,6 +316,30 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                                     start,
                                     p.selection_bg,
                                 );
+
+                                // Draw a single-cell block cursor at (cursor_line,
+                                // cursor_col) so the horizontal position is visible
+                                // in both normal and visual modes. Uses `accent` to
+                                // stand out against the line/range `selection_bg`.
+                                if cursor_line >= block_start && cursor_line < block_end {
+                                    let rel = (cursor_line - block_start) as usize;
+                                    if rel >= start {
+                                        let idx = rel - start;
+                                        if let Some(line) = visible_text.lines.get(idx) {
+                                            let col = app
+                                                .tabs
+                                                .active_tab()
+                                                .map_or(0, |t| t.view.cursor_col);
+                                            visible_text.lines[idx] =
+                                                super::highlight::highlight_columns(
+                                                    line,
+                                                    col,
+                                                    col + 1,
+                                                    p.accent,
+                                                );
+                                        }
+                                    }
+                                }
                             }
 
                             text_draws.push(TextDraw {
