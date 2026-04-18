@@ -492,34 +492,41 @@ impl Grid {
     /// ```
     ///
     /// Mermaid syntax: `[(label)]`
+    /// Draw a cylinder (database) node.
+    ///
+    /// Mermaid syntax: `[(label)]`. Rendered as a rounded rectangle with a
+    /// horizontal "lid line" one row below the top border, distinguishing it
+    /// from a plain rounded rectangle while keeping the silhouette
+    /// continuous (unlike a double-arc design which visually disconnects in
+    /// monospace fonts).
+    ///
+    /// Minimum height is 4 rows: top border + lid + text + bottom border.
+    /// For multi-line labels, `h` grows by the number of extra label lines.
     pub fn draw_cylinder(&mut self, col: usize, row: usize, w: usize, h: usize) {
-        if w < 2 || h < 5 {
+        if w < 2 || h < 4 {
             return;
         }
-        // Outer top arc
+        // Top rounded border.
         self.set(col, row, rounded::TL);
         self.set(col + w - 1, row, rounded::TR);
         for x in (col + 1)..(col + w - 1) {
             self.set(x, row, rect::H);
         }
-        // Inner top arc (depth indicator)
-        self.set(col, row + 1, rounded::BL);
-        self.set(col + w - 1, row + 1, rounded::BR);
+        // Lid indicator: T-junctions into the side walls with a horizontal
+        // line across. Visually signals "there's a cap on top", and the
+        // `├`/`┤` characters keep the side walls continuous with what sits
+        // above and below them.
+        self.set(col, row + 1, '├');
+        self.set(col + w - 1, row + 1, '┤');
         for x in (col + 1)..(col + w - 1) {
             self.set(x, row + 1, rect::H);
         }
-        // Side walls for interior rows (text area is between row+2 and row+h-3)
-        for y in (row + 2)..(row + h - 2) {
+        // Straight side walls through every interior row up to the bottom border.
+        for y in (row + 2)..(row + h - 1) {
             self.set(col, y, rect::V);
             self.set(col + w - 1, y, rect::V);
         }
-        // Inner bottom arc
-        self.set(col, row + h - 2, rounded::TL);
-        self.set(col + w - 1, row + h - 2, rounded::TR);
-        for x in (col + 1)..(col + w - 1) {
-            self.set(x, row + h - 2, rect::H);
-        }
-        // Outer bottom arc
+        // Bottom rounded border.
         self.set(col, row + h - 1, rounded::BL);
         self.set(col + w - 1, row + h - 1, rounded::BR);
         for x in (col + 1)..(col + w - 1) {

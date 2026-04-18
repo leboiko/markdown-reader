@@ -3,6 +3,17 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.2.4 — 2026-04-18
+
+### Fixed
+
+- Cylinder shape (`[(label)]`) now renders as a continuous rounded
+  rectangle with a horizontal T-junction "lid line" below the top
+  border. The previous double-arc design rendered as three detached
+  boxes in monospace fonts (top arc + text + bottom arc with no side
+  walls connecting them). Height reduced from 5 to 4 rows for the base
+  case; multi-line labels still add rows in the middle.
+
 ## 0.2.3 — 2026-04-18
 
 ### Added

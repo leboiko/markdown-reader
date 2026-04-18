@@ -71,9 +71,8 @@ fn node_draw_height(graph: &Graph, id: &str) -> usize {
     if let Some(node) = graph.node(id) {
         let extra = node.label_line_count().saturating_sub(1);
         match node.shape {
-            crate::types::NodeShape::Cylinder | crate::types::NodeShape::DoubleCircle => {
-                5 + extra
-            }
+            crate::types::NodeShape::Cylinder => 4 + extra,
+            crate::types::NodeShape::DoubleCircle => 5 + extra,
             _ => 3 + extra,
         }
     } else {

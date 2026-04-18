@@ -78,11 +78,11 @@ impl NodeGeom {
                 height: 3 + extra_lines,
                 text_row: 1,
             },
-            // Cylinder: 5 rows (2 top arcs, 1 text, 2 bottom arcs).
-            // Text starts on the first interior row (index 2).
+            // Cylinder: 4 rows — top border, lid line, text, bottom border.
+            // Text starts on the first interior row below the lid line (index 2).
             NodeShape::Cylinder => NodeGeom {
                 width: inner_w,
-                height: 5 + extra_lines,
+                height: 4 + extra_lines,
                 text_row: 2,
             },
             // DoubleCircle: 5 rows for outer + inner concentric rounded boxes.

@@ -622,8 +622,8 @@ fn node_box_height(graph: &Graph, id: &str) -> usize {
             | NodeShape::Parallelogram
             | NodeShape::Trapezoid
             | NodeShape::Subroutine => 3 + extra,
-            // Cylinder needs 5 rows: arc-top, arc-inner, text, arc-inner, arc-bottom.
-            NodeShape::Cylinder => 5 + extra,
+            // Cylinder needs 4 rows: top border, lid line, text, bottom border.
+            NodeShape::Cylinder => 4 + extra,
             // DoubleCircle needs 5 rows for the concentric inner border.
             NodeShape::DoubleCircle => 5 + extra,
         }

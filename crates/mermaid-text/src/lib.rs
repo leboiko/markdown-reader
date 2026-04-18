@@ -647,10 +647,15 @@ mod tests {
     fn cylinder_node_renders() {
         let out = render("graph LR; A[(Database)]").unwrap();
         assert!(out.contains("Database"), "missing label:\n{out}");
-        // Cylinder uses rounded arc chars at top and bottom.
+        // Cylinder uses rounded corners and a T-junction lid line that
+        // together distinguish it from a plain rounded rectangle.
         assert!(
-            out.contains('╭') || out.contains('╰'),
-            "no cylinder arcs:\n{out}"
+            out.contains('╭') && out.contains('╰'),
+            "missing rounded corners:\n{out}",
+        );
+        assert!(
+            out.contains('├') && out.contains('┤'),
+            "missing lid-line T-junctions:\n{out}",
         );
     }
 
