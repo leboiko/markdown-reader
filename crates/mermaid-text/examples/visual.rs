@@ -64,6 +64,27 @@ fn main() {
     CB -->|CLOSED| DB[(Database)]"#,
     );
 
+    // --- Perpendicular-direction subgraph ---
+    dump(
+        "perpendicular: LR subgraph inside TD parent",
+        r#"graph TD
+    subgraph Pipeline
+        direction LR
+        A[Input] --> B[Process] --> C[Output]
+    end
+    C --> D[Finish]"#,
+    );
+    dump(
+        "perpendicular: TB subgraph inside LR parent",
+        r#"graph LR
+    subgraph Supervisor
+        direction TB
+        F[Factory] --> W[Worker]
+        W --> F
+    end
+    W --> HB[Heartbeat]"#,
+    );
+
     // --- Part A: New node shapes ---
     dump("stadium node", "graph LR; A([Stadium]) --> B[End]");
     dump("subroutine node", "graph LR; A[[Subroutine]] --> B[End]");

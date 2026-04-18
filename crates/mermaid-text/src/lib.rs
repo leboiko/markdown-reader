@@ -798,4 +798,95 @@ mod tests {
             "bare 'direction' keyword leaked into output:\n{out}"
         );
     }
+
+    // ---- Perpendicular-direction subgraph tests ---------------------------
+
+    /// Nodes inside a `direction LR` subgraph nested in a `graph TD` parent
+    /// must all appear on the same row (they flow left-to-right, so the parent
+    /// sees them as a single horizontal band).
+    #[test]
+    fn subgraph_perpendicular_direction_lr_in_td() {
+        // Parent TD, subgraph LR.
+        let src = r#"graph TD
+    subgraph Pipeline
+        direction LR
+        A[Input] --> B[Process] --> C[Output]
+    end
+    C --> D[Finish]"#;
+        let out = render(src).unwrap();
+        assert!(out.contains("Input"), "missing Input:\n{out}");
+        assert!(out.contains("Process"), "missing Process:\n{out}");
+        assert!(out.contains("Output"), "missing Output:\n{out}");
+        assert!(out.contains("Finish"), "missing Finish:\n{out}");
+        // In the rendered output, Input/Process/Output should share a row
+        // (they're flowing LR inside a TD parent). Find each label's row and
+        // assert they're equal.
+        let row_of = |needle: &str| -> usize {
+            out.lines().position(|l| l.contains(needle)).expect("label not found")
+        };
+        assert_eq!(
+            row_of("Input"),
+            row_of("Process"),
+            "Input/Process should share a row in LR subgraph:\n{out}"
+        );
+        assert_eq!(
+            row_of("Process"),
+            row_of("Output"),
+            "Process/Output should share a row in LR subgraph:\n{out}"
+        );
+    }
+
+    /// A `direction LR` subgraph inside a `graph LR` parent is the same as no
+    /// direction override — both should produce identical output.
+    #[test]
+    fn subgraph_same_direction_as_parent_unchanged() {
+        // Parent LR, subgraph LR — should be identical to when no direction
+        // is specified.
+        let a = render(
+            r#"graph LR
+    subgraph S
+        direction LR
+        A-->B
+    end"#,
+        )
+        .unwrap();
+        let b = render(
+            r#"graph LR
+    subgraph S
+        A-->B
+    end"#,
+        )
+        .unwrap();
+        assert_eq!(
+            a,
+            b,
+            "direction LR inside graph LR should match default\nA:\n{a}\nB:\n{b}"
+        );
+    }
+
+    /// When no `direction` is declared on the subgraph, child nodes inherit
+    /// the parent graph's direction — today's behaviour must be preserved.
+    #[test]
+    fn subgraph_inherits_when_no_direction() {
+        // No direction declared — children flow in parent's direction.
+        let out = render(
+            r#"graph TD
+    subgraph S
+        A-->B-->C
+    end"#,
+        )
+        .unwrap();
+        // TD flow: A row < B row < C row.
+        let row_of = |needle: &str| -> usize {
+            out.lines().position(|l| l.contains(needle)).expect("label not found")
+        };
+        assert!(
+            row_of("A") < row_of("B"),
+            "A should be above B in TD:\n{out}"
+        );
+        assert!(
+            row_of("B") < row_of("C"),
+            "B should be above C in TD:\n{out}"
+        );
+    }
 }

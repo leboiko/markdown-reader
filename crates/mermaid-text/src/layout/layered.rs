@@ -15,7 +15,7 @@ use std::collections::HashMap;
 
 use unicode_width::UnicodeWidthStr;
 
-use crate::types::{Direction, Graph, NodeShape};
+use crate::types::{Direction, Graph, NodeShape, Subgraph};
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -73,6 +73,63 @@ pub fn layout(graph: &Graph, config: &LayoutConfig) -> HashMap<String, GridPos> 
 }
 
 // ---------------------------------------------------------------------------
+// Orthogonal subgraph helpers
+// ---------------------------------------------------------------------------
+
+/// Return `true` if `direction` is perpendicular (orthogonal) to `parent`.
+///
+/// LR/RL are horizontal; TD/TB/BT are vertical. Two directions are orthogonal
+/// when one is horizontal and the other is vertical.
+fn is_orthogonal(parent: Direction, child: Direction) -> bool {
+    parent.is_horizontal() != child.is_horizontal()
+}
+
+/// Walk the subgraph tree depth-first and collect, for every subgraph whose
+/// `direction` override is *orthogonal* to `parent_direction`, the set of
+/// **direct** node IDs it owns.
+///
+/// Only the *direct* `node_ids` of a matching subgraph are included; if a
+/// perpendicular subgraph itself contains a nested subgraph that is also
+/// perpendicular (relative to the outer graph), that inner subgraph is
+/// collected separately so the caller can treat each level independently.
+///
+/// # Note on deeply-nested alternating directions
+///
+/// TODO: deeply-nested alternating directions (e.g. LR inside TB inside LR)
+/// are not fully supported. Each subgraph is evaluated against the top-level
+/// graph direction only. Contributions from inner perpendicular subgraphs
+/// collapse their own nodes but do not recursively fix the outer collapse.
+fn collect_orthogonal_sets<'a>(
+    subs: &'a [Subgraph],
+    all_subs: &'a [Subgraph],
+    parent_direction: Direction,
+    out: &mut Vec<Vec<String>>,
+) {
+    for sg in subs {
+        if sg.direction.is_some_and(|sg_dir| is_orthogonal(parent_direction, sg_dir)) {
+            // This subgraph's direct children should collapse to one layer.
+            out.push(sg.node_ids.clone());
+        }
+        // Recurse into nested subgraphs regardless — a same-direction wrapper
+        // might contain a perpendicular inner subgraph.
+        let children: Vec<&Subgraph> = sg
+            .subgraph_ids
+            .iter()
+            .filter_map(|id| all_subs.iter().find(|s| &s.id == id))
+            .collect();
+        collect_orthogonal_sets(&children.into_iter().cloned().collect::<Vec<_>>(), all_subs, parent_direction, out);
+    }
+}
+
+/// Collect all sets of node IDs that belong to orthogonal (perpendicular)
+/// subgraphs relative to the graph's own direction.
+fn orthogonal_node_sets(graph: &Graph) -> Vec<Vec<String>> {
+    let mut result = Vec::new();
+    collect_orthogonal_sets(&graph.subgraphs, &graph.subgraphs, graph.direction, &mut result);
+    result
+}
+
+// ---------------------------------------------------------------------------
 // Step 1: Layer assignment (longest path from sources)
 // ---------------------------------------------------------------------------
 
@@ -119,6 +176,56 @@ fn assign_layers(graph: &Graph) -> HashMap<String, usize> {
     // Ensure all nodes appear even if they have no edges
     for node in &graph.nodes {
         layer.entry(node.id.clone()).or_insert(0);
+    }
+
+    // --- Orthogonal subgraph collapsing ---
+    //
+    // For each subgraph whose direction is perpendicular to the parent's flow
+    // axis, all direct child nodes should occupy a single parent layer. Pull
+    // them to their minimum layer so they form one "band" in the layout, and
+    // then re-run longest-path for the remaining (non-orthogonal) nodes so
+    // they stay properly sequenced after the collapsed band.
+    let ortho_sets = orthogonal_node_sets(graph);
+    if !ortho_sets.is_empty() {
+        // Build flat set of all orthogonal node IDs for fast membership tests.
+        let all_ortho: std::collections::HashSet<&str> =
+            ortho_sets.iter().flat_map(|s| s.iter().map(String::as_str)).collect();
+
+        // Collapse each set to min layer.
+        for set in &ortho_sets {
+            let present: Vec<&str> = set.iter().map(String::as_str).filter(|id| layer.contains_key(*id)).collect();
+            if present.is_empty() {
+                continue;
+            }
+            let min_layer = present.iter().map(|id| layer[*id]).min().unwrap_or(0);
+            for id in &present {
+                layer.insert((*id).to_owned(), min_layer);
+            }
+        }
+
+        // Re-run longest-path for non-orthogonal nodes only, so that nodes
+        // downstream of the collapsed band get their layers updated correctly.
+        // Orthogonal nodes keep their (collapsed) layer; only non-ortho nodes
+        // are re-propagated.
+        let max_iter2 = graph.nodes.len() + 1;
+        let mut changed2 = true;
+        let mut iter2 = 0;
+        while changed2 && iter2 < max_iter2 {
+            changed2 = false;
+            iter2 += 1;
+            for edge in &graph.edges {
+                // Skip propagation INTO orthogonal nodes — their layers are fixed.
+                if all_ortho.contains(edge.to.as_str()) {
+                    continue;
+                }
+                let from_layer = layer.get(edge.from.as_str()).copied().unwrap_or(0);
+                let to_layer = layer.entry(edge.to.clone()).or_insert(0);
+                if from_layer + 1 > *to_layer {
+                    *to_layer = from_layer + 1;
+                    changed2 = true;
+                }
+            }
+        }
     }
 
     layer
@@ -194,6 +301,79 @@ fn order_within_layers(graph: &Graph, layers: &HashMap<String, usize>) -> Vec<Ve
 
         if best_crossings == 0 {
             break;
+        }
+    }
+
+    // Enforce topological order for nodes belonging to orthogonal subgraphs
+    // that were collapsed into the same layer. Without this, barycenter
+    // sorting can place them in arbitrary order, which is fine for crossing
+    // minimisation but wrong visually when they must flow along the orthogonal
+    // axis (e.g. A→B→C left-to-right inside a top-down parent).
+    let ortho_sets = orthogonal_node_sets(graph);
+    if !ortho_sets.is_empty() {
+        for layer_nodes in &mut best {
+            for set in &ortho_sets {
+                let in_layer: Vec<usize> = layer_nodes
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, id)| set.contains(id))
+                    .map(|(i, _)| i)
+                    .collect();
+                if in_layer.len() <= 1 {
+                    continue;
+                }
+                // Collect node IDs as owned strings to avoid holding a shared
+                // borrow of `layer_nodes` while we later mutate it.
+                let internal_ids: Vec<String> =
+                    in_layer.iter().map(|&i| layer_nodes[i].clone()).collect();
+
+                // Topological sort (Kahn's) of the subgraph's internal edges.
+                let internal_set: std::collections::HashSet<&str> =
+                    internal_ids.iter().map(String::as_str).collect();
+                let mut successors: HashMap<&str, Vec<&str>> =
+                    internal_set.iter().map(|&n| (n, Vec::new())).collect();
+                let mut in_degree: HashMap<&str, usize> =
+                    internal_set.iter().map(|&n| (n, 0usize)).collect();
+                for edge in &graph.edges {
+                    if internal_set.contains(edge.from.as_str())
+                        && internal_set.contains(edge.to.as_str())
+                    {
+                        successors
+                            .entry(edge.from.as_str())
+                            .or_default()
+                            .push(edge.to.as_str());
+                        *in_degree.entry(edge.to.as_str()).or_default() += 1;
+                    }
+                }
+                let mut queue: std::collections::VecDeque<&str> = in_degree
+                    .iter()
+                    .filter(|(_, d)| **d == 0)
+                    .map(|(&n, _)| n)
+                    .collect();
+                let mut topo: Vec<String> = Vec::new();
+                while let Some(node) = queue.pop_front() {
+                    topo.push(node.to_owned());
+                    // Clone successor list to avoid borrow conflicts while we
+                    // mutate `in_degree` in the same loop body.
+                    let succs: Vec<&str> =
+                        successors.get(node).cloned().unwrap_or_default();
+                    for succ in succs {
+                        let d = in_degree.entry(succ).or_default();
+                        *d = d.saturating_sub(1);
+                        if *d == 0 {
+                            queue.push_back(succ);
+                        }
+                    }
+                }
+                // Write topo order back into the positions these nodes held in
+                // the layer. If Kahn's didn't complete (cycle), fall back to
+                // the existing order to avoid producing wrong output silently.
+                if topo.len() == in_layer.len() {
+                    for (slot, &pos) in in_layer.iter().enumerate() {
+                        layer_nodes[pos] = topo[slot].clone();
+                    }
+                }
+            }
         }
     }
 
