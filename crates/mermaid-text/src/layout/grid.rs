@@ -814,7 +814,15 @@ impl Grid {
         arrow_direction: char,
     ) -> Option<Vec<(usize, usize)>> {
         // Cost constants.
-        const EDGE_SOFT_COST: f32 = 2.0;
+        //
+        // `EDGE_SOFT_COST` is the penalty added when A* enters a cell that
+        // a previously-routed edge has already painted. Higher values push
+        // edges apart into distinct corridors; lower values let them share
+        // trunks. Tuned to favor legibility without sending edges on wide
+        // detours — a value of ~4 is enough to split 2-3 parallel edges
+        // onto adjacent columns while still accepting a shared trunk when
+        // no free column is reachable.
+        const EDGE_SOFT_COST: f32 = 4.0;
         const CORNER_PENALTY: f32 = 0.5;
         // 4-directional movement: Right, Down, Left, Up (indices 0..3).
         const DIRS: [(isize, isize); 4] = [(1, 0), (0, 1), (-1, 0), (0, -1)];

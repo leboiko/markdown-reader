@@ -3,6 +3,19 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.2.5 — 2026-04-18
+
+### Fixed
+
+- Edges crossing subgraph borders no longer collapse onto a single trunk.
+  Subgraph borders were previously marked as hard `NodeBox` obstacles,
+  which forced A* to give up on any edge whose source or destination
+  lived inside a subgraph — the fallback Manhattan router then drew
+  straight lines ignoring every obstacle, visually stacking all edges
+  onto one column. Borders are now only *protected* (so their glyph
+  survives edge routing) and A* can route through them, producing
+  distinct parallel corridors per edge.
+
 ## 0.2.4 — 2026-04-18
 
 ### Fixed

@@ -774,17 +774,14 @@ fn draw_subgraph_border(grid: &mut Grid, bounds: &SubgraphBounds) {
         grid.protect_cell(col + w - 1, y);
     }
 
-    // Mark border cells as NodeBox obstacles so A* routes around them.
-    // Only the thin border ring — interior must remain passable for edges
-    // that stay inside the subgraph.
-    for x in col..(col + w) {
-        grid.mark_obstacle(x, row);
-        grid.mark_obstacle(x, row + h - 1);
-    }
-    for y in (row + 1)..(row + h - 1) {
-        grid.mark_obstacle(col, y);
-        grid.mark_obstacle(col + w - 1, y);
-    }
+    // Subgraph borders are *protected* (so their glyphs survive edge
+    // routing) but NOT marked as hard `NodeBox` obstacles. Hard marking
+    // would prevent any edge whose source or destination lies inside the
+    // subgraph from exiting through the border — A* would give up and
+    // fall back to Manhattan routing, which ignores obstacles entirely.
+    // Leaving borders passable lets A* find real orthogonal paths that
+    // cross subgraph boundaries naturally; the border glyph at the
+    // crossing cell stays intact thanks to `protect_cell`.
 
     // Write the label inline in the top border row, starting 2 cells in from
     // the left corner. This avoids overlapping with node boxes whose top edge
