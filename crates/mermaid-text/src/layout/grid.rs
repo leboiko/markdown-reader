@@ -1,13 +1,26 @@
 //! 2D character grid used for building the final text output.
 //!
-//! The grid stores one `char` per cell. All drawing operations write
-//! directly into the grid; the final string is produced by converting the
-//! grid to a `String` via its [`std::fmt::Display`] implementation.
+//! The grid stores one `char` per cell plus a parallel obstacle layer.
+//! The obstacle layer is used by A\* edge routing to distinguish:
+//!
+//! - **Hard obstacles** — cells that belong to a node bounding box (walls
+//!   and interior). Edges must not pass through these.
+//! - **Soft obstacles** — cells already occupied by a previously-routed edge.
+//!   Edges can cross these but at increased cost.
+//!
+//! All drawing operations write directly into the grid; the final string is
+//! produced by converting the grid to a `String` via its [`std::fmt::Display`]
+//! implementation.
+
+use std::cmp::Ordering;
+use std::collections::BinaryHeap;
 
 use unicode_width::UnicodeWidthChar;
 
 // Box-drawing character sets
-/// Rectangle corners and sides.
+/// Rectangle corners and sides. T-junctions and crosses are not listed here
+/// because they are derived on demand by the direction-bit canvas via
+/// [`DIR_TO_CHAR`].
 mod rect {
     pub const TL: char = '┌';
     pub const TR: char = '┐';
@@ -15,11 +28,6 @@ mod rect {
     pub const BR: char = '┘';
     pub const H: char = '─';
     pub const V: char = '│';
-    pub const T_DOWN: char = '┬'; // T junction, branch down
-    pub const T_UP: char = '┴'; // T junction, branch up
-    pub const T_RIGHT: char = '├'; // T junction, branch right
-    pub const T_LEFT: char = '┤'; // T junction, branch left
-    pub const CROSS: char = '┼';
 }
 
 /// Rounded-corner box characters.
@@ -39,6 +47,109 @@ pub mod arrow {
 }
 
 // ---------------------------------------------------------------------------
+// Direction-bit canvas
+// ---------------------------------------------------------------------------
+//
+// Each cell carries a 4-bit direction mask describing the line segments that
+// exit the cell toward its neighbors. Writing a line segment OR-merges the
+// appropriate bits into the cell, and the resulting bitmask is used to look
+// up the correct box-drawing glyph. This produces correct T-junctions
+// (`├ ┤ ┬ ┴`) and crosses (`┼`) for free whenever edges meet — the logic that
+// used to live in `merge_h_line`/`merge_v_line`/`merge_corner_*` collapses
+// into a single table lookup.
+
+const DIR_UP: u8 = 0b0001;
+const DIR_DOWN: u8 = 0b0010;
+const DIR_LEFT: u8 = 0b0100;
+const DIR_RIGHT: u8 = 0b1000;
+
+/// Lookup table mapping a 4-bit direction mask (UP=1, DOWN=2, LEFT=4, RIGHT=8)
+/// to the single box-drawing glyph that represents it.
+///
+/// Single-direction stubs (`╵╷╴╶`) would render as half-length line fragments
+/// in most terminal fonts, so we use the full `│` / `─` instead — matching
+/// termaid's chosen behavior for "edge segment that leaves a cell but didn't
+/// enter from the expected opposite side".
+const DIR_TO_CHAR: [char; 16] = [
+    ' ', // 0000 — empty
+    '│', // 0001 — UP only
+    '│', // 0010 — DOWN only
+    '│', // 0011 — UP+DOWN (plain vertical)
+    '─', // 0100 — LEFT only
+    '┘', // 0101 — UP+LEFT
+    '┐', // 0110 — DOWN+LEFT
+    '┤', // 0111 — UP+DOWN+LEFT
+    '─', // 1000 — RIGHT only
+    '└', // 1001 — UP+RIGHT
+    '┌', // 1010 — DOWN+RIGHT
+    '├', // 1011 — UP+DOWN+RIGHT
+    '─', // 1100 — LEFT+RIGHT (plain horizontal)
+    '┴', // 1101 — UP+LEFT+RIGHT
+    '┬', // 1110 — DOWN+LEFT+RIGHT
+    '┼', // 1111 — cross
+];
+
+// ---------------------------------------------------------------------------
+// Grid
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Obstacle classification
+// ---------------------------------------------------------------------------
+
+/// Cell-level obstacle classification for A\* routing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Obstacle {
+    /// Free cell — no extra routing cost.
+    Free,
+    /// Cell belongs to a node bounding box. Edges must not enter.
+    NodeBox,
+    /// Cell already has a routed edge. Crossings are allowed at extra cost.
+    EdgeOccupied,
+}
+
+// ---------------------------------------------------------------------------
+// A* state
+// ---------------------------------------------------------------------------
+
+/// A single entry in the A\* open-set priority queue.
+///
+/// We use a min-heap via [`BinaryHeap`], so we invert the comparison to turn
+/// it into a min-heap (smallest `f_cost` first).
+#[derive(Debug, Clone, Copy)]
+struct AstarNode {
+    /// `f = g + h` (total estimated cost through this node).
+    f_cost: f32,
+    /// Steps taken to reach this cell from the start.
+    g_cost: f32,
+    col: usize,
+    row: usize,
+    /// Direction we arrived from (encoded as 0=R,1=D,2=L,3=U, `u8::MAX`=start).
+    dir: u8,
+}
+
+impl PartialEq for AstarNode {
+    fn eq(&self, other: &Self) -> bool {
+        self.f_cost == other.f_cost
+    }
+}
+
+impl Eq for AstarNode {}
+
+impl Ord for AstarNode {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // Reverse order so BinaryHeap is a min-heap.
+        other.f_cost.partial_cmp(&self.f_cost).unwrap_or(Ordering::Equal)
+    }
+}
+
+impl PartialOrd for AstarNode {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Grid
 // ---------------------------------------------------------------------------
 
@@ -50,6 +161,16 @@ pub mod arrow {
 pub struct Grid {
     /// Row-major storage: `cells[row][col]`
     cells: Vec<Vec<char>>,
+    /// Parallel obstacle layer: `obstacles[row][col]`
+    obstacles: Vec<Vec<Obstacle>>,
+    /// Parallel direction-bit layer used by [`Grid::add_dirs`] for junction
+    /// merging. Each cell holds the OR of the `DIR_*` bits for every line
+    /// segment that has been drawn into it.
+    directions: Vec<Vec<u8>>,
+    /// Cell-protection flags. Writes via [`Grid::add_dirs`] skip protected
+    /// cells so that rounded corners, arrow tips, and node labels survive
+    /// any subsequent edge routing that happens to cross them.
+    protected: Vec<Vec<bool>>,
     /// Total columns.
     width: usize,
     /// Total rows.
@@ -66,8 +187,58 @@ impl Grid {
     pub fn new(width: usize, height: usize) -> Self {
         Self {
             cells: vec![vec![' '; width]; height],
+            obstacles: vec![vec![Obstacle::Free; width]; height],
+            directions: vec![vec![0u8; width]; height],
+            protected: vec![vec![false; width]; height],
             width,
             height,
+        }
+    }
+
+    /// OR the given direction bits into the cell at `(col, row)` and update
+    /// the cell's glyph from the direction-to-char lookup table.
+    ///
+    /// Protected cells (rounded corners, arrow tips, labels) are left alone —
+    /// their glyph is preserved and the direction bits are not recorded.
+    /// Out-of-bounds writes are silently ignored.
+    fn add_dirs(&mut self, col: usize, row: usize, bits: u8) {
+        if row >= self.height || col >= self.width {
+            return;
+        }
+        if self.protected[row][col] {
+            return;
+        }
+        self.directions[row][col] |= bits;
+        self.cells[row][col] = DIR_TO_CHAR[self.directions[row][col] as usize];
+    }
+
+    /// Mark a cell as protected — subsequent [`Grid::add_dirs`] calls will
+    /// not touch it. Used for rounded corners, arrow tips, and label text
+    /// that must survive edge routing.
+    fn protect(&mut self, col: usize, row: usize) {
+        if row < self.height && col < self.width {
+            self.protected[row][col] = true;
+        }
+    }
+
+    /// Mark all cells of a node bounding box as hard obstacles.
+    ///
+    /// This must be called for every node *before* routing any edges so that
+    /// A\* routing can avoid node boxes.
+    ///
+    /// # Arguments
+    ///
+    /// * `col`, `row` — top-left corner of the node box
+    /// * `w`, `h`     — bounding-box dimensions (including border cells)
+    pub fn mark_node_box(&mut self, col: usize, row: usize, w: usize, h: usize) {
+        for dy in 0..h {
+            for dx in 0..w {
+                let r = row + dy;
+                let c = col + dx;
+                if r < self.height && c < self.width {
+                    self.obstacles[r][c] = Obstacle::NodeBox;
+                }
+            }
         }
     }
 
@@ -143,63 +314,26 @@ impl Grid {
         }
     }
 
-    /// Draw a diamond shape centered at `(cx, cy)` with half-widths `hw` and `hh`.
+    /// Draw a diamond-style node box: a standard rectangle with `◇` markers
+    /// overwriting the horizontal centre of the top and bottom edges.
     ///
-    /// The diamond is drawn using `/` and `\` characters on the diagonal edges
-    /// and `─` on any flat portions. The height is forced to an odd number
-    /// so there is a clear centre row.
+    /// This is the termaid convention — readable at any terminal width and
+    /// unambiguous even with proportional fonts.
     ///
     /// `w` and `h` are the total bounding-box dimensions.
     pub fn draw_diamond(&mut self, col: usize, row: usize, w: usize, h: usize) {
-        if w < 3 || h < 3 {
+        if w < 2 || h < 2 {
             return;
         }
-        // Draw the diamond as four lines from the midpoints of each side.
-        // Top midpoint: (col + w/2, row)
-        // Bottom midpoint: (col + w/2, row + h - 1)
-        // Left midpoint: (col, row + h/2)
-        // Right midpoint: (col + w - 1, row + h/2)
-        let mid_x = col + w / 2;
-        let mid_y = row + h / 2;
+        // Draw the standard rectangle first.
+        self.draw_box(col, row, w, h);
 
-        // Top edge and bottom edge (horizontal dashes if wide)
-        self.set(mid_x, row, '▲');
-        self.set(mid_x, row + h - 1, '▼');
-        self.set(col, mid_y, '◁');
-        self.set(col + w - 1, mid_y, '▷');
-
-        // Draw the four diagonal lines
-        // Top-left diagonal: from (mid_x, row) to (col, mid_y)
-        self.draw_diagonal(mid_x, row, col, mid_y);
-        // Top-right diagonal: from (mid_x, row) to (col+w-1, mid_y)
-        self.draw_diagonal(mid_x, row, col + w - 1, mid_y);
-        // Bottom-left diagonal: from (col, mid_y) to (mid_x, row+h-1)
-        self.draw_diagonal(col, mid_y, mid_x, row + h - 1);
-        // Bottom-right diagonal: from (col+w-1, mid_y) to (mid_x, row+h-1)
-        self.draw_diagonal(col + w - 1, mid_y, mid_x, row + h - 1);
-    }
-
-    /// Draw a diagonal line between two points using `/` or `\` characters.
-    fn draw_diagonal(&mut self, x1: usize, y1: usize, x2: usize, y2: usize) {
-        // Use signed arithmetic to determine direction
-        let dx = x2 as isize - x1 as isize;
-        let dy = y2 as isize - y1 as isize;
-        let steps = dx.unsigned_abs().max(dy.unsigned_abs());
-        if steps == 0 {
-            return;
-        }
-
-        for s in 1..steps {
-            let x = (x1 as isize + dx * s as isize / steps as isize) as usize;
-            let y = (y1 as isize + dy * s as isize / steps as isize) as usize;
-            // '\' when moving right+down or left+up; '/' otherwise
-            let ch = if (dx > 0 && dy > 0) || (dx < 0 && dy < 0) {
-                '\\'
-            } else {
-                '/'
-            };
-            self.set(x, y, ch);
-        }
+        // Overwrite the horizontal centre of the top and bottom edges with ◇.
+        // Using `col + w / 2` gives a deterministic centre regardless of
+        // whether `w` is odd or even.
+        let cx = col + w / 2;
+        self.set(cx, row, '◇');
+        self.set(cx, row + h - 1, '◇');
     }
 
     // -----------------------------------------------------------------------
@@ -222,6 +356,23 @@ impl Grid {
         }
     }
 
+    /// Write `text` starting at `(col, row)` and protect every cell written
+    /// so that subsequent [`Grid::add_dirs`] calls (from edge routing) cannot
+    /// overwrite the label characters.
+    ///
+    /// Use this for edge labels that must survive later routing passes.
+    pub fn write_text_protected(&mut self, col: usize, row: usize, text: &str) {
+        let mut x = col;
+        for ch in text.chars() {
+            if x >= self.width {
+                break;
+            }
+            self.set(x, row, ch);
+            self.protect(x, row);
+            x += UnicodeWidthChar::width(ch).unwrap_or(1);
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Arrow / path drawing
     // -----------------------------------------------------------------------
@@ -235,12 +386,10 @@ impl Grid {
             return;
         }
         for x in col1..col2 {
-            // Respect junction characters already on the grid
-            let existing = self.get(x, row);
-            let ch = merge_h_line(existing);
-            self.set(x, row, ch);
+            self.add_dirs(x, row, DIR_LEFT | DIR_RIGHT);
         }
         self.set(col2, row, arrow::RIGHT);
+        self.protect(col2, row);
     }
 
     /// Draw a vertical line with an arrow tip at the bottom.
@@ -252,11 +401,10 @@ impl Grid {
             return;
         }
         for y in row1..row2 {
-            let existing = self.get(col, y);
-            let ch = merge_v_line(existing);
-            self.set(col, y, ch);
+            self.add_dirs(col, y, DIR_UP | DIR_DOWN);
         }
         self.set(col, row2, arrow::DOWN);
+        self.protect(col, row2);
     }
 
     /// Draw a right-angle path from `(col1, row1)` to `(col2, row2)`.
@@ -283,96 +431,270 @@ impl Grid {
         }
 
         if horizontal_first {
-            // Horizontal segment from (col1, row1) to (col2, row1)
+            // Horizontal segment from (col1, row1) up to (but not including)
+            // the corner at (col2, row1).
             if col1 != col2 {
-                self.draw_h_line(col1, row1, col2);
+                let (lo, hi) = order(col1, col2);
+                for x in lo..hi {
+                    self.add_dirs(x, row1, DIR_LEFT | DIR_RIGHT);
+                }
             }
-            // Corner
-            if col1 != col2 && row1 != row2 {
-                let existing = self.get(col2, row1);
-                self.set(col2, row1, merge_corner_h_v(existing));
-            }
-            // Vertical segment from (col2, row1) to (col2, row2) with tip
-            if row1 != row2 {
-                self.draw_v_line_with_tip(col2, row1, row2, arrow_direction);
-            } else {
-                // Pure horizontal — place tip at end
+
+            if row1 == row2 {
+                // Pure horizontal — arrow tip at the destination end.
                 self.set(col2, row2, arrow_direction);
-            }
-        } else {
-            // Vertical segment from (col1, row1) to (col1, row2)
-            if row1 != row2 {
-                self.draw_v_line(col1, row1, row2);
-            }
-            // Corner
-            if col1 != col2 && row1 != row2 {
-                let existing = self.get(col1, row2);
-                self.set(col1, row2, merge_corner_v_h(existing));
-            }
-            // Horizontal segment from (col1, row2) to (col2, row2) with tip
-            if col1 != col2 {
-                self.draw_h_line_with_tip(col1, row2, col2, arrow_direction);
+                self.protect(col2, row2);
             } else {
+                // Corner at (col2, row1): incoming-horizontal side + outgoing-vertical side.
+                let h_in = if col2 > col1 { DIR_LEFT } else { DIR_RIGHT };
+                let v_out = if row2 > row1 { DIR_DOWN } else { DIR_UP };
+                self.add_dirs(col2, row1, h_in | v_out);
+
+                // Vertical segment between the corner and the tip (exclusive of both).
+                let (vlo, vhi) = order(row1, row2);
+                // `order` always gives (min, max). The corner sits at the min or max
+                // depending on direction; the line cells are strictly between them.
+                for y in (vlo + 1)..vhi {
+                    self.add_dirs(col2, y, DIR_UP | DIR_DOWN);
+                }
+
                 self.set(col2, row2, arrow_direction);
+                self.protect(col2, row2);
+            }
+        } else {
+            // Vertical segment up to (but not including) the corner at (col1, row2).
+            if row1 != row2 {
+                let (lo, hi) = order(row1, row2);
+                for y in lo..hi {
+                    self.add_dirs(col1, y, DIR_UP | DIR_DOWN);
+                }
+            }
+
+            if col1 == col2 {
+                self.set(col2, row2, arrow_direction);
+                self.protect(col2, row2);
+            } else {
+                let v_in = if row2 > row1 { DIR_UP } else { DIR_DOWN };
+                let h_out = if col2 > col1 { DIR_RIGHT } else { DIR_LEFT };
+                self.add_dirs(col1, row2, v_in | h_out);
+
+                let (hlo, hhi) = order(col1, col2);
+                for x in (hlo + 1)..hhi {
+                    self.add_dirs(x, row2, DIR_LEFT | DIR_RIGHT);
+                }
+
+                self.set(col2, row2, arrow_direction);
+                self.protect(col2, row2);
             }
         }
     }
 
-    // -- internal helpers ---------------------------------------------------
+    // -----------------------------------------------------------------------
+    // A* obstacle-aware edge routing
+    // -----------------------------------------------------------------------
 
-    /// Draw a plain horizontal line (no tip) from col1 to col2 (exclusive).
-    fn draw_h_line(&mut self, col1: usize, row: usize, col2: usize) {
-        let (lo, hi) = if col1 <= col2 {
-            (col1, col2)
-        } else {
-            (col2, col1)
+    /// Route an edge from `(col1, row1)` to `(col2, row2)` using A\* pathfinding
+    /// and draw the result on the grid with box-drawing characters.
+    ///
+    /// The router:
+    /// - Treats `NodeBox` cells as impassable hard obstacles.
+    /// - Applies a soft penalty (`EDGE_SOFT_COST = 2.0`) when crossing cells
+    ///   already occupied by another edge, to reduce clutter.
+    /// - Applies a corner penalty (`CORNER_PENALTY = 0.5`) when the routing
+    ///   direction changes, to favour straighter paths.
+    ///
+    /// After finding the path, the method draws it using `─`/`│` for straight
+    /// segments and junction characters at corners, placing the arrow tip at
+    /// the destination.
+    ///
+    /// If A\* cannot find any path (e.g. the destination is completely
+    /// surrounded by obstacles), the method falls back to the simple Manhattan
+    /// routing used by [`Grid::draw_manhattan`].
+    ///
+    /// # Arguments
+    ///
+    /// * `col1`, `row1` — source cell (just outside the source node border)
+    /// * `col2`, `row2` — destination cell (just outside the destination node
+    ///   border, where the arrow tip will be placed)
+    /// * `horizontal_first` — hint: prefer horizontal movement first (LR/RL
+    ///   flows). A\* may still deviate when obstacles block the preferred path.
+    /// * `arrow_direction` — arrow tip character placed at `(col2, row2)`
+    ///
+    /// # Returns
+    ///
+    /// The full pixel path as `(col, row)` pairs from source to destination,
+    /// including the arrow-tip cell. Returns `None` only when both endpoints
+    /// are the same cell.
+    pub fn route_edge(
+        &mut self,
+        col1: usize,
+        row1: usize,
+        col2: usize,
+        row2: usize,
+        horizontal_first: bool,
+        arrow_direction: char,
+    ) -> Option<Vec<(usize, usize)>> {
+        // Cost constants.
+        const EDGE_SOFT_COST: f32 = 2.0;
+        const CORNER_PENALTY: f32 = 0.5;
+        // 4-directional movement: Right, Down, Left, Up (indices 0..3).
+        const DIRS: [(isize, isize); 4] = [(1, 0), (0, 1), (-1, 0), (0, -1)];
+
+        if col1 == col2 && row1 == row2 {
+            return None;
+        }
+
+        // Manhattan distance heuristic (admissible — never overestimates).
+        let h = |c: usize, r: usize| -> f32 {
+            (c.abs_diff(col2) + r.abs_diff(row2)) as f32
         };
-        for x in lo..hi {
-            let existing = self.get(x, row);
-            self.set(x, row, merge_h_line(existing));
+
+        // `came_from[row][col]` encodes the direction we arrived from
+        // (0–3) or `u8::MAX` for unvisited.  We also store the g_cost.
+        let mut g_cost: Vec<Vec<f32>> = vec![vec![f32::INFINITY; self.width]; self.height];
+        let mut came_from: Vec<Vec<u8>> = vec![vec![u8::MAX; self.width]; self.height];
+
+        g_cost[row1][col1] = 0.0;
+
+        let mut open: BinaryHeap<AstarNode> = BinaryHeap::new();
+        // Preferred initial direction based on `horizontal_first`.
+        let start_dir = if horizontal_first { 0u8 } else { 1u8 };
+        open.push(AstarNode { f_cost: h(col1, row1), g_cost: 0.0, col: col1, row: row1, dir: start_dir });
+
+        'outer: while let Some(current) = open.pop() {
+            // Skip stale entries (a cheaper path was already found).
+            if current.g_cost > g_cost[current.row][current.col] {
+                continue;
+            }
+
+            if current.col == col2 && current.row == row2 {
+                break 'outer;
+            }
+
+            for (dir_idx, &(dc, dr)) in DIRS.iter().enumerate() {
+                let nc = current.col.wrapping_add_signed(dc);
+                let nr = current.row.wrapping_add_signed(dr);
+                if nc >= self.width || nr >= self.height {
+                    continue;
+                }
+                // Hard obstacle check.
+                if self.obstacles[nr][nc] == Obstacle::NodeBox {
+                    // Allow the destination cell even if it is marked as a
+                    // node box (the tip sits on the node border).
+                    if nc != col2 || nr != row2 {
+                        continue;
+                    }
+                }
+
+                // Base step cost.
+                let mut step = 1.0f32;
+                // Soft obstacle: crossing an existing edge costs more.
+                if self.obstacles[nr][nc] == Obstacle::EdgeOccupied {
+                    step += EDGE_SOFT_COST;
+                }
+                // Corner penalty: direction change from previous step.
+                if dir_idx as u8 != current.dir {
+                    step += CORNER_PENALTY;
+                }
+
+                let new_g = current.g_cost + step;
+                if new_g < g_cost[nr][nc] {
+                    g_cost[nr][nc] = new_g;
+                    // Store the direction of the move INTO (nr, nc) — the
+                    // reconstruction walks back by reversing this vector.
+                    came_from[nr][nc] = dir_idx as u8;
+                    open.push(AstarNode {
+                        f_cost: new_g + h(nc, nr),
+                        g_cost: new_g,
+                        col: nc,
+                        row: nr,
+                        dir: dir_idx as u8,
+                    });
+                }
+            }
+        }
+
+        // Reconstruct path by walking `came_from` backwards from the goal.
+        if came_from[row2][col2] == u8::MAX && (col1 != col2 || row1 != row2) {
+            // A* found no path — fall back to simple Manhattan routing.
+            self.draw_manhattan(col1, row1, col2, row2, horizontal_first, arrow_direction);
+            // Return a two-point path for label placement.
+            return Some(vec![(col1, row1), (col2, row2)]);
+        }
+
+        // Collect waypoints (in reverse order, then reverse).
+        let mut path: Vec<(usize, usize)> = Vec::new();
+        let mut cc = col2;
+        let mut cr = row2;
+        path.push((cc, cr));
+        while cc != col1 || cr != row1 {
+            let dir = came_from[cr][cc];
+            if dir == u8::MAX {
+                break;
+            }
+            // `came_from` stores the direction of the move INTO this cell —
+            // stepping back means reversing that vector.
+            let (dc, dr) = DIRS[dir as usize];
+            cc = cc.wrapping_add_signed(-dc);
+            cr = cr.wrapping_add_signed(-dr);
+            path.push((cc, cr));
+        }
+        path.reverse();
+
+        // Draw the path on the grid.
+        self.draw_routed_path(&path, arrow_direction);
+        Some(path)
+    }
+
+    /// Draw a pre-computed list of `(col, row)` waypoints as box-drawing
+    /// chars using the direction-bit canvas.
+    ///
+    /// For each waypoint, the direction bits pointing toward its path
+    /// neighbors (previous and next) are OR'd into the cell; the
+    /// direction-to-char table then produces the correct glyph — straight
+    /// segments render as `─`/`│`, turns render as corner chars, and
+    /// whenever another edge has already painted the same cell the result
+    /// merges naturally into a T-junction (`├┤┬┴`) or cross (`┼`).
+    ///
+    /// The final waypoint is overwritten with the arrow tip and protected
+    /// so later edges can't erase it. Each drawn cell is marked as
+    /// [`Obstacle::EdgeOccupied`] so subsequent edges pay a higher cost
+    /// to cross it.
+    fn draw_routed_path(&mut self, path: &[(usize, usize)], tip: char) {
+        if path.len() < 2 {
+            return;
+        }
+        let last = path.len() - 1;
+
+        for i in 0..=last {
+            let (c, r) = path[i];
+
+            // Mark as edge-occupied so future routes prefer fresh corridors.
+            if r < self.height
+                && c < self.width
+                && self.obstacles[r][c] != Obstacle::NodeBox
+            {
+                self.obstacles[r][c] = Obstacle::EdgeOccupied;
+            }
+
+            if i == last {
+                // Arrow tip — fixed glyph, protected against later merges.
+                self.set(c, r, tip);
+                self.protect(c, r);
+                continue;
+            }
+
+            let mut bits = 0u8;
+            if i > 0 {
+                let (pc, pr) = path[i - 1];
+                bits |= neighbor_bit(c, r, pc, pr);
+            }
+            let (nc, nr) = path[i + 1];
+            bits |= neighbor_bit(c, r, nc, nr);
+            self.add_dirs(c, r, bits);
         }
     }
 
-    /// Draw a plain vertical line (no tip) from row1 to row2 (exclusive).
-    fn draw_v_line(&mut self, col: usize, row1: usize, row2: usize) {
-        let (lo, hi) = if row1 <= row2 {
-            (row1, row2)
-        } else {
-            (row2, row1)
-        };
-        for y in lo..hi {
-            let existing = self.get(col, y);
-            self.set(col, y, merge_v_line(existing));
-        }
-    }
-
-    /// Draw a horizontal line with an arrow tip at the destination end.
-    fn draw_h_line_with_tip(&mut self, col1: usize, row: usize, col2: usize, tip: char) {
-        let (lo, hi) = if col1 <= col2 {
-            (col1, col2)
-        } else {
-            (col2, col1)
-        };
-        for x in lo..hi {
-            let existing = self.get(x, row);
-            self.set(x, row, merge_h_line(existing));
-        }
-        self.set(col2, row, tip);
-    }
-
-    /// Draw a vertical line with an arrow tip at the destination end.
-    fn draw_v_line_with_tip(&mut self, col: usize, row1: usize, row2: usize, tip: char) {
-        let (lo, hi) = if row1 <= row2 {
-            (row1, row2)
-        } else {
-            (row2, row1)
-        };
-        for y in lo..hi {
-            let existing = self.get(col, y);
-            self.set(col, y, merge_v_line(existing));
-        }
-        self.set(col, row2, tip);
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -397,45 +719,29 @@ impl std::fmt::Display for Grid {
 }
 
 // ---------------------------------------------------------------------------
-// Merge helpers — prevent overwriting structural characters
+// Free helpers
 // ---------------------------------------------------------------------------
 
-/// Choose the correct character when writing a horizontal line segment,
-/// merging with any existing box-drawing character.
-fn merge_h_line(existing: char) -> char {
-    match existing {
-        '│' => rect::CROSS,
-        rect::T_DOWN | rect::T_UP | rect::CROSS => existing,
-        _ => rect::H,
-    }
+/// Sort `(a, b)` into `(min, max)` ascending.
+fn order(a: usize, b: usize) -> (usize, usize) {
+    if a <= b { (a, b) } else { (b, a) }
 }
 
-/// Choose the correct character when writing a vertical line segment.
-fn merge_v_line(existing: char) -> char {
-    match existing {
-        '─' => rect::CROSS,
-        rect::T_RIGHT | rect::T_LEFT | rect::CROSS => existing,
-        _ => rect::V,
-    }
-}
-
-/// Merge a corner character where a horizontal line turns into a vertical one.
-fn merge_corner_h_v(existing: char) -> char {
-    match existing {
-        '─' => rect::T_DOWN,
-        '│' => rect::T_LEFT,
-        ' ' | arrow::RIGHT | arrow::DOWN | arrow::LEFT | arrow::UP => rect::T_DOWN,
-        _ => existing,
-    }
-}
-
-/// Merge a corner character where a vertical line turns into a horizontal one.
-fn merge_corner_v_h(existing: char) -> char {
-    match existing {
-        '│' => rect::T_RIGHT,
-        '─' => rect::T_UP,
-        ' ' | arrow::RIGHT | arrow::DOWN | arrow::LEFT | arrow::UP => rect::T_RIGHT,
-        _ => existing,
+/// Return the direction bit that points from cell `(c, r)` toward cell
+/// `(nc, nr)` — `DIR_LEFT` if the neighbor is to the left, `DIR_RIGHT` if to
+/// the right, etc. Returns `0` if the coordinates are equal or diagonal (the
+/// latter should never happen in orthogonal routing).
+fn neighbor_bit(c: usize, r: usize, nc: usize, nr: usize) -> u8 {
+    if nc < c {
+        DIR_LEFT
+    } else if nc > c {
+        DIR_RIGHT
+    } else if nr < r {
+        DIR_UP
+    } else if nr > r {
+        DIR_DOWN
+    } else {
+        0
     }
 }
 

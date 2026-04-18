@@ -11,6 +11,19 @@
 //! assert!(output.contains("End"));
 //! ```
 //!
+//! ## Width-constrained rendering
+//!
+//! Pass an optional column budget so the renderer tries progressively smaller
+//! gap sizes until the output fits:
+//!
+//! ```rust
+//! let output = mermaid_text::render_with_width(
+//!     "graph LR; A[Start] --> B[End]",
+//!     Some(80),
+//! ).unwrap();
+//! assert!(output.contains("Start"));
+//! ```
+//!
 //! ## Supported syntax (Phase 1)
 //!
 //! - `graph LR/TD/RL/BT` and `flowchart LR/TD/RL/BT` headers
@@ -66,10 +79,13 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {}
 
 // ---------------------------------------------------------------------------
-// Public entry point
+// Public entry points
 // ---------------------------------------------------------------------------
 
 /// Render a Mermaid diagram source string to Unicode box-drawing text.
+///
+/// This is a convenience wrapper around [`render_with_width`] that does not
+/// apply any column budget — the diagram is rendered at its natural size.
 ///
 /// # Supported diagram types (Phase 1)
 ///
@@ -101,20 +117,103 @@ impl std::error::Error for Error {}
 /// assert!(output.contains("Bottom"));
 /// ```
 pub fn render(input: &str) -> Result<String, Error> {
+    render_with_width(input, None)
+}
+
+/// Render a Mermaid diagram source string to Unicode box-drawing text,
+/// optionally compacting the output to fit within a column budget.
+///
+/// When `max_width` is `Some(n)`, the renderer tries progressively smaller
+/// gap configurations — from the default down to the minimum — and returns
+/// the first result whose longest line is ≤ `n` columns. If no configuration
+/// fits, the most compact result is returned anyway (the caller can truncate
+/// or scroll as they see fit).
+///
+/// When `max_width` is `None` the default gap configuration is used and no
+/// compaction is attempted.
+///
+/// # Arguments
+///
+/// * `input`     — Mermaid source string
+/// * `max_width` — optional column budget in terminal cells
+///
+/// # Errors
+///
+/// Same as [`render`].
+///
+/// # Examples
+///
+/// ```
+/// let output = mermaid_text::render_with_width(
+///     "graph LR; A[Start] --> B[End]",
+///     Some(80),
+/// ).unwrap();
+/// assert!(output.contains("Start"));
+/// ```
+pub fn render_with_width(input: &str, max_width: Option<usize>) -> Result<String, Error> {
     // 1. Detect diagram type
     let kind = detect::detect(input)?;
 
-    // 2. Parse
+    // 2. Parse (once — reused across compaction attempts)
     let graph = match kind {
         DiagramKind::Flowchart => parser::parse(input)?,
     };
 
-    // 3. Layout
-    let config = LayoutConfig::default();
-    let positions = layout::layered::layout(&graph, &config);
+    // 3. Render with default config first.
+    let default_cfg = LayoutConfig::default();
+    let result = render_with_config(&graph, &default_cfg);
 
-    // 4. Render
-    Ok(render::render(&graph, &positions))
+    let Some(budget) = max_width else {
+        // No width constraint — return the natural-size rendering.
+        return Ok(result);
+    };
+
+    if max_line_width(&result) <= budget {
+        return Ok(result);
+    }
+
+    // 4. Progressive compaction: try smaller gap configurations in order.
+    //    Each step reduces both the inter-layer gap and the label padding.
+    //    We try four levels; the last one is the most compact.
+    const COMPACT_CONFIGS: &[LayoutConfig] = &[
+        LayoutConfig { layer_gap: 4, node_gap: 2 },
+        LayoutConfig { layer_gap: 2, node_gap: 1 },
+        LayoutConfig { layer_gap: 1, node_gap: 0 },
+    ];
+
+    // Keep the most compact output in case nothing fits.
+    let mut best = render_with_config(&graph, COMPACT_CONFIGS.last().expect("non-empty"));
+
+    for cfg in COMPACT_CONFIGS {
+        let candidate = render_with_config(&graph, cfg);
+        if max_line_width(&candidate) <= budget {
+            return Ok(candidate);
+        }
+        // Track the last attempt as the fallback.
+        best = candidate;
+    }
+
+    Ok(best)
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+/// Render a pre-parsed `graph` using the given layout configuration.
+fn render_with_config(graph: &crate::types::Graph, config: &LayoutConfig) -> String {
+    let positions = layout::layered::layout(graph, config);
+    render::render(graph, &positions)
+}
+
+/// Return the maximum display-column width across all lines of `text`.
+///
+/// Uses [`unicode_width`] so multi-byte characters are counted correctly.
+fn max_line_width(text: &str) -> usize {
+    text.lines()
+        .map(unicode_width::UnicodeWidthStr::width)
+        .max()
+        .unwrap_or(0)
 }
 
 // ---------------------------------------------------------------------------
@@ -174,11 +273,9 @@ mod tests {
     fn render_diamond_node() {
         let out = render("graph LR; A{Decision} --> B[OK]").unwrap();
         assert!(out.contains("Decision"), "missing 'Decision' in:\n{out}");
-        // Diamond should use diagonal chars
-        assert!(
-            out.contains('/') || out.contains('\\') || out.contains('▲'),
-            "no diamond chars in:\n{out}"
-        );
+        // Diamond renders as a rectangle with ◇ markers at the horizontal
+        // centre of the top and bottom edges (termaid convention).
+        assert!(out.contains('◇'), "no diamond marker in:\n{out}");
     }
 
     #[test]
@@ -327,5 +424,51 @@ mod tests {
         // Keywords should NOT appear as node labels.
         assert!(!out.contains("subgraph"), "subgraph should be skipped:\n{out}");
         assert!(!out.contains("direction"), "direction should be skipped:\n{out}");
+    }
+
+    /// Verify that multiple edges leaving the same source node in LR direction
+    /// each get a distinct exit row, eliminating the ┬┬ clustering artefact.
+    #[test]
+    fn multiple_edges_from_same_node_spread() {
+        let out = render("graph LR; A-->B; A-->C; A-->D").unwrap();
+        // Collect the row index of every right-arrow character in the output.
+        // With spreading, the three edges should each land on a distinct row.
+        let arrow_rows: Vec<usize> = out
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| line.contains('▸'))
+            .map(|(i, _)| i)
+            .collect();
+        assert!(
+            arrow_rows.len() >= 3,
+            "expected at least 3 distinct arrow rows, got {arrow_rows:?}:\n{out}"
+        );
+        // All rows must be distinct (no two arrows on the same row).
+        let unique: std::collections::HashSet<_> = arrow_rows.iter().collect();
+        assert_eq!(
+            unique.len(),
+            arrow_rows.len(),
+            "duplicate arrow rows {arrow_rows:?} — edges not spread:\n{out}"
+        );
+    }
+
+    /// Verify that a long edge label is rendered in full and not truncated.
+    #[test]
+    fn long_edge_label_not_truncated() {
+        let out = render("graph LR; A-->|panics and exits cleanly| B").unwrap();
+        assert!(out.contains("panics and exits cleanly"), "label truncated:\n{out}");
+    }
+
+    /// Verify that two labels on edges diverging from the same TD diamond node
+    /// do not merge into a single string like `NoYes` or `YesNo`.
+    #[test]
+    fn diverging_labels_dont_collide() {
+        let out = render("graph TD; B{Ok?}; B-->|Yes|C; B-->|No|D").unwrap();
+        assert!(out.contains("Yes"), "missing 'Yes' label:\n{out}");
+        assert!(out.contains("No"), "missing 'No' label:\n{out}");
+        assert!(
+            !out.contains("NoYes") && !out.contains("YesNo"),
+            "labels collided:\n{out}"
+        );
     }
 }
