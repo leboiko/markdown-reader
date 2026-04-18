@@ -334,18 +334,31 @@ fn count_crossings(
 // ---------------------------------------------------------------------------
 
 /// Compute the display width of a node (its box width in characters).
+///
+/// Must stay in sync with `NodeGeom::for_node` in `render/unicode.rs`.
 fn node_box_width(graph: &Graph, id: &str) -> usize {
     if let Some(node) = graph.node(id) {
-        // Use unicode_width for accurate multi-byte label measurement.
-        // Must stay in sync with NodeGeom::for_node in render/unicode.rs.
         let label_width = unicode_width::UnicodeWidthStr::width(node.label.as_str());
         let inner = label_width + 4; // 2-char padding each side
         match node.shape {
-            // Diamond renders as a plain rectangle — no extra width needed.
+            // Diamond renders as a plain rectangle.
             NodeShape::Diamond => inner,
-            // Circle adds one extra char on each side for '(' and ')' markers.
-            NodeShape::Circle => inner + 2,
-            _ => inner,
+            // Circle/Stadium/Hexagon/Asymmetric add 1 extra char on each side
+            // for their distinctive markers inside the border.
+            NodeShape::Circle
+            | NodeShape::Stadium
+            | NodeShape::Hexagon
+            | NodeShape::Asymmetric => inner + 2,
+            // Subroutine adds 1 extra char on each side for inner vertical bars.
+            NodeShape::Subroutine => inner + 2,
+            // Cylinder: standard width — arcs are drawn at top/bottom centre.
+            NodeShape::Cylinder => inner,
+            // Parallelogram / Trapezoid: add 2 extra chars for slant markers.
+            NodeShape::Parallelogram | NodeShape::Trapezoid => inner + 2,
+            // DoubleCircle: needs 4 extra chars for the concentric inner border.
+            NodeShape::DoubleCircle => inner + 4,
+            // Plain shapes.
+            NodeShape::Rectangle | NodeShape::Rounded => inner,
         }
     } else {
         6 // fallback
@@ -353,12 +366,26 @@ fn node_box_width(graph: &Graph, id: &str) -> usize {
 }
 
 /// Compute the display height of a node (its box height in characters).
+///
+/// Must stay in sync with `NodeGeom::for_node` in `render/unicode.rs`.
 fn node_box_height(graph: &Graph, id: &str) -> usize {
     if let Some(node) = graph.node(id) {
-        // All shapes are now 3 rows tall (top border, text, bottom border).
-        // Keep the match exhaustive so the compiler catches new shapes.
         match node.shape {
-            NodeShape::Diamond | NodeShape::Rectangle | NodeShape::Rounded | NodeShape::Circle => 3,
+            // Standard 3-row shapes: top border + text + bottom border.
+            NodeShape::Diamond
+            | NodeShape::Rectangle
+            | NodeShape::Rounded
+            | NodeShape::Circle
+            | NodeShape::Stadium
+            | NodeShape::Hexagon
+            | NodeShape::Asymmetric
+            | NodeShape::Parallelogram
+            | NodeShape::Trapezoid
+            | NodeShape::Subroutine => 3,
+            // Cylinder needs 5 rows: arc-top, arc-inner, text, arc-inner, arc-bottom.
+            NodeShape::Cylinder => 5,
+            // DoubleCircle needs 5 rows for the concentric inner border.
+            NodeShape::DoubleCircle => 5,
         }
     } else {
         3

@@ -49,6 +49,64 @@ pub enum NodeShape {
     Diamond,
     /// Circle rendered as a rounded box with parenthesis markers.
     Circle,
+    /// Stadium / pill: rounded box with `(` / `)` markers at vertical midpoints.
+    ///
+    /// Mermaid syntax: `([label])`
+    Stadium,
+    /// Subroutine: rectangle with an extra inner vertical bar on each side.
+    ///
+    /// Mermaid syntax: `[[label]]`
+    Subroutine,
+    /// Cylinder (database): rectangle with arc markers at top and bottom centres.
+    ///
+    /// Mermaid syntax: `[(label)]`
+    Cylinder,
+    /// Hexagon: rectangle with `<` / `>` markers at vertical midpoints of left/right edges.
+    ///
+    /// Mermaid syntax: `{{label}}`
+    Hexagon,
+    /// Asymmetric flag: rectangle with a `⟩` marker at the right vertical midpoint.
+    ///
+    /// Mermaid syntax: `>label]`
+    Asymmetric,
+    /// Parallelogram (lean-right): rectangle with `/` markers at top-left / bottom-right corners.
+    ///
+    /// Mermaid syntax: `[/label/]`
+    Parallelogram,
+    /// Trapezoid (wider top): rectangle with `/` at top-left and `\` at top-right corners.
+    ///
+    /// Mermaid syntax: `[/label\]`
+    Trapezoid,
+    /// Double circle: two concentric rounded boxes, one cell inside the other.
+    ///
+    /// Mermaid syntax: `(((label)))`
+    DoubleCircle,
+}
+
+/// The visual style of an edge line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EdgeStyle {
+    /// Solid line (default). Characters: `─` / `│`.
+    #[default]
+    Solid,
+    /// Dotted line. Characters: `┄` / `┆`.
+    Dotted,
+    /// Thick / bold line. Characters: `━` / `┃`.
+    Thick,
+}
+
+/// The kind of endpoint drawn at each end of an edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EdgeEndpoint {
+    /// An arrow tip pointing in the direction of travel.
+    #[default]
+    Arrow,
+    /// No arrow tip — just the line reaching the node border.
+    None,
+    /// A circle endpoint (`○`).
+    Circle,
+    /// A cross endpoint (`×`).
+    Cross,
 }
 
 /// A single node in the diagram.
@@ -82,15 +140,43 @@ pub struct Edge {
     pub to: String,
     /// Optional label placed along the edge.
     pub label: Option<String>,
+    /// Visual style of the edge line (solid, dotted, or thick).
+    pub style: EdgeStyle,
+    /// Endpoint drawn at the **destination** end.
+    pub end: EdgeEndpoint,
+    /// Endpoint drawn at the **source** end (for bidirectional edges).
+    pub start: EdgeEndpoint,
 }
 
 impl Edge {
-    /// Construct a new edge.
+    /// Construct a new solid arrow edge (the most common case).
     pub fn new(from: impl Into<String>, to: impl Into<String>, label: Option<String>) -> Self {
         Self {
             from: from.into(),
             to: to.into(),
             label,
+            style: EdgeStyle::Solid,
+            end: EdgeEndpoint::Arrow,
+            start: EdgeEndpoint::None,
+        }
+    }
+
+    /// Construct an edge with explicit style and endpoint kinds.
+    pub fn new_styled(
+        from: impl Into<String>,
+        to: impl Into<String>,
+        label: Option<String>,
+        style: EdgeStyle,
+        start: EdgeEndpoint,
+        end: EdgeEndpoint,
+    ) -> Self {
+        Self {
+            from: from.into(),
+            to: to.into(),
+            label,
+            style,
+            end,
+            start,
         }
     }
 }

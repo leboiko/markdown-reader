@@ -10,12 +10,12 @@
 //! - A **header line**: `graph LR` / `flowchart TD` (handled before entering this module)
 //! - A blank / comment line — silently ignored
 //!
-//! All edge types (`-->`, `---`, `-.->`, `==>`) are treated identically in
-//! Phase 1 (rendered as solid arrows).
+//! Edge style (`-->`, `---`, `-.->`, `==>`, `<-->`, `--o`, `--x`) is parsed
+//! and stored on each [`Edge`] for the renderer to use.
 
 use crate::{
     Error,
-    types::{Direction, Edge, Graph, Node, NodeShape, Subgraph},
+    types::{Direction, Edge, EdgeEndpoint, EdgeStyle, Graph, Node, NodeShape, Subgraph},
 };
 
 // ---------------------------------------------------------------------------
@@ -247,12 +247,16 @@ fn parse_subgraph_header(stmt: &str) -> (String, String) {
 
 /// Return `true` if the statement appears to contain at least one edge arrow.
 fn looks_like_edge_chain(s: &str) -> bool {
-    // Quick scan: any of -->, ---, -.->, ==> or their variants
+    // Quick scan: any known arrow token
     s.contains("-->")
         || s.contains("---")
         || s.contains("-.->")
         || s.contains("==>")
+        || s.contains("<-->")
+        || s.contains("--o")
+        || s.contains("--x")
         || s.contains("-- ") // "-- label -->" form
+        || s.contains("--") // catch-all for remaining "--" forms
 }
 
 // ---------------------------------------------------------------------------
@@ -281,7 +285,12 @@ fn parse_edge_chain(stmt: &str, graph: &mut Graph, current_subgraph_id: &mut Opt
     // We iterate pairs of (node_tok, Option<arrow_tok>).
     let mut i = 0;
     let mut prev_id: Option<String> = None;
+
+    // Pending edge metadata carried forward between node tokens.
     let mut pending_edge_label: Option<String> = None;
+    let mut pending_edge_style = EdgeStyle::Solid;
+    let mut pending_edge_start = EdgeEndpoint::None;
+    let mut pending_edge_end = EdgeEndpoint::Arrow;
 
     while i < tokens.len() {
         let tok = tokens[i].trim();
@@ -301,12 +310,27 @@ fn parse_edge_chain(stmt: &str, graph: &mut Graph, current_subgraph_id: &mut Opt
             register_node_in_subgraph(graph, &node_id, current_subgraph_id);
 
             if let Some(ref from) = prev_id {
-                let edge = Edge::new(from.clone(), node_id.clone(), pending_edge_label.take());
+                let edge = Edge::new_styled(
+                    from.clone(),
+                    node_id.clone(),
+                    pending_edge_label.take(),
+                    pending_edge_style,
+                    pending_edge_start,
+                    pending_edge_end,
+                );
                 graph.edges.push(edge);
+                // Reset per-edge state for the next edge in the chain.
+                pending_edge_style = EdgeStyle::Solid;
+                pending_edge_start = EdgeEndpoint::None;
+                pending_edge_end = EdgeEndpoint::Arrow;
             }
             prev_id = Some(node_id);
         } else {
-            // Arrow token — extract optional label
+            // Arrow token — extract style and optional label.
+            let (style, start, end) = classify_arrow(tok);
+            pending_edge_style = style;
+            pending_edge_start = start;
+            pending_edge_end = end;
             pending_edge_label = extract_arrow_label(tok);
         }
 
@@ -327,23 +351,23 @@ fn tokenise_chain(stmt: &str) -> Vec<String> {
 
     while i < len {
         // Detect start of an arrow sequence.
-        // Arrows: -->, ---, -.->  ==>, -- label -->, -->|label|
-        // We look for `-` or `=` not inside a node bracket.
+        // Arrows: -->, ---, -.->, ==>, <-->, --o, --x, -- label -->, -->|label|
+        // We look for `-`, `=`, or `<` (for bidirectional) not inside a node bracket.
         let ch = chars[i];
 
-        if (ch == '-' || ch == '=') && !current.trim().is_empty() {
-            // Peek ahead to see if this is really an arrow
-            if is_arrow_start(&chars, i) {
-                // Push the current node token
-                tokens.push(current.trim().to_string());
-                current = String::new();
+        let is_potential_arrow_start = (ch == '-' || ch == '=' || ch == '<')
+            && !current.trim().is_empty();
 
-                // Consume the full arrow (including optional |label|)
-                let (arrow_tok, consumed) = consume_arrow(&chars, i);
-                tokens.push(arrow_tok);
-                i += consumed;
-                continue;
-            }
+        if is_potential_arrow_start && is_arrow_start(&chars, i) {
+            // Push the current node token
+            tokens.push(current.trim().to_string());
+            current = String::new();
+
+            // Consume the full arrow (including optional |label|)
+            let (arrow_tok, consumed) = consume_arrow(&chars, i);
+            tokens.push(arrow_tok);
+            i += consumed;
+            continue;
         }
 
         current.push(ch);
@@ -366,8 +390,62 @@ fn is_arrow_start(chars: &[char], i: usize) -> bool {
         || remaining.starts_with("---")
         || remaining.starts_with("-.->")
         || remaining.starts_with("==>")
+        || remaining.starts_with("<-->")
+        || remaining.starts_with("--o")
+        || remaining.starts_with("--x")
         || remaining.starts_with("-- ") // "-- label -->"
         || remaining.starts_with("--")
+}
+
+/// Classify an arrow token into `(style, start_endpoint, end_endpoint)`.
+///
+/// The classification mirrors the Mermaid specification:
+/// - `<-->` → bidirectional solid
+/// - `==>` → thick with arrow
+/// - `-.->` / `-..->` → dotted with arrow
+/// - `-->` → solid with arrow (default)
+/// - `---` → solid, no arrow
+/// - `--o` → solid, circle endpoint
+/// - `--x` → solid, cross endpoint
+fn classify_arrow(arrow: &str) -> (EdgeStyle, EdgeEndpoint, EdgeEndpoint) {
+    // Strip any |label| portion before classifying.
+    let base = if let Some(pipe) = arrow.find('|') {
+        &arrow[..pipe]
+    } else {
+        arrow
+    }
+    .trim();
+
+    // Bidirectional: <-->
+    if base.starts_with('<') && base.ends_with('>') {
+        return (EdgeStyle::Solid, EdgeEndpoint::Arrow, EdgeEndpoint::Arrow);
+    }
+    // Circle endpoint: --o
+    if base.ends_with('o') && base.starts_with('-') {
+        return (EdgeStyle::Solid, EdgeEndpoint::None, EdgeEndpoint::Circle);
+    }
+    // Cross endpoint: --x
+    if base.ends_with('x') && base.starts_with('-') {
+        return (EdgeStyle::Solid, EdgeEndpoint::None, EdgeEndpoint::Cross);
+    }
+    // Thick with arrow: ==>
+    if base.starts_with('=') {
+        let has_arrow = base.ends_with('>');
+        let end = if has_arrow { EdgeEndpoint::Arrow } else { EdgeEndpoint::None };
+        return (EdgeStyle::Thick, EdgeEndpoint::None, end);
+    }
+    // Dotted: -.- or -.->
+    if base.contains(".-") || base.contains("-.") {
+        let has_arrow = base.ends_with('>');
+        let end = if has_arrow { EdgeEndpoint::Arrow } else { EdgeEndpoint::None };
+        return (EdgeStyle::Dotted, EdgeEndpoint::None, end);
+    }
+    // Solid no-arrow: ---  or "-- label --" (no trailing >)
+    if base.starts_with('-') && !base.ends_with('>') && !base.ends_with('o') && !base.ends_with('x') {
+        return (EdgeStyle::Solid, EdgeEndpoint::None, EdgeEndpoint::None);
+    }
+    // Default: solid arrow -->
+    (EdgeStyle::Solid, EdgeEndpoint::None, EdgeEndpoint::Arrow)
 }
 
 /// Consume an arrow starting at position `i`, returning `(arrow_token, chars_consumed)`.
@@ -377,9 +455,18 @@ fn is_arrow_start(chars: &[char], i: usize) -> bool {
 /// - `---`
 /// - `-.->` / `-.->|label|`
 /// - `==>`
+/// - `<-->`
+/// - `--o` / `--x`
 /// - `-- label -->`
 fn consume_arrow(chars: &[char], start: usize) -> (String, usize) {
     let remaining: String = chars[start..].iter().collect();
+
+    // "<-->" bidirectional (must check before "--" forms that start with '<')
+    if let Some(rest) = remaining.strip_prefix("<-->") {
+        let (label_part, extra) = try_consume_pipe_label(rest);
+        let tok = format!("<-->{label_part}");
+        return (tok, 4 + extra);
+    }
 
     // "-- label -->" form  (must check before plain "--")
     if let Some(arrow) = try_consume_labeled_dash_arrow(&remaining) {
@@ -387,7 +474,7 @@ fn consume_arrow(chars: &[char], start: usize) -> (String, usize) {
         return (arrow, len);
     }
 
-    // "-.->"|label|?
+    // "-.->"|label|? (also handles "-..->")
     if remaining.starts_with("-.-") {
         let base = if remaining.starts_with("-.->") { 4 } else { 3 };
         let (label_part, extra) = try_consume_pipe_label(&remaining[base..]);
@@ -395,11 +482,30 @@ fn consume_arrow(chars: &[char], start: usize) -> (String, usize) {
         return (tok, base + extra);
     }
 
-    // "==>"
-    if let Some(rest) = remaining.strip_prefix("==>") {
-        let (label_part, extra) = try_consume_pipe_label(rest);
-        let tok = format!("==>{label_part}");
-        return (tok, 3 + extra);
+    // "==>" (also "===", "===>", etc.)
+    if remaining.starts_with("==") {
+        // Consume all '=' chars then optional '>'
+        let mut len = 0;
+        for ch in remaining.chars() {
+            if ch == '=' {
+                len += 1;
+            } else {
+                break;
+            }
+        }
+        let has_arrow = remaining[len..].starts_with('>');
+        if has_arrow { len += 1; }
+        let (label_part, extra) = try_consume_pipe_label(&remaining[len..]);
+        let tok = format!("{}{label_part}", &remaining[..len]);
+        return (tok, len + extra);
+    }
+
+    // "--o" and "--x" endpoint markers
+    if remaining.starts_with("--o") {
+        return ("--o".to_string(), 3);
+    }
+    if remaining.starts_with("--x") {
+        return ("--x".to_string(), 3);
     }
 
     // "-->" / "---"
@@ -472,7 +578,10 @@ fn extract_arrow_label(arrow: &str) -> Option<String> {
 // ---------------------------------------------------------------------------
 
 /// Parse a single node-definition token such as `A[Label]`, `B{text}`,
-/// `C((name))`, `D(rounded)`, or bare `E`.
+/// `C((name))`, `D(rounded)`, `E([Stadium])`, `F[[Sub]]`, etc., or bare `E`.
+///
+/// Shape patterns are matched **most-specific-first** to handle multi-char
+/// delimiters like `(((`, `((`, `{{`, `[[`, `([`, `[(` before single chars.
 ///
 /// Returns `None` if the token is empty or unparseable.
 pub fn parse_node_definition(token: &str) -> Option<Node> {
@@ -481,31 +590,92 @@ pub fn parse_node_definition(token: &str) -> Option<Node> {
         return None;
     }
 
-    // Find the first bracket/brace/paren character to split id from shape.
-    let shape_start = token.find(['[', '{', '(']);
+    // Asymmetric `>label]` — starts with `>`, no bracket for ID split.
+    if token.starts_with('>') && token.ends_with(']') {
+        // Mermaid: `A>label]` where `A` is the id extracted from the caller
+        // context. Since we see the whole token here (id prepended), we must
+        // find where the `>` starts.
+        if let Some(pos) = token.find('>') {
+            let id = token[..pos].trim().to_string();
+            if !id.is_empty() {
+                let inner = token[pos + 1..token.len() - 1].trim().to_string();
+                let label = strip_html_breaks(inner);
+                return Some(Node::new(id, label, NodeShape::Asymmetric));
+            }
+        }
+    }
+
+    // Find the first bracket/brace/paren/angle character to split id from shape.
+    let shape_start = token.find(['[', '{', '(', '>']);
 
     let (id, label, shape) = if let Some(pos) = shape_start {
         let id = token[..pos].trim().to_string();
         let rest = &token[pos..];
 
-        if rest.starts_with("((") && rest.ends_with("))") {
-            // Circle: A((text))
+        // --- Most specific first ---
+
+        // Triple paren: A(((text))) → DoubleCircle
+        if rest.starts_with("(((") && rest.ends_with(")))") {
+            let inner = rest[3..rest.len() - 3].trim().to_string();
+            (id, inner, NodeShape::DoubleCircle)
+        }
+        // Stadium: A([text])
+        else if rest.starts_with("([") && rest.ends_with("])") {
+            let inner = rest[2..rest.len() - 2].trim().to_string();
+            (id, inner, NodeShape::Stadium)
+        }
+        // Cylinder: A[(text)]
+        else if rest.starts_with("[(") && rest.ends_with(")]") {
+            let inner = rest[2..rest.len() - 2].trim().to_string();
+            (id, inner, NodeShape::Cylinder)
+        }
+        // Subroutine: A[[text]]
+        else if rest.starts_with("[[") && rest.ends_with("]]") {
+            let inner = rest[2..rest.len() - 2].trim().to_string();
+            (id, inner, NodeShape::Subroutine)
+        }
+        // Parallelogram: A[/text/]
+        else if rest.starts_with("[/") && rest.ends_with("/]") {
+            let inner = rest[2..rest.len() - 2].trim().to_string();
+            (id, inner, NodeShape::Parallelogram)
+        }
+        // Trapezoid: A[/text\]
+        else if rest.starts_with("[/") && rest.ends_with("\\]") {
+            let inner = rest[2..rest.len() - 2].trim().to_string();
+            (id, inner, NodeShape::Trapezoid)
+        }
+        // Hexagon: A{{text}}
+        else if rest.starts_with("{{") && rest.ends_with("}}") {
+            let inner = rest[2..rest.len() - 2].trim().to_string();
+            (id, inner, NodeShape::Hexagon)
+        }
+        // Double paren: A((text)) → Circle
+        else if rest.starts_with("((") && rest.ends_with("))") {
             let inner = rest[2..rest.len() - 2].trim().to_string();
             (id, inner, NodeShape::Circle)
-        } else if rest.starts_with('{') && rest.ends_with('}') {
-            // Diamond: A{text}
+        }
+        // Diamond: A{text}
+        else if rest.starts_with('{') && rest.ends_with('}') {
             let inner = rest[1..rest.len() - 1].trim().to_string();
             (id, inner, NodeShape::Diamond)
-        } else if rest.starts_with('[') && rest.ends_with(']') {
-            // Rectangle: A[text]
+        }
+        // Rectangle: A[text]
+        else if rest.starts_with('[') && rest.ends_with(']') {
             let inner = rest[1..rest.len() - 1].trim().to_string();
             (id, inner, NodeShape::Rectangle)
-        } else if rest.starts_with('(') && rest.ends_with(')') {
-            // Rounded: A(text)
+        }
+        // Rounded: A(text)
+        else if rest.starts_with('(') && rest.ends_with(')') {
             let inner = rest[1..rest.len() - 1].trim().to_string();
             (id, inner, NodeShape::Rounded)
-        } else {
-            // Unrecognised bracket pattern — treat entire token as bare ID
+        }
+        // Asymmetric: A>text]
+        else if rest.starts_with('>') && rest.ends_with(']') {
+            let inner = rest[1..rest.len() - 1].trim().to_string();
+            (id, inner, NodeShape::Asymmetric)
+        }
+        else {
+            // Unrecognised bracket pattern — treat entire token as bare ID.
             let id = token.to_string();
             (id.clone(), id, NodeShape::Rectangle)
         }
@@ -518,13 +688,15 @@ pub fn parse_node_definition(token: &str) -> Option<Node> {
         return None;
     }
 
-    // Strip HTML-like line breaks that Mermaid supports in labels.
-    let label = label
-        .replace("<br/>", " ")
-        .replace("<br>", " ")
-        .replace("<br />", " ");
-
+    let label = strip_html_breaks(label);
     Some(Node::new(id, label, shape))
+}
+
+/// Replace HTML-style line-break tags with spaces.
+fn strip_html_breaks(s: String) -> String {
+    s.replace("<br/>", " ")
+        .replace("<br>", " ")
+        .replace("<br />", " ")
 }
 
 // ---------------------------------------------------------------------------
@@ -534,7 +706,7 @@ pub fn parse_node_definition(token: &str) -> Option<Node> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::NodeShape;
+    use crate::types::{EdgeEndpoint, EdgeStyle, NodeShape};
 
     #[test]
     fn parse_simple_lr() {
@@ -666,5 +838,121 @@ mod tests {
         assert_eq!(map.get("B").map(String::as_str), Some("S"));
         assert!(map.get("C").is_none());
         assert!(map.get("D").is_none());
+    }
+
+    // ---- New node shape parser tests ------------------------------------
+
+    #[test]
+    fn parse_stadium_node() {
+        let g = parse("graph LR\nA([Stadium])").unwrap();
+        assert_eq!(g.node("A").unwrap().shape, NodeShape::Stadium);
+        assert_eq!(g.node("A").unwrap().label, "Stadium");
+    }
+
+    #[test]
+    fn parse_subroutine_node() {
+        let g = parse("graph LR\nA[[Sub]]").unwrap();
+        assert_eq!(g.node("A").unwrap().shape, NodeShape::Subroutine);
+        assert_eq!(g.node("A").unwrap().label, "Sub");
+    }
+
+    #[test]
+    fn parse_cylinder_node() {
+        let g = parse("graph LR\nA[(DB)]").unwrap();
+        assert_eq!(g.node("A").unwrap().shape, NodeShape::Cylinder);
+        assert_eq!(g.node("A").unwrap().label, "DB");
+    }
+
+    #[test]
+    fn parse_hexagon_node() {
+        let g = parse("graph LR\nA{{Hex}}").unwrap();
+        assert_eq!(g.node("A").unwrap().shape, NodeShape::Hexagon);
+        assert_eq!(g.node("A").unwrap().label, "Hex");
+    }
+
+    #[test]
+    fn parse_asymmetric_node() {
+        let g = parse("graph LR\nA>Flag]").unwrap();
+        assert_eq!(g.node("A").unwrap().shape, NodeShape::Asymmetric);
+        assert_eq!(g.node("A").unwrap().label, "Flag");
+    }
+
+    #[test]
+    fn parse_parallelogram_node() {
+        let g = parse("graph LR\nA[/Lean/]").unwrap();
+        assert_eq!(g.node("A").unwrap().shape, NodeShape::Parallelogram);
+        assert_eq!(g.node("A").unwrap().label, "Lean");
+    }
+
+    #[test]
+    fn parse_trapezoid_node() {
+        let g = parse("graph LR\nA[/Trap\\]").unwrap();
+        assert_eq!(g.node("A").unwrap().shape, NodeShape::Trapezoid);
+        assert_eq!(g.node("A").unwrap().label, "Trap");
+    }
+
+    #[test]
+    fn parse_double_circle_node() {
+        let g = parse("graph LR\nA(((Dbl)))").unwrap();
+        assert_eq!(g.node("A").unwrap().shape, NodeShape::DoubleCircle);
+        assert_eq!(g.node("A").unwrap().label, "Dbl");
+    }
+
+    // Disambiguation: (( before ((( — triple paren wins.
+    #[test]
+    fn triple_paren_beats_double_paren() {
+        let g = parse("graph LR\nA(((X)))").unwrap();
+        assert_eq!(g.node("A").unwrap().shape, NodeShape::DoubleCircle);
+    }
+
+    // Disambiguation: [[ before [ — double bracket wins.
+    #[test]
+    fn double_bracket_beats_single_bracket() {
+        let g = parse("graph LR\nA[[Y]]").unwrap();
+        assert_eq!(g.node("A").unwrap().shape, NodeShape::Subroutine);
+    }
+
+    // ---- Edge style parser tests ----------------------------------------
+
+    #[test]
+    fn parse_dotted_edge_style() {
+        let g = parse("graph LR\nA-.->B").unwrap();
+        assert_eq!(g.edges[0].style, EdgeStyle::Dotted);
+        assert_eq!(g.edges[0].end, EdgeEndpoint::Arrow);
+    }
+
+    #[test]
+    fn parse_thick_edge_style() {
+        let g = parse("graph LR\nA==>B").unwrap();
+        assert_eq!(g.edges[0].style, EdgeStyle::Thick);
+        assert_eq!(g.edges[0].end, EdgeEndpoint::Arrow);
+    }
+
+    #[test]
+    fn parse_plain_line_no_arrow() {
+        let g = parse("graph LR\nA---B").unwrap();
+        assert_eq!(g.edges[0].style, EdgeStyle::Solid);
+        assert_eq!(g.edges[0].end, EdgeEndpoint::None);
+        assert_eq!(g.edges[0].start, EdgeEndpoint::None);
+    }
+
+    #[test]
+    fn parse_bidirectional_edge() {
+        let g = parse("graph LR\nA<-->B").unwrap();
+        assert_eq!(g.edges[0].style, EdgeStyle::Solid);
+        assert_eq!(g.edges[0].start, EdgeEndpoint::Arrow);
+        assert_eq!(g.edges[0].end, EdgeEndpoint::Arrow);
+    }
+
+    #[test]
+    fn parse_circle_endpoint() {
+        let g = parse("graph LR\nA--oB").unwrap();
+        assert_eq!(g.edges[0].end, EdgeEndpoint::Circle);
+    }
+
+    #[test]
+    fn parse_cross_endpoint() {
+        let g = parse("graph LR\nA--xB").unwrap();
+        assert_eq!(g.edges[0].end, EdgeEndpoint::Cross);
     }
 }

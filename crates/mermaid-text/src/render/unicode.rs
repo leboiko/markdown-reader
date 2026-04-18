@@ -9,8 +9,12 @@ use std::collections::HashMap;
 use unicode_width::UnicodeWidthStr;
 
 use crate::{
-    layout::{Grid, SubgraphBounds, grid::arrow, layered::GridPos},
-    types::{Direction, Graph, Node, NodeShape},
+    layout::{
+        Grid, SubgraphBounds,
+        grid::{EdgeLineStyle, arrow, endpoint},
+        layered::GridPos,
+    },
+    types::{Direction, EdgeEndpoint, EdgeStyle, Graph, Node, NodeShape},
 };
 
 // ---------------------------------------------------------------------------
@@ -40,23 +44,50 @@ impl NodeGeom {
         let label_w = UnicodeWidthStr::width(node.label.as_str());
         let inner_w = label_w + LABEL_PADDING * 2;
 
+        // Must stay in sync with `node_box_width`/`node_box_height` in
+        // `layout/layered.rs` — both functions encode the same shape dimensions.
         match node.shape {
-            // Diamond renders as a rectangle with ◇ markers at top/bottom
-            // centre — same dimensions as a plain rectangle.
-            NodeShape::Diamond => NodeGeom {
+            // Plain rectangle / rounded / diamond: standard 3-row box.
+            NodeShape::Rectangle | NodeShape::Rounded | NodeShape::Diamond => NodeGeom {
                 width: inner_w,
                 height: 3,
                 text_row: 1,
             },
-            NodeShape::Circle => NodeGeom {
+            // Circle, stadium, hexagon, asymmetric: +2 width for side markers.
+            NodeShape::Circle
+            | NodeShape::Stadium
+            | NodeShape::Hexagon
+            | NodeShape::Asymmetric => NodeGeom {
                 width: inner_w + 2,
                 height: 3,
                 text_row: 1,
             },
-            _ => NodeGeom {
-                width: inner_w,
+            // Subroutine: +2 width for inner vertical bars.
+            NodeShape::Subroutine => NodeGeom {
+                width: inner_w + 2,
                 height: 3,
                 text_row: 1,
+            },
+            // Parallelogram / trapezoid: +2 width for slant corner markers.
+            NodeShape::Parallelogram | NodeShape::Trapezoid => NodeGeom {
+                width: inner_w + 2,
+                height: 3,
+                text_row: 1,
+            },
+            // Cylinder: 5 rows (2 top arcs, 1 text, 2 bottom arcs).
+            // Text row is the middle one (index 2).
+            NodeShape::Cylinder => NodeGeom {
+                width: inner_w,
+                height: 5,
+                text_row: 2,
+            },
+            // DoubleCircle: 5 rows for outer + inner concentric rounded boxes.
+            // +4 width for two layers of borders on each side.
+            // Text row is the middle one (index 2).
+            NodeShape::DoubleCircle => NodeGeom {
+                width: inner_w + 4,
+                height: 5,
+                text_row: 2,
             },
         }
     }
@@ -126,6 +157,19 @@ fn entry_point(pos: GridPos, geom: NodeGeom, dir: Direction) -> Attach {
             col: c + geom.cx(),
             row: r + geom.height,
         },
+    }
+}
+
+/// Select the correct back-tip glyph (source end of a bidirectional edge).
+///
+/// The back-tip always points in the reverse direction of the flow.
+fn endpoint_char_back(dir: Direction) -> char {
+    // Reverse of `tip_char`.
+    match dir {
+        Direction::LeftToRight => arrow::LEFT,
+        Direction::RightToLeft => arrow::RIGHT,
+        Direction::TopToBottom => arrow::UP,
+        Direction::BottomToTop => arrow::DOWN,
     }
 }
 
@@ -244,6 +288,18 @@ pub fn render(
     let attach_points = compute_spread_attaches(graph, positions, &geoms);
 
     // Pass 1: Route all edges using A* obstacle-aware routing.
+    //
+    // Edge style rendering approach:
+    //   1. Route with a temporary solid arrow tip — this populates the
+    //      direction-bit canvas (needed for junction resolution).
+    //   2. After routing, call `overdraw_path_style` to replace path cells
+    //      with thick or dotted glyphs based on the edge's `EdgeStyle`.
+    //   3. Override the destination tip glyph based on `EdgeEndpoint`.
+    //   4. For bidirectional edges, also place a back-tip at the source cell.
+    //
+    // This keeps all junction-merging logic in the direction-bit canvas while
+    // still producing visually distinct dotted/thick lines.
+    //
     // Collect edge label placements for a deferred write — labels must be
     // written *after* all routing so that no subsequent A* path overwrites them.
     // Each entry is `(col, row, label_text)`.
@@ -257,9 +313,67 @@ pub fn render(
         };
         let (src, dst) = (*src, *dst);
 
-        let tip = tip_char(graph.direction);
+        // Select the forward tip character (destination end).
+        // For EdgeEndpoint::None (plain line), we route with the normal arrow
+        // so the path is drawn correctly by route_edge, then immediately clear
+        // the tip protection so the no-arrow cell merges into the path glyph.
+        let fwd_tip = tip_char(graph.direction);
         let horizontal_first = graph.direction.is_horizontal();
-        let path = grid.route_edge(src.col, src.row, dst.col, dst.row, horizontal_first, tip);
+        let path = grid.route_edge(src.col, src.row, dst.col, dst.row, horizontal_first, fwd_tip);
+
+        // Post-process the destination tip cell for non-arrow endpoints.
+        //
+        // `route_edge` always places the flow-direction arrow at the tip cell
+        // and protects it. Here we unprotect and overwrite as needed:
+        //   - None    → plain line glyph (no arrowhead)
+        //   - Circle  → ○
+        //   - Cross   → ×
+        //   - Arrow   → keep the arrow (no action needed)
+        if let Some(ref path) = path
+            && let Some(&(tip_c, tip_r)) = path.last()
+            && edge.end != EdgeEndpoint::Arrow
+        {
+            grid.unprotect_cell(tip_c, tip_r);
+            let glyph = match edge.end {
+                EdgeEndpoint::None => {
+                    // Continue the last segment direction without an arrowhead.
+                    // For LR/RL flow the last segment is horizontal; for TD/BT vertical.
+                    if horizontal_first { '─' } else { '│' }
+                }
+                EdgeEndpoint::Circle => endpoint::CIRCLE,
+                EdgeEndpoint::Cross => endpoint::CROSS,
+                EdgeEndpoint::Arrow => unreachable!(),
+            };
+            grid.set(tip_c, tip_r, glyph);
+            // Protect circle/cross glyphs; leave plain-line cells unprotected
+            // so subsequent edges can produce correct junctions.
+            if edge.end != EdgeEndpoint::None {
+                grid.protect_cell(tip_c, tip_r);
+            }
+        }
+
+        if let Some(ref path) = path {
+            // Apply styled (dotted/thick) glyphs to all non-tip path cells.
+            let line_style = match edge.style {
+                EdgeStyle::Solid => EdgeLineStyle::Solid,
+                EdgeStyle::Dotted => EdgeLineStyle::Dotted,
+                EdgeStyle::Thick => EdgeLineStyle::Thick,
+            };
+            // Exclude the last cell (tip) from the overdraw — it is already
+            // protected and carries the correct endpoint glyph.
+            if path.len() > 1 {
+                grid.overdraw_path_style(&path[..path.len() - 1], line_style);
+            }
+
+            // For bidirectional edges, place a back-tip at the source attach
+            // point AFTER the overdraw so that the back-tip is not erased.
+            // Then protect the cell so later A* rendering can't touch it.
+            if edge.start == EdgeEndpoint::Arrow && path.len() >= 2 {
+                let back_tip = endpoint_char_back(graph.direction);
+                grid.set(src.col, src.row, back_tip);
+                grid.protect_cell(src.col, src.row);
+            }
+        }
 
         // Compute edge label position using the actual routed path.
         if let (Some(lbl), Some(path)) = (&edge.label, &path)
@@ -575,6 +689,30 @@ fn draw_node_box(grid: &mut Grid, node: &Node, pos: GridPos, geom: NodeGeom) {
             let mid = row + geom.cy();
             grid.set(col + 1, mid, '(');
             grid.set(col + geom.width - 2, mid, ')');
+        }
+        NodeShape::Stadium => {
+            grid.draw_stadium(col, row, geom.width, geom.height);
+        }
+        NodeShape::Subroutine => {
+            grid.draw_subroutine(col, row, geom.width, geom.height);
+        }
+        NodeShape::Cylinder => {
+            grid.draw_cylinder(col, row, geom.width, geom.height);
+        }
+        NodeShape::Hexagon => {
+            grid.draw_hexagon(col, row, geom.width, geom.height);
+        }
+        NodeShape::Asymmetric => {
+            grid.draw_asymmetric(col, row, geom.width, geom.height);
+        }
+        NodeShape::Parallelogram => {
+            grid.draw_parallelogram(col, row, geom.width, geom.height);
+        }
+        NodeShape::Trapezoid => {
+            grid.draw_trapezoid(col, row, geom.width, geom.height);
+        }
+        NodeShape::DoubleCircle => {
+            grid.draw_double_circle(col, row, geom.width, geom.height);
         }
     }
 }

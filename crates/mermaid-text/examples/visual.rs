@@ -63,4 +63,52 @@ fn main() {
     W --> CB{Circuit Breaker}
     CB -->|CLOSED| DB[(Database)]"#,
     );
+
+    // --- Part A: New node shapes ---
+    dump("stadium node", "graph LR; A([Stadium]) --> B[End]");
+    dump("subroutine node", "graph LR; A[[Subroutine]] --> B[End]");
+    dump("cylinder (database) node", "graph LR; A[(Database)] --> B[End]");
+    dump("hexagon node", "graph LR; A{{Hexagon}} --> B[End]");
+    dump("asymmetric node", "graph LR; A>Flag] --> B[End]");
+    dump("parallelogram node", "graph LR; A[/Lean/] --> B[End]");
+    dump("trapezoid node", "graph LR; A[/Trap\\] --> B[End]");
+    dump("double circle node", "graph LR; A(((Double))) --> B[End]");
+    dump(
+        "all new shapes",
+        r#"graph TD
+    S([Stadium])
+    R[[Subroutine]]
+    D[(Database)]
+    H{{Hexagon}}
+    F>Flag]
+    P[/Parallel/]
+    T[/Trap\]
+    DC(((DblCircle)))
+    S --> R
+    R --> D
+    D --> H
+    H --> F
+    F --> P
+    P --> T
+    T --> DC"#,
+    );
+
+    // --- Part B: Edge styles ---
+    dump("dotted edge", "graph LR; A-.->B");
+    dump("thick edge", "graph LR; A==>B");
+    dump("bidirectional edge", "graph LR; A<-->B");
+    dump("plain line (no arrow)", "graph LR; A---B");
+    dump("circle endpoint", "graph LR; A--oB");
+    dump("cross endpoint", "graph LR; A--xB");
+    dump(
+        "mixed edge styles",
+        r#"graph LR
+    A[Solid] --> B[Dotted]
+    B -.-> C[Thick]
+    C ==> D[BiDir]
+    D <--> E[Plain]
+    E --- F[Circle]
+    F --o G[Cross]
+    G --x A"#,
+    );
 }

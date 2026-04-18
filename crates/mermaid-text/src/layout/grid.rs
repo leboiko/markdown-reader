@@ -46,6 +46,46 @@ pub mod arrow {
     pub const UP: char = '▴';
 }
 
+/// Endpoint glyph characters for non-arrow edge terminations.
+pub mod endpoint {
+    /// Circle endpoint (`--o`).
+    pub const CIRCLE: char = '○';
+    /// Cross endpoint (`--x`).
+    pub const CROSS: char = '×';
+}
+
+/// Dotted box-drawing characters (┆ for vertical, ┄ for horizontal).
+///
+/// Unicode's dotted box-drawing characters lack proper junction glyphs, so
+/// dotted lines revert to solid junction characters where they meet other
+/// edges. This is a documented compromise — see `render/unicode.rs` for the
+/// explanation comment at the call site.
+mod dotted {
+    pub const H: char = '┄';
+    pub const V: char = '┆';
+}
+
+/// Lookup table for thick line junctions: same 4-bit direction mask as
+/// `DIR_TO_CHAR` but using thick Unicode glyphs.
+const THICK_DIR_TO_CHAR: [char; 16] = [
+    ' ', // 0000
+    '┃', // 0001 UP
+    '┃', // 0010 DOWN
+    '┃', // 0011 UP+DOWN
+    '━', // 0100 LEFT
+    '┛', // 0101 UP+LEFT
+    '┓', // 0110 DOWN+LEFT
+    '┫', // 0111 UP+DOWN+LEFT
+    '━', // 1000 RIGHT
+    '┗', // 1001 UP+RIGHT
+    '┏', // 1010 DOWN+RIGHT
+    '┣', // 1011 UP+DOWN+RIGHT
+    '━', // 1100 LEFT+RIGHT
+    '┻', // 1101 UP+LEFT+RIGHT
+    '┳', // 1110 DOWN+LEFT+RIGHT
+    '╋', // 1111 cross
+];
+
 // ---------------------------------------------------------------------------
 // Direction-bit canvas
 // ---------------------------------------------------------------------------
@@ -150,6 +190,28 @@ impl PartialOrd for AstarNode {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
+}
+
+// ---------------------------------------------------------------------------
+// Edge line style
+// ---------------------------------------------------------------------------
+
+/// Line style to apply when overwriting a routed path.
+///
+/// Passed to [`Grid::overdraw_path_style`] after a path has been drawn with
+/// solid glyphs by [`Grid::route_edge`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EdgeLineStyle {
+    /// Leave the path as drawn (solid box-drawing chars from the dir-bit canvas).
+    Solid,
+    /// Replace horizontal cells with `┄` and vertical cells with `┆`.
+    ///
+    /// Junctions with other edges are left as solid characters because Unicode
+    /// lacks dotted junction glyphs — this is the documented trade-off.
+    Dotted,
+    /// Replace path cells using thick box-drawing glyphs (`━`, `┃`, `╋`, etc.),
+    /// recomputed from the existing direction bitmask.
+    Thick,
 }
 
 // ---------------------------------------------------------------------------
@@ -263,6 +325,31 @@ impl Grid {
         self.protect(col, row);
     }
 
+    /// Remove the protection flag from a cell so that subsequent writes
+    /// (including [`Grid::add_dirs`]) can modify it again.
+    ///
+    /// Used after [`Grid::route_edge`] places a tip glyph that we want to
+    /// replace (e.g. converting an arrow tip to a circle endpoint or removing
+    /// it for plain no-arrow lines).
+    pub fn unprotect_cell(&mut self, col: usize, row: usize) {
+        if row < self.height && col < self.width {
+            self.protected[row][col] = false;
+        }
+    }
+
+    /// Recompute the glyph for cell `(col, row)` from its direction-bit mask.
+    ///
+    /// Call this after [`Grid::unprotect_cell`] to let the direction-bit canvas
+    /// produce the correct box-drawing character for a cell whose protection
+    /// was previously holding a different glyph (e.g. an arrow tip that should
+    /// now be a path character because the edge has no endpoint marker).
+    pub fn recompute_cell_glyph(&mut self, col: usize, row: usize) {
+        if row < self.height && col < self.width {
+            let bits = self.directions[row][col];
+            self.cells[row][col] = DIR_TO_CHAR[bits as usize];
+        }
+    }
+
     /// Write `ch` at position `(col, row)`.
     ///
     /// Out-of-bounds writes are silently ignored.
@@ -355,6 +442,170 @@ impl Grid {
         let cx = col + w / 2;
         self.set(cx, row, '◇');
         self.set(cx, row + h - 1, '◇');
+    }
+
+    /// Draw a stadium (capsule/pill) node: rounded box with `(` / `)` markers
+    /// on the vertical midpoint of the left and right edges.
+    ///
+    /// Mermaid syntax: `([label])`
+    pub fn draw_stadium(&mut self, col: usize, row: usize, w: usize, h: usize) {
+        if w < 4 || h < 2 {
+            return;
+        }
+        self.draw_rounded_box(col, row, w, h);
+        // Place `(` and `)` markers one cell inside each rounded side at the
+        // vertical midpoint. This distinguishes stadium from plain rounded.
+        let mid_row = row + h / 2;
+        self.set(col + 1, mid_row, '(');
+        self.set(col + w - 2, mid_row, ')');
+        self.protect(col + 1, mid_row);
+        self.protect(col + w - 2, mid_row);
+    }
+
+    /// Draw a subroutine node: rectangle with an extra inner vertical bar (`│`)
+    /// one cell inside each left and right border.
+    ///
+    /// Mermaid syntax: `[[label]]`
+    pub fn draw_subroutine(&mut self, col: usize, row: usize, w: usize, h: usize) {
+        if w < 4 || h < 2 {
+            return;
+        }
+        self.draw_box(col, row, w, h);
+        // Place inner vertical bars for all interior rows.
+        for y in (row + 1)..(row + h - 1) {
+            self.set(col + 1, y, rect::V);
+            self.set(col + w - 2, y, rect::V);
+        }
+    }
+
+    /// Draw a cylinder (database) node: a box where the top edge shows a
+    /// top-arc row (`╭─╮` style) plus a second interior arc row (`╰─╯`) to
+    /// suggest depth, and the bottom edge mirrors this.
+    ///
+    /// Layout (5 rows):
+    /// ```text
+    /// ╭────╮   ← top arc
+    /// ╰────╯   ← inner arc (depth indicator)
+    ///  text
+    /// ╭────╮   ← inner arc at bottom
+    /// ╰────╯   ← bottom arc
+    /// ```
+    ///
+    /// Mermaid syntax: `[(label)]`
+    pub fn draw_cylinder(&mut self, col: usize, row: usize, w: usize, h: usize) {
+        if w < 2 || h < 5 {
+            return;
+        }
+        // Outer top arc
+        self.set(col, row, rounded::TL);
+        self.set(col + w - 1, row, rounded::TR);
+        for x in (col + 1)..(col + w - 1) {
+            self.set(x, row, rect::H);
+        }
+        // Inner top arc (depth indicator)
+        self.set(col, row + 1, rounded::BL);
+        self.set(col + w - 1, row + 1, rounded::BR);
+        for x in (col + 1)..(col + w - 1) {
+            self.set(x, row + 1, rect::H);
+        }
+        // Side walls for interior rows (text area is between row+2 and row+h-3)
+        for y in (row + 2)..(row + h - 2) {
+            self.set(col, y, rect::V);
+            self.set(col + w - 1, y, rect::V);
+        }
+        // Inner bottom arc
+        self.set(col, row + h - 2, rounded::TL);
+        self.set(col + w - 1, row + h - 2, rounded::TR);
+        for x in (col + 1)..(col + w - 1) {
+            self.set(x, row + h - 2, rect::H);
+        }
+        // Outer bottom arc
+        self.set(col, row + h - 1, rounded::BL);
+        self.set(col + w - 1, row + h - 1, rounded::BR);
+        for x in (col + 1)..(col + w - 1) {
+            self.set(x, row + h - 1, rect::H);
+        }
+    }
+
+    /// Draw a hexagon node: rectangle with `<` / `>` markers at the vertical
+    /// midpoint of the left and right edges (similar to diamond's `◇` markers
+    /// but on the sides rather than top/bottom).
+    ///
+    /// Mermaid syntax: `{{label}}`
+    pub fn draw_hexagon(&mut self, col: usize, row: usize, w: usize, h: usize) {
+        if w < 4 || h < 2 {
+            return;
+        }
+        self.draw_box(col, row, w, h);
+        // Overwrite left/right midpoints with `<` / `>` markers.
+        let mid_row = row + h / 2;
+        self.set(col, mid_row, '<');
+        self.set(col + w - 1, mid_row, '>');
+        self.protect(col, mid_row);
+        self.protect(col + w - 1, mid_row);
+    }
+
+    /// Draw an asymmetric (flag) node: rectangle with a `⟩` marker at the
+    /// vertical midpoint of the right border.
+    ///
+    /// Mermaid syntax: `>label]`
+    pub fn draw_asymmetric(&mut self, col: usize, row: usize, w: usize, h: usize) {
+        if w < 2 || h < 2 {
+            return;
+        }
+        self.draw_box(col, row, w, h);
+        // Replace the vertical midpoint of the right border with `⟩`.
+        let mid_row = row + h / 2;
+        self.set(col + w - 1, mid_row, '⟩');
+        self.protect(col + w - 1, mid_row);
+    }
+
+    /// Draw a parallelogram node: rectangle with `/` markers overwriting the
+    /// top-left and bottom-right corners (lean-right style).
+    ///
+    /// Mermaid syntax: `[/label/]`
+    pub fn draw_parallelogram(&mut self, col: usize, row: usize, w: usize, h: usize) {
+        if w < 2 || h < 2 {
+            return;
+        }
+        self.draw_box(col, row, w, h);
+        // Slant markers at the corners.
+        self.set(col, row, '/');
+        self.set(col + w - 1, row + h - 1, '/');
+        self.protect(col, row);
+        self.protect(col + w - 1, row + h - 1);
+    }
+
+    /// Draw a trapezoid node: rectangle with `/` at top-left and `\` at
+    /// top-right, indicating a wider top, narrower bottom.
+    ///
+    /// Mermaid syntax: `[/label\]`
+    pub fn draw_trapezoid(&mut self, col: usize, row: usize, w: usize, h: usize) {
+        if w < 2 || h < 2 {
+            return;
+        }
+        self.draw_box(col, row, w, h);
+        // Slant markers at top corners only.
+        self.set(col, row, '/');
+        self.set(col + w - 1, row, '\\');
+        self.protect(col, row);
+        self.protect(col + w - 1, row);
+    }
+
+    /// Draw a double-circle node: two concentric rounded boxes, with the inner
+    /// one drawn 1 cell inside the outer on all sides.
+    ///
+    /// Minimum useful size is 5 wide × 5 tall to leave a visible inner ring.
+    ///
+    /// Mermaid syntax: `(((label)))`
+    pub fn draw_double_circle(&mut self, col: usize, row: usize, w: usize, h: usize) {
+        if w < 5 || h < 5 {
+            return;
+        }
+        // Outer rounded box.
+        self.draw_rounded_box(col, row, w, h);
+        // Inner rounded box, 1 cell inside on all sides.
+        self.draw_rounded_box(col + 1, row + 1, w - 2, h - 2);
     }
 
     // -----------------------------------------------------------------------
@@ -669,6 +920,57 @@ impl Grid {
         // Draw the path on the grid.
         self.draw_routed_path(&path, arrow_direction);
         Some(path)
+    }
+
+    /// Overwrite the glyphs of an already-drawn path with a different line style.
+    ///
+    /// This must be called **after** [`Grid::route_edge`] has drawn the path
+    /// using solid glyphs and populated the direction-bit canvas. The method
+    /// walks the path (excluding the tip cell, which is handled separately) and
+    /// replaces each non-protected cell's glyph according to `style`:
+    ///
+    /// - [`EdgeLineStyle::Solid`] — no-op (already solid).
+    /// - [`EdgeLineStyle::Dotted`] — single-direction cells become `┄`/`┆`;
+    ///   multi-direction junction cells are left as solid (see `dotted` module).
+    /// - [`EdgeLineStyle::Thick`] — all cells are recomputed from the
+    ///   direction-bit canvas using `THICK_DIR_TO_CHAR`.
+    ///
+    /// The `tip` and `back_tip` cells must be placed by the caller after this
+    /// call — they are not in `path_cells` (the path slice passed here should
+    /// exclude the terminal arrow cell).
+    pub fn overdraw_path_style(
+        &mut self,
+        path_cells: &[(usize, usize)],
+        style: EdgeLineStyle,
+    ) {
+        if style == EdgeLineStyle::Solid {
+            return;
+        }
+        for &(c, r) in path_cells {
+            if r >= self.height || c >= self.width {
+                continue;
+            }
+            if self.protected[r][c] {
+                continue;
+            }
+            let bits = self.directions[r][c];
+            match style {
+                EdgeLineStyle::Solid => {}
+                EdgeLineStyle::Dotted => {
+                    // Only single-axis cells (pure horizontal or pure vertical)
+                    // get dotted glyphs; junctions stay solid to avoid
+                    // mismatched box-drawing characters.
+                    self.cells[r][c] = match bits {
+                        0b0001..=0b0011 => dotted::V,    // any vertical-only
+                        0b0100 | 0b1000 | 0b1100 => dotted::H, // any horizontal-only
+                        _ => DIR_TO_CHAR[bits as usize],  // junction → stay solid
+                    };
+                }
+                EdgeLineStyle::Thick => {
+                    self.cells[r][c] = THICK_DIR_TO_CHAR[bits as usize];
+                }
+            }
+        }
     }
 
     /// Draw a pre-computed list of `(col, row)` waypoints as box-drawing

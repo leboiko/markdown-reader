@@ -40,7 +40,7 @@ pub mod parser;
 pub mod render;
 pub mod types;
 
-pub use types::{Direction, Edge, Graph, Node, NodeShape};
+pub use types::{Direction, Edge, EdgeEndpoint, EdgeStyle, Graph, Node, NodeShape};
 
 use detect::DiagramKind;
 use layout::layered::LayoutConfig;
@@ -573,6 +573,135 @@ mod tests {
             !out.contains("NoYes") && !out.contains("YesNo"),
             "labels collided:\n{out}"
         );
+    }
+
+    // ---- Part A: New node shape tests ------------------------------------
+
+    #[test]
+    fn stadium_node_renders() {
+        let out = render("graph LR; A([Stadium])").unwrap();
+        assert!(out.contains("Stadium"), "missing label:\n{out}");
+        // Stadium uses rounded corners and ( / ) side markers.
+        assert!(
+            out.contains('(') || out.contains('╭'),
+            "no stadium markers:\n{out}"
+        );
+    }
+
+    #[test]
+    fn subroutine_node_renders() {
+        let out = render("graph LR; A[[Subroutine]]").unwrap();
+        assert!(out.contains("Subroutine"), "missing label:\n{out}");
+        // Subroutine adds inner │ bars next to each side border.
+        assert!(out.contains('│'), "no inner vertical bars:\n{out}");
+    }
+
+    #[test]
+    fn cylinder_node_renders() {
+        let out = render("graph LR; A[(Database)]").unwrap();
+        assert!(out.contains("Database"), "missing label:\n{out}");
+        // Cylinder uses rounded arc chars at top and bottom.
+        assert!(
+            out.contains('╭') || out.contains('╰'),
+            "no cylinder arcs:\n{out}"
+        );
+    }
+
+    #[test]
+    fn hexagon_node_renders() {
+        let out = render("graph LR; A{{Hexagon}}").unwrap();
+        assert!(out.contains("Hexagon"), "missing label:\n{out}");
+        // Hexagon uses < / > markers at the vertical midpoints.
+        assert!(out.contains('<') || out.contains('>'), "no hexagon markers:\n{out}");
+    }
+
+    #[test]
+    fn asymmetric_node_renders() {
+        let out = render("graph LR; A>Async]").unwrap();
+        assert!(out.contains("Async"), "missing label:\n{out}");
+        // Asymmetric uses ⟩ at the right vertical midpoint.
+        assert!(out.contains('⟩'), "no asymmetric marker:\n{out}");
+    }
+
+    #[test]
+    fn parallelogram_node_renders() {
+        let out = render("graph LR; A[/Parallel/]").unwrap();
+        assert!(out.contains("Parallel"), "missing label:\n{out}");
+        // Parallelogram has / markers at top-left and bottom-right corners.
+        assert!(out.contains('/'), "no parallelogram slant marker:\n{out}");
+    }
+
+    #[test]
+    fn trapezoid_node_renders() {
+        let out = render("graph LR; A[/Trap\\]").unwrap();
+        assert!(out.contains("Trap"), "missing label:\n{out}");
+        // Trapezoid has / at top-left and \ at top-right corners.
+        assert!(out.contains('/'), "no trapezoid slant marker:\n{out}");
+    }
+
+    #[test]
+    fn double_circle_node_renders() {
+        let out = render("graph LR; A(((DblCircle)))").unwrap();
+        assert!(out.contains("DblCircle"), "missing label:\n{out}");
+        // Double circle has two concentric rounded borders.
+        let corner_count = out.chars().filter(|&c| c == '╭').count();
+        assert!(
+            corner_count >= 2,
+            "expected ≥2 rounded corners for double circle, got {corner_count}:\n{out}"
+        );
+    }
+
+    // ---- Part B: Edge style tests ----------------------------------------
+
+    #[test]
+    fn dotted_edge_renders_with_dotted_glyph() {
+        let out = render("graph LR; A-.->B").unwrap();
+        // Dotted horizontal should contain ┄ or dotted vertical ┆.
+        assert!(
+            out.contains('┄') || out.contains('┆'),
+            "no dotted glyph in:\n{out}"
+        );
+    }
+
+    #[test]
+    fn thick_edge_renders_with_thick_glyph() {
+        let out = render("graph LR; A==>B").unwrap();
+        assert!(
+            out.contains('━') || out.contains('┃'),
+            "no thick glyph in:\n{out}"
+        );
+    }
+
+    #[test]
+    fn bidirectional_edge_has_two_arrows() {
+        let out = render("graph LR; A<-->B").unwrap();
+        // Should contain both ◂ (pointing back to A) and ▸ (pointing to B).
+        assert!(
+            out.contains('◂') && out.contains('▸'),
+            "missing bidirectional arrows in:\n{out}"
+        );
+    }
+
+    #[test]
+    fn plain_line_edge_has_no_arrow() {
+        let out = render("graph LR; A---B").unwrap();
+        // No arrow tip characters.
+        assert!(
+            !out.contains('▸') && !out.contains('◂'),
+            "unexpected arrow in plain line:\n{out}"
+        );
+    }
+
+    #[test]
+    fn circle_endpoint_renders_circle_glyph() {
+        let out = render("graph LR; A--oB").unwrap();
+        assert!(out.contains('○'), "no circle endpoint glyph in:\n{out}");
+    }
+
+    #[test]
+    fn cross_endpoint_renders_cross_glyph() {
+        let out = render("graph LR; A--xB").unwrap();
+        assert!(out.contains('×'), "no cross endpoint glyph in:\n{out}");
     }
 
     // ---- Subgraph tests ---------------------------------------------------
