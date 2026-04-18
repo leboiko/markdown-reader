@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use unicode_width::UnicodeWidthStr;
 
 use crate::{
-    layout::{Grid, grid::arrow, layered::GridPos},
+    layout::{Grid, SubgraphBounds, grid::arrow, layered::GridPos},
     types::{Direction, Graph, Node, NodeShape},
 };
 
@@ -143,17 +143,17 @@ fn tip_char(dir: Direction) -> char {
 // Grid sizing
 // ---------------------------------------------------------------------------
 
-/// Compute the minimum grid dimensions needed to hold all nodes and edges.
+/// Compute the minimum grid dimensions needed to hold all nodes, edges, and
+/// subgraph borders.
 ///
-/// The grid must be wide/tall enough to hold node boxes plus any edge labels.
-/// For LR/RL flows, labels are written horizontally between layers, so the
-/// extra width needed is the longest edge label width. For TD/BT, the same
-/// applies vertically (extra height). Both axes also receive a fixed +4 margin
+/// The grid must be wide/tall enough to hold node boxes plus any edge labels
+/// and subgraph border rectangles. Both axes also receive a fixed +4 margin
 /// for arrow heads and routing headroom.
 fn grid_size(
     graph: &Graph,
     positions: &HashMap<String, GridPos>,
     geoms: &HashMap<String, NodeGeom>,
+    sg_bounds: &[SubgraphBounds],
 ) -> (usize, usize) {
     let mut max_col = 0usize;
     let mut max_row = 0usize;
@@ -163,6 +163,12 @@ fn grid_size(
             max_col = max_col.max(c + g.width + 4);
             max_row = max_row.max(r + g.height + 4);
         }
+    }
+
+    // Account for subgraph border rectangles.
+    for b in sg_bounds {
+        max_col = max_col.max(b.col + b.width + 4);
+        max_row = max_row.max(b.row + b.height + 4);
     }
 
     // Extra room for edge labels: labels can extend past the last node.
@@ -195,7 +201,12 @@ fn grid_size(
 /// * `graph`     — the parsed flowchart
 /// * `positions` — map from node ID to `(col, row)` grid position (top-left
 ///   corner of the node's bounding box)
-pub fn render(graph: &Graph, positions: &HashMap<String, GridPos>) -> String {
+/// * `sg_bounds` — precomputed subgraph bounding boxes (sorted outermost-first)
+pub fn render(
+    graph: &Graph,
+    positions: &HashMap<String, GridPos>,
+    sg_bounds: &[SubgraphBounds],
+) -> String {
     // Pre-compute geometry for every node
     let geoms: HashMap<String, NodeGeom> = graph
         .nodes
@@ -203,10 +214,19 @@ pub fn render(graph: &Graph, positions: &HashMap<String, GridPos>) -> String {
         .map(|n| (n.id.clone(), NodeGeom::for_node(n)))
         .collect();
 
-    let (width, height) = grid_size(graph, positions, &geoms);
+    let (width, height) = grid_size(graph, positions, &geoms, sg_bounds);
     let mut grid = Grid::new(width, height);
 
-    // Pass 0: Register all node bounding boxes as hard routing obstacles so
+    // Pass 0a: Draw subgraph borders FIRST, outermost-to-innermost, so that
+    // inner borders are drawn on top of outer ones (preventing outer border
+    // characters from overwriting inner labels). `sg_bounds` is sorted
+    // outermost-first, so we iterate in reverse to get innermost-first draw
+    // order.
+    for bounds in sg_bounds.iter().rev() {
+        draw_subgraph_border(&mut grid, bounds);
+    }
+
+    // Pass 0b: Register all node bounding boxes as hard routing obstacles so
     // that A* edge routing will not route edges through node interiors.
     for node in &graph.nodes {
         let Some(&(col, row)) = positions.get(&node.id) else {
@@ -559,6 +579,83 @@ fn draw_node_box(grid: &mut Grid, node: &Node, pos: GridPos, geom: NodeGeom) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Subgraph border drawing
+// ---------------------------------------------------------------------------
+
+/// Draw a subgraph border rectangle (rounded corners) and write the subgraph
+/// label left-aligned inside the top border with 2 cells of padding.
+///
+/// We use rounded corners (`╭╮╰╯`) to visually distinguish subgraph borders
+/// from regular node boxes, which use square corners.
+///
+/// The border cells are marked as obstacles so that A\* routing avoids them
+/// during edge routing. They are also protected so subsequent node drawing
+/// does not overwrite them.
+fn draw_subgraph_border(grid: &mut Grid, bounds: &SubgraphBounds) {
+    let (col, row, w, h) = (bounds.col, bounds.row, bounds.width, bounds.height);
+
+    if w < 2 || h < 2 {
+        return;
+    }
+
+    // Draw rounded rectangle outline.
+    grid.draw_rounded_box(col, row, w, h);
+
+    // Protect all border cells so edge routing and later node drawing leave
+    // them alone.  We only protect the outline (border ring), not interior.
+    for x in col..(col + w) {
+        grid.protect_cell(x, row);
+        grid.protect_cell(x, row + h - 1);
+    }
+    for y in (row + 1)..(row + h - 1) {
+        grid.protect_cell(col, y);
+        grid.protect_cell(col + w - 1, y);
+    }
+
+    // Mark border cells as NodeBox obstacles so A* routes around them.
+    // Only the thin border ring — interior must remain passable for edges
+    // that stay inside the subgraph.
+    for x in col..(col + w) {
+        grid.mark_obstacle(x, row);
+        grid.mark_obstacle(x, row + h - 1);
+    }
+    for y in (row + 1)..(row + h - 1) {
+        grid.mark_obstacle(col, y);
+        grid.mark_obstacle(col + w - 1, y);
+    }
+
+    // Write the label inline in the top border row, starting 2 cells in from
+    // the left corner. This avoids overlapping with node boxes whose top edge
+    // may sit at `row + 1`.  The label overwrites the `─` border chars at
+    // those positions; since we protect those cells afterward, A* and later
+    // drawing passes cannot erase them.
+    let label_col = col + 2;
+    let label_row = row;
+    // Truncate the label to fit within the border width, leaving room for
+    // the corners and at least 1 `─` on each side.
+    let max_label_w = w.saturating_sub(4);
+    let label = truncate_to_width(&bounds.label, max_label_w);
+    if !label.is_empty() {
+        grid.write_text_protected(label_col, label_row, &label);
+    }
+}
+
+/// Truncate `s` so its display width does not exceed `max_width`.
+fn truncate_to_width(s: &str, max_width: usize) -> String {
+    let mut out = String::new();
+    let mut w = 0;
+    for ch in s.chars() {
+        let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
+        if w + cw > max_width {
+            break;
+        }
+        out.push(ch);
+        w += cw;
+    }
+    out
+}
+
 /// Write a node's label horizontally centred inside its bounding box.
 fn draw_label_centred(grid: &mut Grid, node: &Node, pos: GridPos, geom: NodeGeom) {
     let (col, row) = pos;
@@ -739,7 +836,6 @@ fn collides(col: usize, row: usize, w: usize, placed: &[(usize, usize, usize, us
     false
 }
 
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -755,7 +851,8 @@ mod tests {
     fn render_diagram(src: &str) -> String {
         let graph = parser::parse(src).unwrap();
         let positions = layout(&graph, &LayoutConfig::default());
-        render(&graph, &positions)
+        let sg_bounds = crate::layout::subgraph::compute_subgraph_bounds(&graph, &positions);
+        render(&graph, &positions, &sg_bounds)
     }
 
     #[test]

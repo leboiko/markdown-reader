@@ -139,7 +139,10 @@ impl Eq for AstarNode {}
 impl Ord for AstarNode {
     fn cmp(&self, other: &Self) -> Ordering {
         // Reverse order so BinaryHeap is a min-heap.
-        other.f_cost.partial_cmp(&self.f_cost).unwrap_or(Ordering::Equal)
+        other
+            .f_cost
+            .partial_cmp(&self.f_cost)
+            .unwrap_or(Ordering::Equal)
     }
 }
 
@@ -240,6 +243,24 @@ impl Grid {
                 }
             }
         }
+    }
+
+    /// Mark a single cell as a hard obstacle (equivalent to a node-box cell).
+    ///
+    /// Used by the subgraph renderer to mark border cells so A\* routing
+    /// avoids routing edges through the subgraph border lines.
+    pub fn mark_obstacle(&mut self, col: usize, row: usize) {
+        if row < self.height && col < self.width {
+            self.obstacles[row][col] = Obstacle::NodeBox;
+        }
+    }
+
+    /// Expose the internal `protect` method as a public API.
+    ///
+    /// Protected cells are skipped by [`Grid::add_dirs`] so that
+    /// subgraph border characters and labels survive subsequent edge routing.
+    pub fn protect_cell(&mut self, col: usize, row: usize) {
+        self.protect(col, row);
     }
 
     /// Write `ch` at position `(col, row)`.
@@ -545,9 +566,7 @@ impl Grid {
         }
 
         // Manhattan distance heuristic (admissible — never overestimates).
-        let h = |c: usize, r: usize| -> f32 {
-            (c.abs_diff(col2) + r.abs_diff(row2)) as f32
-        };
+        let h = |c: usize, r: usize| -> f32 { (c.abs_diff(col2) + r.abs_diff(row2)) as f32 };
 
         // `came_from[row][col]` encodes the direction we arrived from
         // (0–3) or `u8::MAX` for unvisited.  We also store the g_cost.
@@ -559,7 +578,13 @@ impl Grid {
         let mut open: BinaryHeap<AstarNode> = BinaryHeap::new();
         // Preferred initial direction based on `horizontal_first`.
         let start_dir = if horizontal_first { 0u8 } else { 1u8 };
-        open.push(AstarNode { f_cost: h(col1, row1), g_cost: 0.0, col: col1, row: row1, dir: start_dir });
+        open.push(AstarNode {
+            f_cost: h(col1, row1),
+            g_cost: 0.0,
+            col: col1,
+            row: row1,
+            dir: start_dir,
+        });
 
         'outer: while let Some(current) = open.pop() {
             // Skip stale entries (a cheaper path was already found).
@@ -670,10 +695,7 @@ impl Grid {
             let (c, r) = path[i];
 
             // Mark as edge-occupied so future routes prefer fresh corridors.
-            if r < self.height
-                && c < self.width
-                && self.obstacles[r][c] != Obstacle::NodeBox
-            {
+            if r < self.height && c < self.width && self.obstacles[r][c] != Obstacle::NodeBox {
                 self.obstacles[r][c] = Obstacle::EdgeOccupied;
             }
 
@@ -694,7 +716,6 @@ impl Grid {
             self.add_dirs(c, r, bits);
         }
     }
-
 }
 
 // ---------------------------------------------------------------------------

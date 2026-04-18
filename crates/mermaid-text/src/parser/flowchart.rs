@@ -6,6 +6,7 @@
 //!
 //! - A **node definition**: `A[Label]`, `A{Label}`, `A((Label))`, `A(Label)`, or bare `A`
 //! - An **edge chain**: `A --> B --> C`, potentially with inline labels
+//! - A **subgraph block**: `subgraph ID [Label]` … `end`
 //! - A **header line**: `graph LR` / `flowchart TD` (handled before entering this module)
 //! - A blank / comment line — silently ignored
 //!
@@ -14,7 +15,7 @@
 
 use crate::{
     Error,
-    types::{Direction, Edge, Graph, Node, NodeShape},
+    types::{Direction, Edge, Graph, Node, NodeShape, Subgraph},
 };
 
 // ---------------------------------------------------------------------------
@@ -37,19 +38,23 @@ pub fn parse(input: &str) -> Result<Graph, Error> {
     // identically — the first non-blank, non-comment statement is the header.
     let normalised = input.replace('\n', ";").replace('\r', "");
 
-    let mut statements = normalised
+    let statements: Vec<&str> = normalised
         .split(';')
         .map(str::trim)
-        .filter(|s| !s.is_empty() && !s.starts_with("%%"));
+        .filter(|s| !s.is_empty() && !s.starts_with("%%"))
+        .collect();
+
+    let mut iter = statements.iter().copied();
 
     // ---- Find and parse the header statement ----------------------------
-    let direction = parse_header_stmt(&mut statements)?;
+    let direction = parse_header_stmt(&mut iter)?;
     let mut graph = Graph::new(direction);
 
     // ---- Parse each remaining statement ---------------------------------
-    for stmt in statements {
-        parse_statement(stmt, &mut graph);
-    }
+    // We collect remaining statements into a Vec so we can do a stateful
+    // multi-statement parse (subgraph blocks span multiple statements).
+    let remaining: Vec<&str> = iter.collect();
+    parse_statements(&remaining, &mut graph, &mut None);
 
     Ok(graph)
 }
@@ -94,35 +99,150 @@ fn parse_header_stmt<'a>(stmts: &mut impl Iterator<Item = &'a str>) -> Result<Di
 // Statement parsing
 // ---------------------------------------------------------------------------
 
+/// Parse a slice of statements into `graph`.
+///
+/// `current_subgraph_id` is `Some(id)` when we are inside a subgraph block
+/// (used to register node membership). This function is called recursively
+/// for nested subgraphs — the inner call consumes statements up through `end`
+/// and the outer call continues from there.
+///
+/// Returns the index of the statement **after** the `end` that closed the
+/// innermost subgraph block, or `stmts.len()` if there was no `end`.
+fn parse_statements(
+    stmts: &[&str],
+    graph: &mut Graph,
+    current_subgraph_id: &mut Option<String>,
+) -> usize {
+    let mut i = 0;
+    while i < stmts.len() {
+        let stmt = stmts[i];
+        let first_word = stmt.split_whitespace().next().unwrap_or("");
+
+        match first_word {
+            "subgraph" => {
+                // Parse the subgraph header: `subgraph ID` or `subgraph ID Label`
+                let (sg_id, sg_label) = parse_subgraph_header(stmt);
+
+                // Register this subgraph in the parent (or at the top level).
+                if let Some(ref parent_id) = current_subgraph_id.clone() {
+                    // Nested: link child into parent.
+                    if let Some(parent) = graph.subgraphs.iter_mut().find(|s| &s.id == parent_id) {
+                        parent.subgraph_ids.push(sg_id.clone());
+                    }
+                }
+                graph.subgraphs.push(Subgraph::new(sg_id.clone(), sg_label));
+
+                // Recurse into the subgraph body. The recursive call consumes
+                // statements until it hits the matching `end` and returns the
+                // index of the statement after `end`.
+                let mut inner_sg = Some(sg_id);
+                i += 1;
+                let consumed = parse_statements(&stmts[i..], graph, &mut inner_sg);
+                i += consumed;
+            }
+            "end" => {
+                // Close the current subgraph block. Tell the caller we consumed
+                // through (and including) this `end`.
+                return i + 1;
+            }
+            "direction" => {
+                // `direction TB` inside a subgraph: store it on the model.
+                if let Some(ref sg_id) = current_subgraph_id.clone() {
+                    let dir_word = stmt.split_whitespace().nth(1).unwrap_or("");
+                    if let Some(dir) = Direction::parse(dir_word)
+                        && let Some(sg) = graph.subgraphs.iter_mut().find(|s| s.id == *sg_id)
+                    {
+                        sg.direction = Some(dir);
+                    }
+                }
+                i += 1;
+            }
+            // Style / class directives — silently skip.
+            "style" | "classDef" | "class" | "click" | "linkStyle" | "accTitle" | "accDescr" => {
+                i += 1;
+            }
+            _ => {
+                // Regular node definition or edge chain.
+                parse_statement(stmt, graph, current_subgraph_id);
+                i += 1;
+            }
+        }
+    }
+    // Consumed all statements without seeing `end` (top-level or unclosed block).
+    stmts.len()
+}
+
 /// Parse a single statement (already trimmed, no leading/trailing whitespace).
 ///
 /// A statement is either a standalone node definition or an edge chain that
 /// may include inline node definitions.
 ///
 /// Any nodes referenced in edges are auto-created if they have not been
-/// explicitly defined yet.
-fn parse_statement(stmt: &str, graph: &mut Graph) {
-    // Skip mermaid keywords that are not node definitions or edge chains.
-    // These appear inside subgraph blocks, style directives, etc.
-    let first_word = stmt.split_whitespace().next().unwrap_or("");
-    if matches!(
-        first_word,
-        "subgraph" | "end" | "direction" | "style" | "classDef" | "class"
-            | "click" | "linkStyle" | "accTitle" | "accDescr"
-    ) {
-        return;
-    }
-
+/// explicitly defined yet. If `current_subgraph_id` is `Some`, newly seen
+/// node IDs are recorded as members of that subgraph.
+fn parse_statement(stmt: &str, graph: &mut Graph, current_subgraph_id: &mut Option<String>) {
     // Try to parse as an edge chain first (contains an arrow token).
-    // Edge chains look like: A --> B  or  A -->|label| B --> C
     if looks_like_edge_chain(stmt) {
-        parse_edge_chain(stmt, graph);
+        parse_edge_chain(stmt, graph, current_subgraph_id);
     } else {
         // Pure node definition: A[label], A{label}, A((label)), A(label), A
         if let Some(node) = parse_node_definition(stmt) {
+            let node_id = node.id.clone();
             graph.upsert_node(node);
+            register_node_in_subgraph(graph, &node_id, current_subgraph_id);
         }
     }
+}
+
+/// Register `node_id` as a direct member of the current subgraph (if any).
+///
+/// Only registers if the node is not already a member (avoids duplicates from
+/// multiple references to the same node within one subgraph body).
+fn register_node_in_subgraph(
+    graph: &mut Graph,
+    node_id: &str,
+    current_subgraph_id: &Option<String>,
+) {
+    if let Some(sg_id) = current_subgraph_id
+        && let Some(sg) = graph.subgraphs.iter_mut().find(|s| s.id == *sg_id)
+        && !sg.node_ids.contains(&node_id.to_string())
+    {
+        sg.node_ids.push(node_id.to_string());
+    }
+}
+
+/// Parse the `subgraph` header statement and extract `(id, label)`.
+///
+/// Mermaid supports these forms:
+/// - `subgraph ID`           — label defaults to ID
+/// - `subgraph ID[Label]`    — label in square brackets (no space before `[`)
+/// - `subgraph ID [Label]`   — same with a space
+/// - `subgraph "Label"`      — quoted label used as both id and label
+fn parse_subgraph_header(stmt: &str) -> (String, String) {
+    // Strip the "subgraph" keyword.
+    let rest = stmt.trim_start_matches("subgraph").trim();
+
+    if rest.is_empty() {
+        // Bare `subgraph` with no identifier — use a placeholder.
+        return ("__sg__".to_string(), "".to_string());
+    }
+
+    // Check for bracket-style label: `ID[Label]` or `ID [Label]`.
+    if let Some(bracket_pos) = rest.find('[') {
+        let id = rest[..bracket_pos].trim().to_string();
+        let rest_after = &rest[bracket_pos + 1..];
+        let label = if let Some(close) = rest_after.find(']') {
+            rest_after[..close].trim().to_string()
+        } else {
+            rest_after.trim().to_string()
+        };
+        let id = if id.is_empty() { label.clone() } else { id };
+        return (id, label);
+    }
+
+    // No bracket: the entire rest is the ID, and label == ID.
+    let id = rest.to_string();
+    (id.clone(), id)
 }
 
 /// Return `true` if the statement appears to contain at least one edge arrow.
@@ -143,7 +263,7 @@ fn looks_like_edge_chain(s: &str) -> bool {
 ///
 /// The chain is tokenised by splitting on edge markers while preserving
 /// edge-label content between `|...|` delimiters.
-fn parse_edge_chain(stmt: &str, graph: &mut Graph) {
+fn parse_edge_chain(stmt: &str, graph: &mut Graph, current_subgraph_id: &mut Option<String>) {
     // We build a list of (node_token, edge_label_or_none) pairs.
     // Strategy: walk char-by-char, extracting alternating node/edge segments.
 
@@ -178,6 +298,7 @@ fn parse_edge_chain(stmt: &str, graph: &mut Graph) {
             });
             let node_id = node.id.clone();
             graph.upsert_node(node);
+            register_node_in_subgraph(graph, &node_id, current_subgraph_id);
 
             if let Some(ref from) = prev_id {
                 let edge = Edge::new(from.clone(), node_id.clone(), pending_edge_label.take());
@@ -483,5 +604,67 @@ mod tests {
     #[test]
     fn no_header_returns_error() {
         assert!(parse("A-->B").is_err());
+    }
+
+    #[test]
+    fn parse_subgraph_basic() {
+        let src = "graph LR\nsubgraph Supervisor\nF[Factory] --> W[Worker]\nend";
+        let g = parse(src).unwrap();
+        assert!(g.has_node("F"), "missing F");
+        assert!(g.has_node("W"), "missing W");
+        assert_eq!(g.subgraphs.len(), 1);
+        assert_eq!(g.subgraphs[0].id, "Supervisor");
+        assert_eq!(g.subgraphs[0].label, "Supervisor");
+        // Both nodes should be members of the Supervisor subgraph.
+        assert!(g.subgraphs[0].node_ids.contains(&"F".to_string()));
+        assert!(g.subgraphs[0].node_ids.contains(&"W".to_string()));
+    }
+
+    #[test]
+    fn parse_subgraph_with_direction() {
+        let src = "graph LR\nsubgraph S\ndirection TB\nA-->B\nend";
+        let g = parse(src).unwrap();
+        assert_eq!(g.subgraphs[0].direction, Some(Direction::TopToBottom));
+    }
+
+    #[test]
+    fn parse_nested_subgraphs() {
+        let src = "graph TD\nsubgraph Outer\nsubgraph Inner\nA[A]\nend\nB[B]\nend";
+        let g = parse(src).unwrap();
+        // Both subgraphs should be registered.
+        assert!(g.find_subgraph("Outer").is_some());
+        assert!(g.find_subgraph("Inner").is_some());
+        // Inner should be a child of Outer.
+        let outer = g.find_subgraph("Outer").unwrap();
+        assert!(outer.subgraph_ids.contains(&"Inner".to_string()));
+        // A is in Inner, B is in Outer.
+        let inner = g.find_subgraph("Inner").unwrap();
+        assert!(inner.node_ids.contains(&"A".to_string()));
+        assert!(outer.node_ids.contains(&"B".to_string()));
+    }
+
+    #[test]
+    fn parse_subgraph_edge_crossing_boundary() {
+        let src = "graph LR\nsubgraph S\nF[Factory] --> W[Worker]\nend\nW --> HB[Heartbeat]";
+        let g = parse(src).unwrap();
+        assert!(g.has_node("F"));
+        assert!(g.has_node("W"));
+        assert!(g.has_node("HB"));
+        // W → HB edge should exist (crosses boundary).
+        assert!(g.edges.iter().any(|e| e.from == "W" && e.to == "HB"));
+        // HB should NOT be in subgraph S.
+        let s = g.find_subgraph("S").unwrap();
+        assert!(!s.node_ids.contains(&"HB".to_string()));
+    }
+
+    #[test]
+    fn node_to_subgraph_map() {
+        let src = "graph LR\nsubgraph S\nA-->B\nend\nC-->D";
+        let g = parse(src).unwrap();
+        let map = g.node_to_subgraph();
+        assert_eq!(map.get("A").map(String::as_str), Some("S"));
+        assert_eq!(map.get("B").map(String::as_str), Some("S"));
+        assert!(map.get("C").is_none());
+        assert!(map.get("D").is_none());
     }
 }

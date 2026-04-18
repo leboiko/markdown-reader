@@ -176,9 +176,18 @@ pub fn render_with_width(input: &str, max_width: Option<usize>) -> Result<String
     //    Each step reduces both the inter-layer gap and the label padding.
     //    We try four levels; the last one is the most compact.
     const COMPACT_CONFIGS: &[LayoutConfig] = &[
-        LayoutConfig { layer_gap: 4, node_gap: 2 },
-        LayoutConfig { layer_gap: 2, node_gap: 1 },
-        LayoutConfig { layer_gap: 1, node_gap: 0 },
+        LayoutConfig {
+            layer_gap: 4,
+            node_gap: 2,
+        },
+        LayoutConfig {
+            layer_gap: 2,
+            node_gap: 1,
+        },
+        LayoutConfig {
+            layer_gap: 1,
+            node_gap: 0,
+        },
     ];
 
     // Keep the most compact output in case nothing fits.
@@ -202,8 +211,93 @@ pub fn render_with_width(input: &str, max_width: Option<usize>) -> Result<String
 
 /// Render a pre-parsed `graph` using the given layout configuration.
 fn render_with_config(graph: &crate::types::Graph, config: &LayoutConfig) -> String {
-    let positions = layout::layered::layout(graph, config);
-    render::render(graph, &positions)
+    let mut positions = layout::layered::layout(graph, config);
+
+    // When subgraphs are present, offset all positions to ensure there is
+    // room for subgraph border padding above/left of the topmost/leftmost
+    // subgraph member. Without this, a subgraph whose members start at (0,0)
+    // would have a border_row of 0 too (saturating_sub), causing the border
+    // to overlap the node boxes.
+    if !graph.subgraphs.is_empty() {
+        offset_positions_for_subgraphs(graph, &mut positions);
+    }
+
+    let sg_bounds = layout::subgraph::compute_subgraph_bounds(graph, &positions);
+    render::render(graph, &positions, &sg_bounds)
+}
+
+/// Shift all node positions so that the innermost subgraph members have
+/// enough space above and to the left for all enclosing subgraph borders.
+///
+/// Each nesting level needs `SG_BORDER_PAD` cells of breathing room.
+/// For a node at depth `d` (inside `d` nested subgraphs), we need at least
+/// `SG_BORDER_PAD * (d + 1)` free rows/cols before the node's top-left corner
+/// so that every enclosing border can be drawn without `saturating_sub`
+/// clipping to 0.
+fn offset_positions_for_subgraphs(
+    graph: &crate::types::Graph,
+    positions: &mut std::collections::HashMap<String, (usize, usize)>,
+) {
+    use layout::subgraph::SG_BORDER_PAD;
+
+    // Build node → nesting depth (how many subgraphs enclose it).
+    let node_sg_map = graph.node_to_subgraph();
+    let max_depth = compute_max_nesting_depth(graph);
+
+    // The innermost nodes need `SG_BORDER_PAD * (max_depth + 1)` free space.
+    // Nodes outside subgraphs need 0 padding.
+    let required_pad = SG_BORDER_PAD * (max_depth + 1);
+
+    // Find the minimum col and row across all nodes that are inside at least
+    // one subgraph.
+    let mut min_col = usize::MAX;
+    let mut min_row = usize::MAX;
+
+    for (node_id, &(col, row)) in positions.iter() {
+        if node_sg_map.contains_key(node_id) {
+            min_col = min_col.min(col);
+            min_row = min_row.min(row);
+        }
+    }
+
+    if min_col == usize::MAX {
+        return; // no subgraph members in positions
+    }
+
+    let col_offset = required_pad.saturating_sub(min_col);
+    let row_offset = required_pad.saturating_sub(min_row);
+
+    if col_offset == 0 && row_offset == 0 {
+        return;
+    }
+
+    // Shift every node (not just subgraph members) so the grid remains consistent.
+    for (col, row) in positions.values_mut() {
+        *col += col_offset;
+        *row += row_offset;
+    }
+}
+
+/// Compute the maximum nesting depth of any subgraph in the graph.
+///
+/// A top-level subgraph has depth 0; a subgraph inside it has depth 1, etc.
+fn compute_max_nesting_depth(graph: &crate::types::Graph) -> usize {
+    fn depth_of(graph: &crate::types::Graph, sg: &crate::types::Subgraph, cur: usize) -> usize {
+        let mut max = cur;
+        for child_id in &sg.subgraph_ids {
+            if let Some(child) = graph.find_subgraph(child_id) {
+                max = max.max(depth_of(graph, child, cur + 1));
+            }
+        }
+        max
+    }
+
+    graph
+        .subgraphs
+        .iter()
+        .map(|sg| depth_of(graph, sg, 0))
+        .max()
+        .unwrap_or(0)
 }
 
 /// Return the maximum display-column width across all lines of `text`.
@@ -422,8 +516,14 @@ mod tests {
         assert!(out.contains("Heartbeat"), "missing Heartbeat:\n{out}");
         assert!(out.contains("Database"), "missing Database:\n{out}");
         // Keywords should NOT appear as node labels.
-        assert!(!out.contains("subgraph"), "subgraph should be skipped:\n{out}");
-        assert!(!out.contains("direction"), "direction should be skipped:\n{out}");
+        assert!(
+            !out.contains("subgraph"),
+            "subgraph should be skipped:\n{out}"
+        );
+        assert!(
+            !out.contains("direction"),
+            "direction should be skipped:\n{out}"
+        );
     }
 
     /// Verify that multiple edges leaving the same source node in LR direction
@@ -456,7 +556,10 @@ mod tests {
     #[test]
     fn long_edge_label_not_truncated() {
         let out = render("graph LR; A-->|panics and exits cleanly| B").unwrap();
-        assert!(out.contains("panics and exits cleanly"), "label truncated:\n{out}");
+        assert!(
+            out.contains("panics and exits cleanly"),
+            "label truncated:\n{out}"
+        );
     }
 
     /// Verify that two labels on edges diverging from the same TD diamond node
@@ -469,6 +572,101 @@ mod tests {
         assert!(
             !out.contains("NoYes") && !out.contains("YesNo"),
             "labels collided:\n{out}"
+        );
+    }
+
+    // ---- Subgraph tests ---------------------------------------------------
+
+    /// A single subgraph should render with a rounded border and a label at
+    /// the top, enclosing all member nodes.
+    #[test]
+    fn subgraph_renders_with_border_and_label() {
+        let src = r#"graph LR
+    subgraph Supervisor
+        F[Factory] --> W[Worker]
+    end"#;
+        let out = render(src).unwrap();
+        assert!(out.contains("Supervisor"), "missing label:\n{out}");
+        assert!(out.contains("Factory"), "missing Factory:\n{out}");
+        assert!(out.contains("Worker"), "missing Worker:\n{out}");
+        // Subgraph uses rounded corners to distinguish from node boxes.
+        assert!(
+            out.contains('╭') || out.contains('╰'),
+            "missing rounded subgraph corner:\n{out}"
+        );
+        // The subgraph border should appear as a vertical side bar on the left.
+        assert!(out.contains('│'), "missing vertical border:\n{out}");
+    }
+
+    /// Two nested subgraphs should both show their labels and the inner border
+    /// should be visually contained within the outer one.
+    #[test]
+    fn nested_subgraphs_render() {
+        let src = r#"graph TD
+    subgraph Outer
+        subgraph Inner
+            A[A]
+        end
+        B[B]
+    end"#;
+        let out = render(src).unwrap();
+        assert!(out.contains("Outer"), "missing Outer label:\n{out}");
+        assert!(out.contains("Inner"), "missing Inner label:\n{out}");
+        assert!(out.contains('A'), "missing A:\n{out}");
+        assert!(out.contains('B'), "missing B:\n{out}");
+        // Two levels of rounded corners should appear.
+        let corner_count = out.chars().filter(|&c| c == '╭').count();
+        assert!(
+            corner_count >= 2,
+            "expected at least 2 top-left rounded corners (one per subgraph), got {corner_count}:\n{out}"
+        );
+    }
+
+    /// An edge that crosses a subgraph boundary should render without panicking
+    /// and the external node should appear outside the subgraph border.
+    #[test]
+    fn edge_crossing_subgraph_boundary_renders() {
+        let src = r#"graph LR
+    subgraph S
+        F[Factory] --> W[Worker]
+    end
+    W --> HB[Heartbeat]"#;
+        let out = render(src).unwrap();
+        // Heartbeat should be outside the S rectangle; edge from W to HB
+        // should exist without the whole thing hanging or panicking.
+        assert!(out.contains("Heartbeat"), "missing Heartbeat:\n{out}");
+        assert!(out.contains("Factory"), "missing Factory:\n{out}");
+        assert!(out.contains("Worker"), "missing Worker:\n{out}");
+        // The subgraph border should be present.
+        assert!(out.contains('╭'), "missing subgraph border:\n{out}");
+    }
+
+    /// `real_world_flowchart_with_subgraph` now exercises the full subgraph
+    /// pipeline — nodes inside the Supervisor subgraph should still render,
+    /// and the "subgraph"/"direction"/"end" keywords must NOT appear as labels.
+    /// (This test was present before and still passes unchanged.)
+    #[test]
+    fn subgraph_keywords_not_leaked_as_labels() {
+        let src = r#"graph LR
+    subgraph Supervisor
+        direction TB
+        F[Factory] -->|creates| W[Worker]
+        W -->|panics/exits| F
+    end
+    W -->|beat| HB[Heartbeat]"#;
+        let out = render(src).expect("should render");
+        assert!(out.contains("Factory"), "missing Factory:\n{out}");
+        assert!(out.contains("Worker"), "missing Worker:\n{out}");
+        assert!(out.contains("Heartbeat"), "missing Heartbeat:\n{out}");
+        // The subgraph label "Supervisor" appears in the border, but the
+        // bare keyword "subgraph" must not appear as a standalone label.
+        assert!(
+            !out.contains("subgraph"),
+            "bare 'subgraph' keyword leaked into output:\n{out}"
+        );
+        assert!(
+            !out.contains("direction"),
+            "bare 'direction' keyword leaked into output:\n{out}"
         );
     }
 }

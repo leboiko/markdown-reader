@@ -164,10 +164,7 @@ fn order_within_layers(graph: &Graph, layers: &HashMap<String, usize>) -> Vec<Ve
     // Per-node layer lookup for the crossing counter. Borrows from `layers`
     // rather than `buckets` so that it stays live across mutations of the
     // latter during sweep passes.
-    let node_layer: HashMap<&str, usize> = layers
-        .iter()
-        .map(|(id, &l)| (id.as_str(), l))
-        .collect();
+    let node_layer: HashMap<&str, usize> = layers.iter().map(|(id, &l)| (id.as_str(), l)).collect();
 
     // Iterative refinement. Termaid's implementation caps at 8 passes with
     // early termination after 4 non-improving passes; the same constants
@@ -361,10 +358,7 @@ fn node_box_height(graph: &Graph, id: &str) -> usize {
         // All shapes are now 3 rows tall (top border, text, bottom border).
         // Keep the match exhaustive so the compiler catches new shapes.
         match node.shape {
-            NodeShape::Diamond
-            | NodeShape::Rectangle
-            | NodeShape::Rounded
-            | NodeShape::Circle => 3,
+            NodeShape::Diamond | NodeShape::Rectangle | NodeShape::Rounded | NodeShape::Circle => 3,
         }
     } else {
         3
@@ -472,7 +466,13 @@ fn compute_positions(
                 // Inter-layer gap: at least default, but wide enough for edge
                 // labels that cross into the next layer.
                 let gap = if layer_idx + 1 < ordered.len() {
-                    label_gap(graph, &node_layer, layer_idx, layer_idx + 1, config.layer_gap)
+                    label_gap(
+                        graph,
+                        &node_layer,
+                        layer_idx,
+                        layer_idx + 1,
+                        config.layer_gap,
+                    )
                 } else {
                     config.layer_gap
                 };
@@ -515,7 +515,13 @@ fn compute_positions(
                 // Inter-layer gap: at least default, but tall enough for edge
                 // labels that cross into the next layer.
                 let gap = if layer_idx + 1 < ordered.len() {
-                    label_gap(graph, &node_layer, layer_idx, layer_idx + 1, config.layer_gap)
+                    label_gap(
+                        graph,
+                        &node_layer,
+                        layer_idx,
+                        layer_idx + 1,
+                        config.layer_gap,
+                    )
                 } else {
                     config.layer_gap
                 };
