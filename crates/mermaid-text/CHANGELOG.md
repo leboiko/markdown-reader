@@ -3,6 +3,13 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.2.1 — 2026-04-17
+
+### Changed
+
+- `repository` and `homepage` metadata now deep-link to the crate's
+  subdirectory in the monorepo so crates.io users land at the right path.
+
 ## 0.2.0 — 2026-04-17
 
 First fully-featured release. Complete rewrite of the rendering pipeline
