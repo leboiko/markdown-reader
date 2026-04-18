@@ -64,6 +64,26 @@ fn main() {
     CB -->|CLOSED| DB[(Database)]"#,
     );
 
+    // Regression: sibling subgraphs must not overlap each other.
+    dump(
+        "sibling subgraphs LR",
+        r#"graph LR
+    subgraph projections-pg [projections-pg :9092]
+        PG_W[event_log, account_registry]
+    end
+    subgraph projections-surreal [projections-surreal :9093]
+        S_W[atom, triple, deposit]
+    end
+    subgraph projections-core [projections-core-entities :9094]
+        CE_W[core_entities dual-write]
+    end
+    PG_W --> PG[(PostgreSQL)]
+    S_W --> PG
+    S_W --> SDB[(SurrealDB)]
+    CE_W --> PG
+    CE_W --> SDB"#,
+    );
+
     // --- Perpendicular-direction subgraph ---
     dump(
         "perpendicular: LR subgraph inside TD parent",

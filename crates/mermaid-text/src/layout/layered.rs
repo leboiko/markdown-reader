@@ -15,11 +15,22 @@ use std::collections::HashMap;
 
 use unicode_width::UnicodeWidthStr;
 
+use crate::layout::subgraph::SG_BORDER_PAD;
 use crate::types::{Direction, Graph, NodeShape, Subgraph};
 
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
+
+/// Extra cells reserved between two adjacent same-layer nodes per subgraph
+/// boundary that separates them.
+///
+/// Each boundary takes `SG_BORDER_PAD` cells of padding on each side of the
+/// subgraph's border line, plus one cell for the border itself. The gap
+/// between two sibling nodes crossing one boundary therefore widens by
+/// `SG_BORDER_PAD + 1`; two boundaries (siblings in different subgraphs of
+/// the same parent) widens by `2 * (SG_BORDER_PAD + 1)`, and so on.
+const SG_GAP_PER_BOUNDARY: usize = SG_BORDER_PAD + 1;
 
 /// Layout spacing constants used by the Sugiyama-inspired layered layout.
 ///
@@ -680,6 +691,91 @@ fn label_gap(
     default_gap.max(needed_for_width).max(needed_for_stacking)
 }
 
+/// Build the subgraph parent map: child subgraph id → parent subgraph id.
+///
+/// Subgraphs without a parent entry are top-level. Built once per layout
+/// run and used to walk a node's full ancestor chain.
+fn build_subgraph_parent_map(graph: &Graph) -> HashMap<&str, &str> {
+    let mut m = HashMap::new();
+    for parent in &graph.subgraphs {
+        for child_id in &parent.subgraph_ids {
+            m.insert(child_id.as_str(), parent.id.as_str());
+        }
+    }
+    m
+}
+
+/// Return `node_id`'s subgraph ancestor chain, innermost first.
+///
+/// An empty vector means the node is not inside any subgraph. The chain
+/// starts at the node's immediately-enclosing subgraph and walks outward via
+/// `parent_map` until it reaches a top-level subgraph.
+fn node_subgraph_chain<'a>(
+    node_id: &str,
+    node_to_sg: &'a HashMap<String, String>,
+    parent_map: &'a HashMap<&'a str, &'a str>,
+) -> Vec<&'a str> {
+    let mut chain = Vec::new();
+    let Some(sg_id) = node_to_sg.get(node_id) else {
+        return chain;
+    };
+    let mut cur: &str = sg_id.as_str();
+    chain.push(cur);
+    while let Some(&parent) = parent_map.get(cur) {
+        chain.push(parent);
+        cur = parent;
+    }
+    chain
+}
+
+/// Count subgraph borders that must sit between two adjacent same-layer nodes.
+///
+/// Chains are innermost-first (as returned by [`node_subgraph_chain`]); the
+/// common tail is the set of subgraphs that enclose both nodes and therefore
+/// do not contribute a boundary between them. The remaining entries in each
+/// chain each add one boundary.
+///
+/// Examples:
+/// - `[X]` vs `[X]` → 0 (same subgraph)
+/// - `[X]` vs `[]` → 1 (leaving X)
+/// - `[X]` vs `[Y]` → 2 (leaving X, entering Y)
+/// - `[X, Z]` vs `[Y, Z]` → 2 (leaving X inside Z, entering Y inside Z)
+/// - `[X, Z]` vs `[Z]` → 1 (leaving X, Z still encloses both)
+fn subgraph_boundary_count(chain_a: &[&str], chain_b: &[&str]) -> usize {
+    let a_len = chain_a.len();
+    let b_len = chain_b.len();
+    let mut shared = 0usize;
+    for i in 1..=a_len.min(b_len) {
+        if chain_a[a_len - i] == chain_b[b_len - i] {
+            shared += 1;
+        } else {
+            break;
+        }
+    }
+    (a_len - shared) + (b_len - shared)
+}
+
+/// Return the minimum gap (in cells) that must sit between two adjacent
+/// same-layer nodes given their subgraph memberships.
+///
+/// For nodes in the same immediate subgraph (or both outside any subgraph),
+/// the base `node_gap` is returned. For nodes separated by subgraph
+/// boundaries, `SG_GAP_PER_BOUNDARY` cells are added per boundary so that
+/// each subgraph's border line and its `SG_BORDER_PAD` of padding on each
+/// side all fit without overlapping a neighboring node or sibling subgraph.
+fn sibling_gap(
+    node_a: &str,
+    node_b: &str,
+    node_to_sg: &HashMap<String, String>,
+    parent_map: &HashMap<&str, &str>,
+    base_gap: usize,
+) -> usize {
+    let chain_a = node_subgraph_chain(node_a, node_to_sg, parent_map);
+    let chain_b = node_subgraph_chain(node_b, node_to_sg, parent_map);
+    let boundaries = subgraph_boundary_count(&chain_a, &chain_b);
+    base_gap + boundaries * SG_GAP_PER_BOUNDARY
+}
+
 /// Convert the ordered layer buckets into character-grid `(col, row)` positions.
 fn compute_positions(
     graph: &Graph,
@@ -690,6 +786,11 @@ fn compute_positions(
 
     // Build a node-to-layer map once; used by the label-gap calculation.
     let node_layer = build_node_layer_map(ordered);
+
+    // Subgraph membership lookups — used to widen the gap between two
+    // adjacent same-layer nodes when a subgraph boundary sits between them.
+    let node_to_sg = graph.node_to_subgraph();
+    let sg_parent = build_subgraph_parent_map(graph);
 
     match graph.direction {
         Direction::LeftToRight | Direction::RightToLeft => {
@@ -709,10 +810,25 @@ fn compute_positions(
                     .unwrap_or(6);
 
                 let mut row = 0usize;
+                let mut prev: Option<&str> = None;
                 for id in layer_nodes {
                     let h = node_box_height(graph, id);
+                    // Widen the gap between this node and the previous one
+                    // if a subgraph boundary sits between them. The leading
+                    // gap for the first node in the layer is always 0 — the
+                    // initial subgraph padding is applied globally by
+                    // `offset_positions_for_subgraphs` in lib.rs.
+                    if let Some(prev_id) = prev {
+                        let gap =
+                            sibling_gap(prev_id, id, &node_to_sg, &sg_parent, config.node_gap);
+                        // `gap` replaces the node_gap that was added at the
+                        // end of the previous iteration. Subtract the already-
+                        // applied node_gap to avoid double-counting.
+                        row += gap.saturating_sub(config.node_gap);
+                    }
                     positions.insert(id.clone(), (col, row));
                     row += h + config.node_gap;
+                    prev = Some(id.as_str());
                 }
 
                 // Inter-layer gap: at least default, but wide enough for edge
@@ -758,10 +874,17 @@ fn compute_positions(
                     .unwrap_or(3);
 
                 let mut col = 0usize;
+                let mut prev: Option<&str> = None;
                 for id in layer_nodes {
                     let w = node_box_width(graph, id);
+                    if let Some(prev_id) = prev {
+                        let gap =
+                            sibling_gap(prev_id, id, &node_to_sg, &sg_parent, config.node_gap);
+                        col += gap.saturating_sub(config.node_gap);
+                    }
                     positions.insert(id.clone(), (col, row));
                     col += w + config.node_gap;
+                    prev = Some(id.as_str());
                 }
 
                 // Inter-layer gap: at least default, but tall enough for edge

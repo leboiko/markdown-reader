@@ -798,6 +798,54 @@ mod tests {
         );
     }
 
+    /// Two sibling subgraphs at the same nesting level must not overlap: each
+    /// one's bounding-box rows (in an LR layout) should be disjoint from the
+    /// others'. Before the sibling-gap fix in `layered::compute_positions`,
+    /// the second subgraph's top border would land on the first subgraph's
+    /// bottom padding row.
+    #[test]
+    fn sibling_subgraphs_do_not_overlap() {
+        let src = r#"graph LR
+    subgraph A
+        A1[a-one]
+    end
+    subgraph B
+        B1[b-one]
+    end
+    subgraph C
+        C1[c-one]
+    end
+    A1 --> X[External]
+    B1 --> X
+    C1 --> X"#;
+        let out = render(src).unwrap();
+
+        // Each subgraph draws its label inline in the top border row. Find the
+        // row index of each label and assert they are strictly increasing.
+        let row_of = |label: &str| -> usize {
+            out.lines()
+                .enumerate()
+                .find_map(|(i, l)| if l.contains(label) { Some(i) } else { None })
+                .unwrap_or_else(|| panic!("label '{label}' not found in:\n{out}"))
+        };
+
+        let row_a = row_of("─A─");
+        let row_b = row_of("─B─");
+        let row_c = row_of("─C─");
+
+        // Each subgraph occupies roughly 6 rows (top border + padding + node + padding + bottom border).
+        // Sibling borders must be at least 4 rows apart so the bottom border of the
+        // previous subgraph and the top border of the next subgraph don't share a row.
+        assert!(
+            row_b >= row_a + 4,
+            "subgraphs A and B overlap: A header at row {row_a}, B header at row {row_b}\n{out}",
+        );
+        assert!(
+            row_c >= row_b + 4,
+            "subgraphs B and C overlap: B header at row {row_b}, C header at row {row_c}\n{out}",
+        );
+    }
+
     /// An edge that crosses a subgraph boundary should render without panicking
     /// and the external node should appear outside the subgraph border.
     #[test]

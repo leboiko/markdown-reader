@@ -3,6 +3,16 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.2.2 — 2026-04-17
+
+### Fixed
+
+- Sibling subgraphs at the same nesting level no longer overlap each other.
+  `layout::layered::compute_positions` now widens the gap between two
+  adjacent same-layer nodes by `SG_BORDER_PAD + 1` cells per subgraph
+  boundary that separates them, so each subgraph's border line and padding
+  fit without colliding with the neighboring subgraph.
+
 ## 0.2.1 — 2026-04-17
 
 ### Changed
