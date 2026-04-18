@@ -3,7 +3,10 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## 0.1.0 — 2026-04-17
+## 0.2.0 — 2026-04-17
+
+First fully-featured release. Complete rewrite of the rendering pipeline
+and a fleshed-out flowchart feature set.
 
 ### Added
 
@@ -37,3 +40,7 @@ This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   stdin or a file and prints the rendered diagram.
 - **Rustdoc** — full doc comments and runnable doctests on all public items.
 - **README.md** and **CHANGELOG.md** at the crate root.
+
+## 0.1.0
+
+Initial crate placeholder. Superseded by 0.2.0.
