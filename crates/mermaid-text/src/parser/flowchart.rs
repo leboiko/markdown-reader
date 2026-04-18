@@ -28,10 +28,31 @@ use crate::{
 /// (`graph LR`, `flowchart TD`, etc.). Both newlines and semicolons are
 /// treated as statement separators, so `graph LR; A-->B` is valid.
 ///
+/// # Arguments
+///
+/// * `input` — the complete Mermaid source string
+///
+/// # Returns
+///
+/// A [`Graph`] containing all parsed nodes, edges, and subgraphs.
+///
 /// # Errors
 ///
-/// Returns [`Error::ParseError`] if the header statement is missing or the
-/// direction keyword is unrecognised.
+/// Returns [`crate::Error::ParseError`] if the header statement is missing or
+/// the direction keyword is unrecognised.
+///
+/// # Examples
+///
+/// ```
+/// use mermaid_text::parser::parse;
+/// use mermaid_text::{Direction, NodeShape};
+///
+/// let graph = parse("graph LR; A[Start] --> B[End]").unwrap();
+/// assert_eq!(graph.direction, Direction::LeftToRight);
+/// assert_eq!(graph.node("A").unwrap().label, "Start");
+/// assert_eq!(graph.node("B").unwrap().shape, NodeShape::Rectangle);
+/// assert_eq!(graph.edges.len(), 1);
+/// ```
 pub fn parse(input: &str) -> Result<Graph, Error> {
     // Normalise: replace newlines with semicolons, then split on ';'.
     // This means both `graph LR; A-->B` and multi-line input are handled
@@ -584,7 +605,7 @@ fn extract_arrow_label(arrow: &str) -> Option<String> {
 /// delimiters like `(((`, `((`, `{{`, `[[`, `([`, `[(` before single chars.
 ///
 /// Returns `None` if the token is empty or unparseable.
-pub fn parse_node_definition(token: &str) -> Option<Node> {
+pub(crate) fn parse_node_definition(token: &str) -> Option<Node> {
     let token = token.trim();
     if token.is_empty() {
         return None;
@@ -836,8 +857,8 @@ mod tests {
         let map = g.node_to_subgraph();
         assert_eq!(map.get("A").map(String::as_str), Some("S"));
         assert_eq!(map.get("B").map(String::as_str), Some("S"));
-        assert!(map.get("C").is_none());
-        assert!(map.get("D").is_none());
+        assert!(!map.contains_key("C"));
+        assert!(!map.contains_key("D"));
     }
 
     // ---- New node shape parser tests ------------------------------------

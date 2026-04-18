@@ -240,12 +240,31 @@ fn grid_size(
 
 /// Render `graph` with precomputed `positions` into a Unicode string.
 ///
+/// This is the low-level entry point for the rendering pipeline. Most callers
+/// should use [`crate::render()`] or [`crate::render_with_width()`]
+/// instead, which handle parsing and layout automatically.
+///
+/// The function executes four drawing passes:
+/// 1. Draw subgraph borders (outermost → innermost).
+/// 2. Route all edges using A\* obstacle-aware pathfinding.
+/// 3. Draw node box outlines.
+/// 4. Draw node labels (never overwritten by later passes).
+///
 /// # Arguments
 ///
 /// * `graph`     — the parsed flowchart
 /// * `positions` — map from node ID to `(col, row)` grid position (top-left
-///   corner of the node's bounding box)
-/// * `sg_bounds` — precomputed subgraph bounding boxes (sorted outermost-first)
+///   corner of the node's bounding box), as produced by [`layout`]
+/// * `sg_bounds` — precomputed subgraph bounding boxes (sorted outermost-first),
+///   as produced by [`compute_subgraph_bounds`]
+///
+/// # Returns
+///
+/// A multi-line `String` with trailing spaces stripped from each row and
+/// trailing blank rows removed.
+///
+/// [`layout`]: crate::layout::layered::layout
+/// [`compute_subgraph_bounds`]: crate::layout::subgraph::compute_subgraph_bounds
 pub fn render(
     graph: &Graph,
     positions: &HashMap<String, GridPos>,

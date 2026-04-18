@@ -319,14 +319,14 @@ impl Grid {
 
     /// Expose the internal `protect` method as a public API.
     ///
-    /// Protected cells are skipped by [`Grid::add_dirs`] so that
+    /// Protected cells are skipped by the direction-bit canvas writer so that
     /// subgraph border characters and labels survive subsequent edge routing.
     pub fn protect_cell(&mut self, col: usize, row: usize) {
         self.protect(col, row);
     }
 
     /// Remove the protection flag from a cell so that subsequent writes
-    /// (including [`Grid::add_dirs`]) can modify it again.
+    /// (including the direction-bit canvas writer) can modify it again.
     ///
     /// Used after [`Grid::route_edge`] places a tip glyph that we want to
     /// replace (e.g. converting an arrow tip to a circle endpoint or removing
@@ -629,7 +629,7 @@ impl Grid {
     }
 
     /// Write `text` starting at `(col, row)` and protect every cell written
-    /// so that subsequent [`Grid::add_dirs`] calls (from edge routing) cannot
+    /// so that subsequent direction-bit canvas writes (from edge routing) cannot
     /// overwrite the label characters.
     ///
     /// Use this for edge labels that must survive later routing passes.

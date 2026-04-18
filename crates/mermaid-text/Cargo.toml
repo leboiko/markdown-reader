@@ -2,11 +2,18 @@
 name = "mermaid-text"
 version = "0.1.0"
 edition = "2024"
+# edition = "2024" requires Rust 1.85+; use that as the floor.
+rust-version = "1.85"
 description = "Render Mermaid diagrams as Unicode box-drawing text — no browser, no image protocols, pure Rust"
 license = "MIT"
 repository = "https://github.com/leboiko/mermaid-text"
-keywords = ["mermaid", "diagram", "terminal", "ascii", "unicode"]
+readme = "README.md"
+keywords = ["mermaid", "diagram", "terminal", "unicode", "flowchart"]
 categories = ["command-line-utilities", "text-processing", "visualization"]
+
+[[bin]]
+name = "mermaid-text"
+path = "src/bin/mermaid_text.rs"
 
 [dependencies]
 unicode-width = "0.2"

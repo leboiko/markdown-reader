@@ -21,12 +21,31 @@ use crate::types::{Direction, Graph, NodeShape, Subgraph};
 // Configuration
 // ---------------------------------------------------------------------------
 
-/// Layout spacing constants.
+/// Layout spacing constants used by the Sugiyama-inspired layered layout.
+///
+/// These control the amount of whitespace placed between layers (columns in LR
+/// flow, rows in TD flow) and between sibling nodes within the same layer.
+/// Reducing them compacts the output; [`Default`] gives a comfortable reading
+/// size suitable for most terminals.
+///
+/// # Examples
+///
+/// ```
+/// use mermaid_text::layout::layered::LayoutConfig;
+///
+/// let default_cfg = LayoutConfig::default();
+/// assert_eq!(default_cfg.layer_gap, 6);
+/// assert_eq!(default_cfg.node_gap, 2);
+///
+/// let compact = LayoutConfig { layer_gap: 2, node_gap: 1 };
+/// assert!(compact.layer_gap < default_cfg.layer_gap);
+/// ```
 #[derive(Debug, Clone, Copy)]
 pub struct LayoutConfig {
     /// Minimum gap (in characters) between layers (the axis perpendicular to
-    /// the flow direction). Includes the width/height of the node box plus
-    /// the inter-layer spacing itself.
+    /// the flow direction). The gap accommodates routing corridors and edge
+    /// labels; the renderer may widen it automatically when long labels require
+    /// more space.
     pub layer_gap: usize,
     /// Minimum gap (in characters) between sibling nodes in the same layer.
     pub node_gap: usize,
@@ -50,13 +69,39 @@ pub type GridPos = (usize, usize); // (col, row)
 
 /// Compute character-grid positions for every node in `graph`.
 ///
-/// Returns a map from node ID to `(col, row)` top-left position on the
-/// character grid.  The grid's origin is `(0, 0)`.
+/// Implements a three-step Sugiyama-inspired layered layout:
+/// 1. **Layer assignment** via longest-path from sources.
+/// 2. **Within-layer ordering** via iterative barycenter heuristic with
+///    best-seen retention.
+/// 3. **Position computation** converting `(layer, rank)` pairs to
+///    `(col, row)` character-grid coordinates.
 ///
 /// # Arguments
 ///
-/// * `graph`  — the parsed graph
-/// * `config` — spacing parameters
+/// * `graph`  — the parsed flowchart graph
+/// * `config` — spacing parameters (layer gap and node gap)
+///
+/// # Returns
+///
+/// A map from node ID to `(col, row)` grid position of the node's top-left
+/// corner. The grid origin is `(0, 0)`. Returns an empty map if `graph` has
+/// no nodes.
+///
+/// # Examples
+///
+/// ```
+/// use mermaid_text::{Graph, Node, Edge, Direction, NodeShape};
+/// use mermaid_text::layout::layered::{layout, LayoutConfig};
+///
+/// let mut g = Graph::new(Direction::LeftToRight);
+/// g.nodes.push(Node::new("A", "A", NodeShape::Rectangle));
+/// g.nodes.push(Node::new("B", "B", NodeShape::Rectangle));
+/// g.edges.push(Edge::new("A", "B", None));
+///
+/// let positions = layout(&g, &LayoutConfig::default());
+/// // In LR layout, A is to the left of B.
+/// assert!(positions["A"].0 < positions["B"].0);
+/// ```
 pub fn layout(graph: &Graph, config: &LayoutConfig) -> HashMap<String, GridPos> {
     if graph.nodes.is_empty() {
         return HashMap::new();
@@ -112,12 +157,12 @@ fn collect_orthogonal_sets<'a>(
         }
         // Recurse into nested subgraphs regardless — a same-direction wrapper
         // might contain a perpendicular inner subgraph.
-        let children: Vec<&Subgraph> = sg
+        let children: Vec<Subgraph> = sg
             .subgraph_ids
             .iter()
-            .filter_map(|id| all_subs.iter().find(|s| &s.id == id))
+            .filter_map(|id| all_subs.iter().find(|s| &s.id == id).cloned())
             .collect();
-        collect_orthogonal_sets(&children.into_iter().cloned().collect::<Vec<_>>(), all_subs, parent_direction, out);
+        collect_orthogonal_sets(&children, all_subs, parent_direction, out);
     }
 }
 

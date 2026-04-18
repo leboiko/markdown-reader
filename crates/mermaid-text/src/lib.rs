@@ -1,14 +1,24 @@
 //! # mermaid-text
 //!
-//! Render [Mermaid](https://mermaid.js.org/) flowchart diagrams as Unicode
-//! box-drawing text — no browser, no image protocol, pure Rust.
+//! Render [Mermaid](https://mermaid.js.org/) `graph`/`flowchart` diagrams as
+//! Unicode box-drawing text — no browser, no image protocol, pure Rust.
+//! Intended for use in terminals, SSH sessions, CI logs, and any context where
+//! a visual diagram is useful but image rendering is unavailable.  The output
+//! is deterministic and structured, making it suitable for LLM agents that
+//! need to read and reason about diagrams.
 //!
 //! ## Quick start
 //!
-//! ```rust
-//! let output = mermaid_text::render("graph LR; A[Start] --> B[End]").unwrap();
-//! assert!(output.contains("Start"));
-//! assert!(output.contains("End"));
+//! ```
+//! use mermaid_text::render;
+//!
+//! let src = "graph LR; A[Build] --> B[Test] --> C[Deploy]";
+//! let output = render(src).unwrap();
+//! assert!(output.contains("Build"));
+//! assert!(output.contains("Test"));
+//! assert!(output.contains("Deploy"));
+//! // The output is a multi-line Unicode string ready for printing.
+//! println!("{output}");
 //! ```
 //!
 //! ## Width-constrained rendering
@@ -16,21 +26,56 @@
 //! Pass an optional column budget so the renderer tries progressively smaller
 //! gap sizes until the output fits:
 //!
-//! ```rust
-//! let output = mermaid_text::render_with_width(
+//! ```
+//! use mermaid_text::render_with_width;
+//!
+//! let output = render_with_width(
 //!     "graph LR; A[Start] --> B[End]",
 //!     Some(80),
 //! ).unwrap();
 //! assert!(output.contains("Start"));
 //! ```
 //!
-//! ## Supported syntax (Phase 1)
+//! ## Feature matrix
 //!
-//! - `graph LR/TD/RL/BT` and `flowchart LR/TD/RL/BT` headers
-//! - Node shapes: `A[rect]`, `A{diamond}`, `A((circle))`, `A(rounded)`, `A`
-//! - Edge types: `-->`, `---`, `-.->`, `==>` (all rendered as solid arrows)
-//! - Edge labels: `-->|label|` and `-- label -->`
-//! - Semicolons and newlines as statement separators
+//! | Feature | Supported |
+//! |---------|-----------|
+//! | `graph LR/TD/RL/BT` and `flowchart` keyword | yes |
+//! | Rectangle, rounded, diamond, circle nodes | yes |
+//! | Stadium, subroutine, cylinder, hexagon nodes | yes |
+//! | Asymmetric, parallelogram, trapezoid, double-circle nodes | yes |
+//! | Solid `-->`, plain `---`, dotted `-.->`, thick `==>` edges | yes |
+//! | Bidirectional `<-->`, circle `--o`, cross `--x` edges | yes |
+//! | Edge labels (`\|label\|` and `-- label -->` forms) | yes |
+//! | Subgraphs with nested subgraphs | yes |
+//! | Per-subgraph `direction` override | partial (see Limitations) |
+//! | Width-constrained compaction | yes |
+//! | A\* obstacle-aware edge routing | yes |
+//! | Junction merging (`┼ ├ ┤ ┬ ┴`) | yes |
+//! | `style`, `classDef`, `click`, `linkStyle` directives | silently ignored |
+//! | `sequenceDiagram`, `pie`, `gantt`, etc. | not supported |
+//!
+//! ## Limitations
+//!
+//! - **Dotted junctions render as solid** — Unicode lacks dotted T-junction and
+//!   cross glyphs, so `┄`/`┆` segments that meet other edges fall back to solid
+//!   `┼`/`├`/`┤`/`┬`/`┴` at the intersection point.
+//! - **RL/BT subgraphs do not reverse internal order** — when a subgraph
+//!   overrides the direction to RL or BT, the nodes inside the subgraph are not
+//!   reordered; they are simply laid out as if the direction were LR/TD.
+//! - **Deeply-nested alternating `direction` overrides** — each subgraph is
+//!   evaluated against the top-level graph direction only. A layout such as
+//!   LR-inside-TB-inside-LR collapses the inner LR nodes but does not propagate
+//!   the correction upward through multiple nesting levels.
+//! - **Long labels in narrow columns** — the compaction pass reduces gap
+//!   widths but cannot reflow node labels; very long labels may cause nodes to
+//!   overlap when rendering into a very narrow `max_width`.
+//!
+//! ## See also
+//!
+//! [`termaid`](https://github.com/fasouto/termaid) — the Python prior art from
+//! which several rendering techniques (direction-bit canvas, barycenter heuristic
+//! constants, subgraph border padding) were adapted.
 
 #![forbid(unsafe_code)]
 
@@ -87,10 +132,12 @@ impl std::error::Error for Error {}
 /// This is a convenience wrapper around [`render_with_width`] that does not
 /// apply any column budget — the diagram is rendered at its natural size.
 ///
-/// # Supported diagram types (Phase 1)
+/// Both `graph` and `flowchart` keywords are accepted, with any of the four
+/// direction qualifiers: `LR`, `TD`/`TB`, `RL`, `BT`.
 ///
-/// - `graph LR/TD/RL/BT; ...` — flowchart with "graph" keyword
-/// - `flowchart LR/TD/RL/BT; ...` — flowchart with "flowchart" keyword
+/// # Arguments
+///
+/// * `input` — Mermaid source string, including the header line.
 ///
 /// # Returns
 ///
@@ -100,7 +147,7 @@ impl std::error::Error for Error {}
 /// # Errors
 ///
 /// - [`Error::EmptyInput`] — `input` is blank or contains only comments
-/// - [`Error::UnsupportedDiagram`] — the diagram type is not supported in Phase 1
+/// - [`Error::UnsupportedDiagram`] — the diagram type is not supported
 /// - [`Error::ParseError`] — the input could not be parsed
 ///
 /// # Examples
@@ -139,7 +186,7 @@ pub fn render(input: &str) -> Result<String, Error> {
 ///
 /// # Errors
 ///
-/// Same as [`render`].
+/// Same as [`render()`].
 ///
 /// # Examples
 ///

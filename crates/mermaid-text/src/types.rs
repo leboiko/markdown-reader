@@ -18,9 +18,26 @@ pub enum Direction {
 impl Direction {
     /// Parse a direction keyword, case-insensitive.
     ///
+    /// # Arguments
+    ///
+    /// * `s` — a direction token such as `"LR"`, `"TD"`, `"TB"`, `"RL"`, or `"BT"`.
+    ///
     /// # Returns
     ///
     /// `Some(Direction)` if the keyword is recognised, `None` otherwise.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mermaid_text::Direction;
+    ///
+    /// assert_eq!(Direction::parse("LR"), Some(Direction::LeftToRight));
+    /// assert_eq!(Direction::parse("td"), Some(Direction::TopToBottom)); // case-insensitive
+    /// assert_eq!(Direction::parse("TB"), Some(Direction::TopToBottom));
+    /// assert_eq!(Direction::parse("RL"), Some(Direction::RightToLeft));
+    /// assert_eq!(Direction::parse("BT"), Some(Direction::BottomToTop));
+    /// assert_eq!(Direction::parse("XX"), None);
+    /// ```
     pub fn parse(s: &str) -> Option<Self> {
         match s.to_uppercase().as_str() {
             "LR" => Some(Self::LeftToRight),
@@ -32,6 +49,17 @@ impl Direction {
     }
 
     /// Returns `true` if the primary flow axis is horizontal (LR or RL).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mermaid_text::Direction;
+    ///
+    /// assert!(Direction::LeftToRight.is_horizontal());
+    /// assert!(Direction::RightToLeft.is_horizontal());
+    /// assert!(!Direction::TopToBottom.is_horizontal());
+    /// assert!(!Direction::BottomToTop.is_horizontal());
+    /// ```
     pub fn is_horizontal(self) -> bool {
         matches!(self, Self::LeftToRight | Self::RightToLeft)
     }
@@ -122,6 +150,23 @@ pub struct Node {
 
 impl Node {
     /// Construct a new node.
+    ///
+    /// # Arguments
+    ///
+    /// * `id`    — unique identifier used in edge definitions
+    /// * `label` — human-readable text displayed inside the node box
+    /// * `shape` — visual shape of the node
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mermaid_text::{Node, NodeShape};
+    ///
+    /// let node = Node::new("A", "Start", NodeShape::Rounded);
+    /// assert_eq!(node.id, "A");
+    /// assert_eq!(node.label, "Start");
+    /// assert_eq!(node.shape, NodeShape::Rounded);
+    /// ```
     pub fn new(id: impl Into<String>, label: impl Into<String>, shape: NodeShape) -> Self {
         Self {
             id: id.into(),
@@ -150,6 +195,29 @@ pub struct Edge {
 
 impl Edge {
     /// Construct a new solid arrow edge (the most common case).
+    ///
+    /// Equivalent to `new_styled` with [`EdgeStyle::Solid`], [`EdgeEndpoint::None`]
+    /// at the source, and [`EdgeEndpoint::Arrow`] at the destination.
+    ///
+    /// # Arguments
+    ///
+    /// * `from`  — source node ID
+    /// * `to`    — destination node ID
+    /// * `label` — optional label placed along the edge
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mermaid_text::{Edge, EdgeEndpoint, EdgeStyle};
+    ///
+    /// let e = Edge::new("A", "B", Some("ok".to_string()));
+    /// assert_eq!(e.from, "A");
+    /// assert_eq!(e.to, "B");
+    /// assert_eq!(e.label.as_deref(), Some("ok"));
+    /// assert_eq!(e.style, EdgeStyle::Solid);
+    /// assert_eq!(e.end, EdgeEndpoint::Arrow);
+    /// assert_eq!(e.start, EdgeEndpoint::None);
+    /// ```
     pub fn new(from: impl Into<String>, to: impl Into<String>, label: Option<String>) -> Self {
         Self {
             from: from.into(),
@@ -162,6 +230,33 @@ impl Edge {
     }
 
     /// Construct an edge with explicit style and endpoint kinds.
+    ///
+    /// # Arguments
+    ///
+    /// * `from`  — source node ID
+    /// * `to`    — destination node ID
+    /// * `label` — optional label placed along the edge
+    /// * `style` — line style (solid, dotted, thick)
+    /// * `start` — endpoint at the source end
+    /// * `end`   — endpoint at the destination end
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mermaid_text::{Edge, EdgeEndpoint, EdgeStyle};
+    ///
+    /// // A bidirectional thick edge with a label
+    /// let e = Edge::new_styled(
+    ///     "A", "B",
+    ///     Some("sync".to_string()),
+    ///     EdgeStyle::Thick,
+    ///     EdgeEndpoint::Arrow,
+    ///     EdgeEndpoint::Arrow,
+    /// );
+    /// assert_eq!(e.style, EdgeStyle::Thick);
+    /// assert_eq!(e.start, EdgeEndpoint::Arrow);
+    /// assert_eq!(e.end, EdgeEndpoint::Arrow);
+    /// ```
     pub fn new_styled(
         from: impl Into<String>,
         to: impl Into<String>,
@@ -206,6 +301,27 @@ pub struct Subgraph {
 
 impl Subgraph {
     /// Construct a new subgraph with the given id and label.
+    ///
+    /// Both `node_ids` and `subgraph_ids` start empty; the parser fills them
+    /// as it processes the subgraph body. `direction` defaults to `None`
+    /// (inherits from the parent graph).
+    ///
+    /// # Arguments
+    ///
+    /// * `id`    — unique identifier (the token after `subgraph`)
+    /// * `label` — display label at the top of the border
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mermaid_text::types::Subgraph;
+    ///
+    /// let sg = Subgraph::new("S1", "My Cluster");
+    /// assert_eq!(sg.id, "S1");
+    /// assert_eq!(sg.label, "My Cluster");
+    /// assert!(sg.node_ids.is_empty());
+    /// assert!(sg.direction.is_none());
+    /// ```
     pub fn new(id: impl Into<String>, label: impl Into<String>) -> Self {
         let id = id.into();
         let label = label.into();
@@ -238,6 +354,21 @@ pub struct Graph {
 
 impl Graph {
     /// Construct a new empty graph with the given direction.
+    ///
+    /// # Arguments
+    ///
+    /// * `direction` — the overall flow direction for this graph
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mermaid_text::{Graph, Direction};
+    ///
+    /// let g = Graph::new(Direction::LeftToRight);
+    /// assert_eq!(g.direction, Direction::LeftToRight);
+    /// assert!(g.nodes.is_empty());
+    /// assert!(g.edges.is_empty());
+    /// ```
     pub fn new(direction: Direction) -> Self {
         Self {
             direction,
@@ -248,17 +379,66 @@ impl Graph {
     }
 
     /// Look up a node by its ID, returning a reference if found.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` — the node identifier to search for
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mermaid_text::{Graph, Node, NodeShape, Direction};
+    ///
+    /// let mut g = Graph::new(Direction::LeftToRight);
+    /// g.nodes.push(Node::new("A", "Start", NodeShape::Rectangle));
+    /// assert_eq!(g.node("A").map(|n| n.label.as_str()), Some("Start"));
+    /// assert!(g.node("Z").is_none());
+    /// ```
     pub fn node(&self, id: &str) -> Option<&Node> {
         self.nodes.iter().find(|n| n.id == id)
     }
 
     /// Return `true` if a node with `id` already exists.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mermaid_text::{Graph, Node, NodeShape, Direction};
+    ///
+    /// let mut g = Graph::new(Direction::TopToBottom);
+    /// g.nodes.push(Node::new("A", "A", NodeShape::Rectangle));
+    /// assert!(g.has_node("A"));
+    /// assert!(!g.has_node("B"));
+    /// ```
     pub fn has_node(&self, id: &str) -> bool {
         self.nodes.iter().any(|n| n.id == id)
     }
 
     /// Insert a node, or update its label/shape if the ID already exists and
     /// the existing entry was auto-created as a bare-id placeholder.
+    ///
+    /// A "bare-id placeholder" is a node whose `label == id` and `shape == Rectangle`
+    /// (the default produced when a node is first seen in an edge definition
+    /// without an explicit shape). If such a placeholder already exists and the
+    /// incoming `node` has a richer definition (different label or non-default shape),
+    /// the placeholder is promoted to the richer definition.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mermaid_text::{Graph, Node, NodeShape, Direction};
+    ///
+    /// let mut g = Graph::new(Direction::LeftToRight);
+    /// // Insert a bare-id placeholder.
+    /// g.upsert_node(Node::new("A", "A", NodeShape::Rectangle));
+    /// // Promote it to a richer definition.
+    /// g.upsert_node(Node::new("A", "Start", NodeShape::Rounded));
+    /// assert_eq!(g.node("A").unwrap().label, "Start");
+    /// assert_eq!(g.node("A").unwrap().shape, NodeShape::Rounded);
+    /// // If neither condition holds, the existing entry is kept.
+    /// g.upsert_node(Node::new("A", "Other", NodeShape::Diamond));
+    /// assert_eq!(g.node("A").unwrap().label, "Start"); // unchanged
+    /// ```
     pub fn upsert_node(&mut self, node: Node) {
         if let Some(existing) = self.nodes.iter_mut().find(|n| n.id == node.id) {
             // Only promote a bare placeholder (label == id) to a richer definition.
@@ -278,6 +458,18 @@ impl Graph {
     ///
     /// The map is computed on demand and not cached — call this once per
     /// render pass and keep the result locally.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let graph = mermaid_text::parser::parse(
+    ///     "graph LR\nsubgraph S\nA-->B\nend\nC",
+    /// ).unwrap();
+    /// let map = graph.node_to_subgraph();
+    /// assert_eq!(map.get("A").map(String::as_str), Some("S"));
+    /// assert_eq!(map.get("B").map(String::as_str), Some("S"));
+    /// assert!(map.get("C").is_none());
+    /// ```
     pub fn node_to_subgraph(&self) -> HashMap<String, String> {
         let mut map = HashMap::new();
         // Walk all subgraphs (including nested ones reachable via subgraph_ids)
@@ -307,6 +499,21 @@ impl Graph {
     }
 
     /// Find a subgraph by ID, searching recursively through all nesting levels.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` — the subgraph identifier to search for
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let graph = mermaid_text::parser::parse(
+    ///     "graph TD\nsubgraph Outer\nsubgraph Inner\nA\nend\nend",
+    /// ).unwrap();
+    /// assert!(graph.find_subgraph("Outer").is_some());
+    /// assert!(graph.find_subgraph("Inner").is_some());
+    /// assert!(graph.find_subgraph("Missing").is_none());
+    /// ```
     pub fn find_subgraph(&self, id: &str) -> Option<&Subgraph> {
         fn search<'a>(sgs: &'a [Subgraph], all: &'a [Subgraph], id: &str) -> Option<&'a Subgraph> {
             for sg in sgs {
@@ -328,6 +535,25 @@ impl Graph {
     }
 
     /// Collect all node IDs that belong to `sg` or any of its nested subgraphs.
+    ///
+    /// This is a deep traversal: nodes in nested subgraphs within `sg` are
+    /// included in the result, not just direct `sg.node_ids` members.
+    ///
+    /// # Arguments
+    ///
+    /// * `sg` — the subgraph to collect nodes from (including descendants)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let graph = mermaid_text::parser::parse(
+    ///     "graph TD\nsubgraph Outer\nsubgraph Inner\nA\nend\nB\nend",
+    /// ).unwrap();
+    /// let outer = graph.find_subgraph("Outer").unwrap();
+    /// let nodes = graph.all_nodes_in_subgraph(outer);
+    /// assert!(nodes.contains(&"A".to_string()));
+    /// assert!(nodes.contains(&"B".to_string()));
+    /// ```
     pub fn all_nodes_in_subgraph(&self, sg: &Subgraph) -> Vec<String> {
         let mut result = sg.node_ids.clone();
         for child_id in &sg.subgraph_ids {

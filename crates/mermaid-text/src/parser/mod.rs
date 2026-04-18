@@ -1,6 +1,6 @@
 //! Mermaid diagram parsers.
 //!
-//! Currently only flowchart syntax is supported (Phase 1).
+//! Currently only `graph`/`flowchart` syntax is supported.
 
 pub mod flowchart;
 

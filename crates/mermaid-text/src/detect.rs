@@ -11,12 +11,32 @@ pub enum DiagramKind {
 
 /// Detect the kind of Mermaid diagram described by `input`.
 ///
-/// Only the first non-blank, non-comment line is examined.
+/// Only the first non-blank, non-comment line is examined.  Lines beginning
+/// with `%%` are treated as comments and skipped.
+///
+/// # Arguments
+///
+/// * `input` — the Mermaid source string (need not be fully valid)
+///
+/// # Returns
+///
+/// The detected [`DiagramKind`] on success.
 ///
 /// # Errors
 ///
 /// Returns [`Error::EmptyInput`] if `input` contains no non-blank lines.
 /// Returns [`Error::UnsupportedDiagram`] if the diagram type is not supported.
+///
+/// # Examples
+///
+/// ```
+/// use mermaid_text::detect::{detect, DiagramKind};
+///
+/// assert_eq!(detect("graph LR\nA-->B").unwrap(), DiagramKind::Flowchart);
+/// assert_eq!(detect("flowchart TD\nA-->B").unwrap(), DiagramKind::Flowchart);
+/// assert!(detect("").is_err());
+/// assert!(detect("pie title Pets").is_err());
+/// ```
 pub fn detect(input: &str) -> Result<DiagramKind, Error> {
     let first = input
         .lines()

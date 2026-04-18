@@ -8,8 +8,9 @@
 //! Constants ported from termaid's `grid.py`:
 //! - `SG_BORDER_PAD = 2`  — cells of empty space between the enclosed nodes
 //!   and the border line.
-//! - `SG_LABEL_HEIGHT = 2` — extra rows/cols reserved above the border for
-//!   the label row.
+//!
+//! The label is written inline in the top border row rather than consuming
+//! extra rows above it.
 
 use std::collections::HashMap;
 
@@ -19,8 +20,6 @@ use crate::types::{Graph, Subgraph};
 
 /// Cells of padding between nodes and the subgraph border.
 pub const SG_BORDER_PAD: usize = 2;
-/// Extra height (rows) above the content for the label row.
-pub const SG_LABEL_HEIGHT: usize = 2;
 
 /// Axis-aligned bounding box for a rendered subgraph border.
 ///
