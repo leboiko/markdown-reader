@@ -620,7 +620,7 @@ pub(crate) fn parse_node_definition(token: &str) -> Option<Node> {
             let id = token[..pos].trim().to_string();
             if !id.is_empty() {
                 let inner = token[pos + 1..token.len() - 1].trim().to_string();
-                let label = strip_html_breaks(inner);
+                let label = normalize_label(&inner);
                 return Some(Node::new(id, label, NodeShape::Asymmetric));
             }
         }
@@ -709,15 +709,98 @@ pub(crate) fn parse_node_definition(token: &str) -> Option<Node> {
         return None;
     }
 
-    let label = strip_html_breaks(label);
+    let label = normalize_label(&label);
     Some(Node::new(id, label, shape))
 }
 
-/// Replace HTML-style line-break tags with spaces.
-fn strip_html_breaks(s: String) -> String {
-    s.replace("<br/>", " ")
-        .replace("<br>", " ")
-        .replace("<br />", " ")
+/// Soft-wrap threshold for a single label line. Lines longer than this get
+/// wrapped at the nearest comma or space before the threshold, producing
+/// additional line breaks. Lines without any break point remain intact so
+/// a long identifier (`a_very_long_ident_without_separators`) isn't mangled.
+const LABEL_WRAP_THRESHOLD: usize = 40;
+
+/// Normalise a label for multi-row rendering.
+///
+/// Two transformations are applied, in order:
+///
+/// 1. HTML line-break tags (`<br/>`, `<br>`, `<br />`, case-insensitive on the
+///    tag name) are replaced with `\n`. Mermaid uses these as explicit line
+///    breaks inside node labels and we honor them.
+/// 2. Any resulting line wider than [`LABEL_WRAP_THRESHOLD`] terminal cells is
+///    soft-wrapped at the last comma or space at or before the threshold.
+///    Words without any wrap-friendly break stay on a single line.
+///
+/// The renderer interprets `\n` as a line-break and draws each segment on its
+/// own row inside the node box, widening the box vertically instead of
+/// horizontally.
+fn normalize_label(s: &str) -> String {
+    // Step 1: replace HTML <br> variants with `\n`. Lower-case first; the
+    // upper-case variants are the only other common spellings on the wild.
+    let with_breaks = s
+        .replace("<br/>", "\n")
+        .replace("<br>", "\n")
+        .replace("<br />", "\n")
+        .replace("<BR/>", "\n")
+        .replace("<BR>", "\n")
+        .replace("<BR />", "\n");
+
+    // Step 2: soft-wrap each resulting line.
+    let mut out = String::with_capacity(with_breaks.len());
+    let mut first = true;
+    for line in with_breaks.lines() {
+        if !first {
+            out.push('\n');
+        }
+        first = false;
+        soft_wrap_into(line, &mut out);
+    }
+    out
+}
+
+/// Append `line` to `out`, inserting `\n` breaks at word boundaries so that
+/// no resulting row exceeds [`LABEL_WRAP_THRESHOLD`] columns.
+///
+/// The break character (comma or space) stays on the head side of the split —
+/// a trailing space gets trimmed, a trailing comma is preserved so the user's
+/// list formatting is kept.
+fn soft_wrap_into(line: &str, out: &mut String) {
+    use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+    if UnicodeWidthStr::width(line) <= LABEL_WRAP_THRESHOLD {
+        out.push_str(line);
+        return;
+    }
+
+    // Walk chars, tracking cumulative width and the byte index of the last
+    // break-friendly char (comma or space) seen within the budget.
+    let mut cum_w = 0usize;
+    let mut last_break: Option<usize> = None;
+    for (i, ch) in line.char_indices() {
+        cum_w += UnicodeWidthChar::width(ch).unwrap_or(0);
+        if cum_w > LABEL_WRAP_THRESHOLD {
+            break;
+        }
+        if ch == ',' || ch == ' ' {
+            last_break = Some(i);
+        }
+    }
+
+    let Some(break_at) = last_break else {
+        // No break point within the budget — emit the line as-is rather than
+        // mangling a single long word.
+        out.push_str(line);
+        return;
+    };
+
+    // `split_at(break_at + 1)`: `break_at` is the byte index of the break
+    // character; `+ 1` includes the break char (all break chars are ASCII,
+    // so their UTF-8 length is 1) in the head.
+    let (head, tail) = line.split_at(break_at + 1);
+    let head = head.trim_end();
+    let tail = tail.trim_start();
+    out.push_str(head);
+    out.push('\n');
+    soft_wrap_into(tail, out);
 }
 
 // ---------------------------------------------------------------------------

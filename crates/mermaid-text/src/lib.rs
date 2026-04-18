@@ -798,6 +798,58 @@ mod tests {
         );
     }
 
+    /// Node labels containing `<br/>` tags should be split into multiple
+    /// rows inside the node box, making the box taller rather than wider.
+    #[test]
+    fn html_br_in_label_creates_multi_row_node() {
+        let out =
+            render(r#"graph LR; A[first line<br/>second line<br/>third line] --> B[End]"#)
+                .unwrap();
+        assert!(out.contains("first line"), "line 1 missing:\n{out}");
+        assert!(out.contains("second line"), "line 2 missing:\n{out}");
+        assert!(out.contains("third line"), "line 3 missing:\n{out}");
+        // Each line should sit on a different row.
+        let row_of = |needle: &str| -> usize {
+            out.lines()
+                .position(|l| l.contains(needle))
+                .unwrap_or_else(|| panic!("label '{needle}' not found in:\n{out}"))
+        };
+        assert!(
+            row_of("first line") < row_of("second line"),
+            "line ordering wrong:\n{out}",
+        );
+        assert!(
+            row_of("second line") < row_of("third line"),
+            "line ordering wrong:\n{out}",
+        );
+    }
+
+    /// A single very long label line without explicit `<br/>` breaks should
+    /// be soft-wrapped at commas/spaces so the node box stays reasonable
+    /// width rather than stretching the whole diagram.
+    #[test]
+    fn long_label_without_br_is_soft_wrapped() {
+        let long = "alpha, beta, gamma, delta, epsilon, zeta, eta, theta";
+        let src = format!("graph LR; A[{long}] --> B[End]");
+        let out = render(&src).unwrap();
+        // All tokens must still appear (soft-wrap inserts newlines, not
+        // truncation).
+        for tok in ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta"] {
+            assert!(out.contains(tok), "missing '{tok}' in:\n{out}");
+        }
+        // Diagram's longest row must be narrower than the raw unwrapped label.
+        let max_w = out
+            .lines()
+            .map(unicode_width::UnicodeWidthStr::width)
+            .max()
+            .unwrap_or(0);
+        assert!(
+            max_w < long.len() + 20,
+            "soft-wrap didn't shrink the diagram (max row={max_w}, raw label={}):\n{out}",
+            long.len(),
+        );
+    }
+
     /// Two sibling subgraphs at the same nesting level must not overlap: each
     /// one's bounding-box rows (in an LR layout) should be disjoint from the
     /// others'. Before the sibling-gap fix in `layered::compute_positions`,

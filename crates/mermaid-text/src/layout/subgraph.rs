@@ -44,14 +44,22 @@ pub struct SubgraphBounds {
 
 /// Node box dimensions used when computing bounding boxes.
 ///
-/// Must match the values in `render::unicode` — kept in sync manually.
-/// (We can't import from the render module here without a circular dep.)
+/// Must match the values in `render::unicode::NodeGeom` — kept in sync
+/// manually. (We can't import from the render module here without a
+/// circular dep.)
 fn node_draw_width(graph: &Graph, id: &str) -> usize {
     if let Some(node) = graph.node(id) {
-        let label_w = UnicodeWidthStr::width(node.label.as_str());
+        let label_w = node.label_width();
         let inner = label_w + 4; // LABEL_PADDING * 2 = 4
         match node.shape {
-            crate::types::NodeShape::Circle => inner + 2,
+            crate::types::NodeShape::Circle
+            | crate::types::NodeShape::Stadium
+            | crate::types::NodeShape::Hexagon
+            | crate::types::NodeShape::Asymmetric
+            | crate::types::NodeShape::Subroutine
+            | crate::types::NodeShape::Parallelogram
+            | crate::types::NodeShape::Trapezoid => inner + 2,
+            crate::types::NodeShape::DoubleCircle => inner + 4,
             _ => inner,
         }
     } else {
@@ -59,8 +67,18 @@ fn node_draw_width(graph: &Graph, id: &str) -> usize {
     }
 }
 
-fn node_draw_height(_graph: &Graph, _id: &str) -> usize {
-    3 // all shapes are 3 rows
+fn node_draw_height(graph: &Graph, id: &str) -> usize {
+    if let Some(node) = graph.node(id) {
+        let extra = node.label_line_count().saturating_sub(1);
+        match node.shape {
+            crate::types::NodeShape::Cylinder | crate::types::NodeShape::DoubleCircle => {
+                5 + extra
+            }
+            _ => 3 + extra,
+        }
+    } else {
+        3
+    }
 }
 
 /// Compute bounding boxes for every subgraph in `graph`.

@@ -174,6 +174,33 @@ impl Node {
             shape,
         }
     }
+
+    /// Return the widest line of the label, measured in terminal cells.
+    ///
+    /// Labels may contain `\n` line breaks (inserted by the parser when
+    /// converting `<br/>` tags or when soft-wrapping long lines). The
+    /// renderer sizes node boxes by the widest single line rather than by
+    /// the whole label string, so the parser-inserted breaks actually
+    /// narrow the box.
+    ///
+    /// Returns `0` for an empty label.
+    pub fn label_width(&self) -> usize {
+        use unicode_width::UnicodeWidthStr;
+        self.label
+            .lines()
+            .map(UnicodeWidthStr::width)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Return the number of rendered text rows this node's label occupies.
+    ///
+    /// Always at least 1, even for empty labels, so node boxes retain their
+    /// minimum height.
+    pub fn label_line_count(&self) -> usize {
+        let n = self.label.lines().count();
+        n.max(1)
+    }
 }
 
 /// A directed connection between two nodes.

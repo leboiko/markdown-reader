@@ -41,8 +41,12 @@ struct NodeGeom {
 
 impl NodeGeom {
     fn for_node(node: &Node) -> Self {
-        let label_w = UnicodeWidthStr::width(node.label.as_str());
+        // Multi-line labels: `node.label_width()` returns the widest line,
+        // `node.label_line_count()` counts the lines. Each extra line adds
+        // one interior row so the box grows vertically, not horizontally.
+        let label_w = node.label_width();
         let inner_w = label_w + LABEL_PADDING * 2;
+        let extra_lines = node.label_line_count().saturating_sub(1);
 
         // Must stay in sync with `node_box_width`/`node_box_height` in
         // `layout/layered.rs` — both functions encode the same shape dimensions.
@@ -50,7 +54,7 @@ impl NodeGeom {
             // Plain rectangle / rounded / diamond: standard 3-row box.
             NodeShape::Rectangle | NodeShape::Rounded | NodeShape::Diamond => NodeGeom {
                 width: inner_w,
-                height: 3,
+                height: 3 + extra_lines,
                 text_row: 1,
             },
             // Circle, stadium, hexagon, asymmetric: +2 width for side markers.
@@ -59,34 +63,34 @@ impl NodeGeom {
             | NodeShape::Hexagon
             | NodeShape::Asymmetric => NodeGeom {
                 width: inner_w + 2,
-                height: 3,
+                height: 3 + extra_lines,
                 text_row: 1,
             },
             // Subroutine: +2 width for inner vertical bars.
             NodeShape::Subroutine => NodeGeom {
                 width: inner_w + 2,
-                height: 3,
+                height: 3 + extra_lines,
                 text_row: 1,
             },
             // Parallelogram / trapezoid: +2 width for slant corner markers.
             NodeShape::Parallelogram | NodeShape::Trapezoid => NodeGeom {
                 width: inner_w + 2,
-                height: 3,
+                height: 3 + extra_lines,
                 text_row: 1,
             },
             // Cylinder: 5 rows (2 top arcs, 1 text, 2 bottom arcs).
-            // Text row is the middle one (index 2).
+            // Text starts on the first interior row (index 2).
             NodeShape::Cylinder => NodeGeom {
                 width: inner_w,
-                height: 5,
+                height: 5 + extra_lines,
                 text_row: 2,
             },
             // DoubleCircle: 5 rows for outer + inner concentric rounded boxes.
             // +4 width for two layers of borders on each side.
-            // Text row is the middle one (index 2).
+            // Text starts on the first interior row (index 2).
             NodeShape::DoubleCircle => NodeGeom {
                 width: inner_w + 4,
-                height: 5,
+                height: 5 + extra_lines,
                 text_row: 2,
             },
         }
@@ -814,22 +818,23 @@ fn truncate_to_width(s: &str, max_width: usize) -> String {
 }
 
 /// Write a node's label horizontally centred inside its bounding box.
+///
+/// Multi-line labels (containing `\n`) are drawn line-by-line on successive
+/// rows starting at `geom.text_row`. Each line is centred independently so
+/// short lines in a mixed-width label still sit in the visual middle.
 fn draw_label_centred(grid: &mut Grid, node: &Node, pos: GridPos, geom: NodeGeom) {
     let (col, row) = pos;
-    let label_w = UnicodeWidthStr::width(node.label.as_str());
-
-    // Centre the label within the interior width (geom.width - 2 borders)
     let interior_w = geom.width.saturating_sub(2);
-    let text_col = if label_w <= interior_w {
-        col + 1 + (interior_w - label_w) / 2
-    } else {
-        col + 1
-    };
 
-    // Diamond now renders as a rectangle — no extra horizontal offset needed.
-    // The standard centring computed above is correct for all shapes.
-
-    grid.write_text(text_col, row + geom.text_row, &node.label);
+    for (i, line) in node.label.lines().enumerate() {
+        let line_w = UnicodeWidthStr::width(line);
+        let text_col = if line_w <= interior_w {
+            col + 1 + (interior_w - line_w) / 2
+        } else {
+            col + 1
+        };
+        grid.write_text(text_col, row + geom.text_row + i, line);
+    }
 }
 
 // ---------------------------------------------------------------------------

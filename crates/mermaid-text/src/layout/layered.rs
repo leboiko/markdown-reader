@@ -574,7 +574,9 @@ fn count_crossings(
 /// Must stay in sync with `NodeGeom::for_node` in `render/unicode.rs`.
 fn node_box_width(graph: &Graph, id: &str) -> usize {
     if let Some(node) = graph.node(id) {
-        let label_width = unicode_width::UnicodeWidthStr::width(node.label.as_str());
+        // Multi-line labels are sized by the widest line — line breaks make
+        // the box taller, not wider.
+        let label_width = node.label_width();
         let inner = label_width + 4; // 2-char padding each side
         match node.shape {
             // Diamond renders as a plain rectangle.
@@ -606,6 +608,8 @@ fn node_box_width(graph: &Graph, id: &str) -> usize {
 /// Must stay in sync with `NodeGeom::for_node` in `render/unicode.rs`.
 fn node_box_height(graph: &Graph, id: &str) -> usize {
     if let Some(node) = graph.node(id) {
+        // Each additional label line adds one interior row to the box.
+        let extra = node.label_line_count().saturating_sub(1);
         match node.shape {
             // Standard 3-row shapes: top border + text + bottom border.
             NodeShape::Diamond
@@ -617,11 +621,11 @@ fn node_box_height(graph: &Graph, id: &str) -> usize {
             | NodeShape::Asymmetric
             | NodeShape::Parallelogram
             | NodeShape::Trapezoid
-            | NodeShape::Subroutine => 3,
+            | NodeShape::Subroutine => 3 + extra,
             // Cylinder needs 5 rows: arc-top, arc-inner, text, arc-inner, arc-bottom.
-            NodeShape::Cylinder => 5,
+            NodeShape::Cylinder => 5 + extra,
             // DoubleCircle needs 5 rows for the concentric inner border.
-            NodeShape::DoubleCircle => 5,
+            NodeShape::DoubleCircle => 5 + extra,
         }
     } else {
         3

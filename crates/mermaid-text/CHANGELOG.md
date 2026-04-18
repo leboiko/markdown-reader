@@ -3,6 +3,20 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.2.3 — 2026-04-18
+
+### Added
+
+- Multi-line node labels. The parser now converts HTML line-break tags
+  (`<br/>`, `<br>`, `<br />`, case-insensitive) into `\n` separators, and
+  the renderer draws each segment on its own row inside the node box.
+  Example: `A[first<br/>second<br/>third]` renders as a 3-row-tall box.
+- Automatic soft-wrap for long label lines. Any single line wider than
+  40 terminal cells is wrapped at the last comma or space within the
+  budget. Single long words without separators (e.g. a long identifier)
+  stay unwrapped to avoid mangling. This prevents large node labels from
+  stretching the whole diagram horizontally off-screen.
+
 ## 0.2.2 — 2026-04-17
 
 ### Fixed
