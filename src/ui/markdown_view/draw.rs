@@ -433,6 +433,10 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
             Color::Rgb(r, g, b) => (r, g, b),
             _ => (0, 0, 0),
         };
+        // `effective_width` is the inner content width computed earlier in
+        // this frame (accounting for the gutter when line numbers are on).
+        // Cast from u16 to usize is always safe — terminal widths never
+        // approach usize::MAX even on 32-bit targets.
         let render_cfg = MermaidRenderConfig {
             picker: app.picker.as_ref(),
             action_tx: &tx,
@@ -440,6 +444,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
             bg_rgb,
             mode: app.mermaid_mode,
             max_height: app.mermaid_max_height,
+            content_width: Some(usize::from(effective_width)),
         };
         for (id, source) in mermaid_to_queue {
             app.mermaid_cache.ensure_queued(id, &source, &render_cfg);

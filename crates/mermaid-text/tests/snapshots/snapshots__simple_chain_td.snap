@@ -1,0 +1,26 @@
+---
+source: crates/mermaid-text/tests/snapshots.rs
+assertion_line: 33
+expression: out
+---
+┌───┐
+│ A │
+└───┘
+  │
+  │
+  │
+  │
+  │
+  ▾
+┌───┐
+│ B │
+└───┘
+  │
+  │
+  │
+  │
+  │
+  ▾
+┌───┐
+│ C │
+└───┘

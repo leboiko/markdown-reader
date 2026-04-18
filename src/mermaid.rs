@@ -96,6 +96,13 @@ pub struct MermaidRenderConfig<'a> {
     pub mode: MermaidMode,
     /// User-configured maximum height in display lines.
     pub max_height: u32,
+    /// Inner content width of the viewer pane in terminal columns.
+    ///
+    /// When `Some`, passed to `mermaid_text::render_with_width` so that
+    /// text-mode diagrams are compacted to fit within the pane rather than
+    /// rendering at their natural (potentially much wider) size.
+    /// `None` preserves the previous behaviour (no width budget).
+    pub content_width: Option<usize>,
 }
 
 /// Per-app cache mapping diagram ids to their render state.
@@ -196,7 +203,7 @@ impl MermaidCache {
 
         // ── Text mode: always figurehead, never spawn image tasks ────────────
         if cfg.mode == MermaidMode::Text {
-            let entry = match try_text_render(source) {
+            let entry = match try_text_render(source, cfg.content_width) {
                 Ok(diagram) => MermaidEntry::AsciiDiagram {
                     diagram,
                     reason: "text mode".to_string(),
@@ -221,7 +228,7 @@ impl MermaidCache {
                 )
             } else {
                 // Auto mode: try figurehead first.
-                match try_text_render(source) {
+                match try_text_render(source, cfg.content_width) {
                     Ok(diagram) => MermaidEntry::AsciiDiagram {
                         diagram,
                         reason: "diagram type uses text-mode rendering".to_string(),
@@ -250,7 +257,7 @@ impl MermaidCache {
                 // Auto mode: try text-mode rendering via figurehead before
                 // falling back to raw source.  This gives terminals without
                 // graphics protocol support a readable Unicode box-drawing diagram.
-                match try_text_render(source) {
+                match try_text_render(source, cfg.content_width) {
                     Ok(diagram) => MermaidEntry::AsciiDiagram { diagram, reason },
                     Err(_) => MermaidEntry::SourceOnly(reason),
                 }
@@ -483,14 +490,26 @@ pub const TMUX_DISABLED_REASON: &str = "disable tmux for graphics";
 /// writes, no panics on valid input).  Currently supports flowcharts
 /// (`graph`/`flowchart` with LR/TD/RL/BT).  Unsupported diagram types
 /// return `Err` and fall back to showing raw source.
-fn try_text_render(source: &str) -> Result<String, String> {
-    mermaid_text::render(source).map_err(|e| format!("{e}"))
+///
+/// # Arguments
+///
+/// * `source` – raw mermaid source text.
+/// * `max_width` – optional column budget; when `Some(w)` the renderer
+///   progressively compacts gap sizes until the output fits within `w`
+///   columns.  `None` renders at natural size (previous behaviour).
+fn try_text_render(source: &str, max_width: Option<usize>) -> Result<String, String> {
+    mermaid_text::render_with_width(source, max_width).map_err(|e| format!("{e}"))
 }
 
 /// Public wrapper around [`try_text_render`] for use from the
 /// `MermaidReady` action handler when an image render fails.
-pub fn try_text_render_public(source: &str) -> Result<String, String> {
-    try_text_render(source)
+///
+/// # Arguments
+///
+/// * `source` – raw mermaid source text.
+/// * `max_width` – optional column budget passed to `mermaid_text::render_with_width`.
+pub fn try_text_render_public(source: &str, max_width: Option<usize>) -> Result<String, String> {
+    try_text_render(source, max_width)
 }
 
 fn has_limited_rendering(source: &str) -> bool {
@@ -671,6 +690,7 @@ mod tests {
             bg_rgb: (0, 0, 0),
             mode: MermaidMode::Auto,
             max_height: 30,
+            content_width: None,
         };
         cache.ensure_queued(id, src, &cfg);
 
@@ -698,6 +718,7 @@ mod tests {
             bg_rgb: (0, 0, 0),
             mode: MermaidMode::Text,
             max_height: 30,
+            content_width: None,
         };
         let spawned = cache.ensure_queued(id, src, &cfg);
 
@@ -726,6 +747,7 @@ mod tests {
             bg_rgb: (0, 0, 0),
             mode: MermaidMode::Image,
             max_height: 30,
+            content_width: None,
         };
         cache.ensure_queued(id, src, &cfg);
 

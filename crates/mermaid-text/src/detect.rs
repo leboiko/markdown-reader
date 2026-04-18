@@ -7,6 +7,8 @@ use crate::Error;
 pub enum DiagramKind {
     /// `graph <direction>` or `flowchart <direction>` diagrams.
     Flowchart,
+    /// `sequenceDiagram` diagrams.
+    Sequence,
 }
 
 /// Detect the kind of Mermaid diagram described by `input`.
@@ -34,6 +36,7 @@ pub enum DiagramKind {
 ///
 /// assert_eq!(detect("graph LR\nA-->B").unwrap(), DiagramKind::Flowchart);
 /// assert_eq!(detect("flowchart TD\nA-->B").unwrap(), DiagramKind::Flowchart);
+/// assert_eq!(detect("sequenceDiagram\nA->>B: hi").unwrap(), DiagramKind::Sequence);
 /// assert!(detect("").is_err());
 /// assert!(detect("pie title Pets").is_err());
 /// ```
@@ -49,6 +52,7 @@ pub fn detect(input: &str) -> Result<DiagramKind, Error> {
 
     match keyword.to_lowercase().as_str() {
         "graph" | "flowchart" => Ok(DiagramKind::Flowchart),
+        "sequencediagram" => Ok(DiagramKind::Sequence),
         other => Err(Error::UnsupportedDiagram(other.to_string())),
     }
 }

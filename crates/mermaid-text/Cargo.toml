@@ -18,3 +18,6 @@ path = "src/bin/mermaid_text.rs"
 
 [dependencies]
 unicode-width = "0.2"
+
+[dev-dependencies]
+insta = "1"

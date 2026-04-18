@@ -786,7 +786,17 @@ impl App {
                 // as a secondary fallback.
                 let entry = if let MermaidEntry::Failed(ref msg) = entry {
                     if let Some(source) = self.find_mermaid_source(id) {
-                        match crate::mermaid::try_text_render_public(&source) {
+                        // Use the stored layout_width as the column budget so
+                        // the fallback diagram fits the current pane width.
+                        // `layout_width` is 0 before the first draw frame, in
+                        // which case we pass None to render at natural size.
+                        let width = self
+                            .tabs
+                            .active_tab()
+                            .map(|t| t.view.layout_width)
+                            .filter(|&w| w > 0)
+                            .map(usize::from);
+                        match crate::mermaid::try_text_render_public(&source, width) {
                             Ok(diagram) => MermaidEntry::AsciiDiagram {
                                 diagram,
                                 reason: format!("image failed: {msg}"),

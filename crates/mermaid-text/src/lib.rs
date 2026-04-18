@@ -53,7 +53,8 @@
 //! | A\* obstacle-aware edge routing | yes |
 //! | Junction merging (`┼ ├ ┤ ┬ ┴`) | yes |
 //! | `style`, `classDef`, `click`, `linkStyle` directives | silently ignored |
-//! | `sequenceDiagram`, `pie`, `gantt`, etc. | not supported |
+//! | `sequenceDiagram` (participants, `->>`, `-->>`, `->`, `-->`) | yes |
+//! | `pie`, `gantt`, `stateDiagram`, etc. | not supported |
 //!
 //! ## Limitations
 //!
@@ -83,8 +84,10 @@ pub mod detect;
 pub mod layout;
 pub mod parser;
 pub mod render;
+pub mod sequence;
 pub mod types;
 
+pub use sequence::{Message, MessageStyle, Participant, SequenceDiagram};
 pub use types::{Direction, Edge, EdgeEndpoint, EdgeStyle, Graph, Node, NodeShape};
 
 use detect::DiagramKind;
@@ -198,13 +201,22 @@ pub fn render(input: &str) -> Result<String, Error> {
 /// assert!(output.contains("Start"));
 /// ```
 pub fn render_with_width(input: &str, max_width: Option<usize>) -> Result<String, Error> {
-    // 1. Detect diagram type
+    // 1. Detect diagram type.
     let kind = detect::detect(input)?;
 
-    // 2. Parse (once — reused across compaction attempts)
-    let graph = match kind {
-        DiagramKind::Flowchart => parser::parse(input)?,
-    };
+    match kind {
+        DiagramKind::Sequence => {
+            // Sequence diagrams have a fixed layout; no compaction pass.
+            let diag = parser::sequence::parse(input)?;
+            return Ok(render::sequence::render(&diag));
+        }
+        DiagramKind::Flowchart => {
+            // Fall through to the flowchart path below.
+        }
+    }
+
+    // 2. Parse flowchart (once — reused across compaction attempts).
+    let graph = parser::parse(input)?;
 
     // 3. Render with default config first.
     let default_cfg = LayoutConfig::default();
@@ -949,6 +961,78 @@ mod tests {
             !out.contains("direction"),
             "bare 'direction' keyword leaked into output:\n{out}"
         );
+    }
+
+    // ---- Sequence diagram integration tests ------------------------------
+
+    #[test]
+    fn sequence_parse_minimal() {
+        let src = "sequenceDiagram\nA->>B: hi";
+        let diag = parser::sequence::parse(src).unwrap();
+        assert_eq!(diag.participants.len(), 2, "expected 2 participants");
+        assert_eq!(diag.messages.len(), 1, "expected 1 message");
+    }
+
+    #[test]
+    fn sequence_parse_explicit_participants_with_aliases() {
+        let src = "sequenceDiagram\nparticipant W as Worker\nparticipant S as Server";
+        let diag = parser::sequence::parse(src).unwrap();
+        assert_eq!(diag.participants[0].label, "Worker");
+        assert_eq!(diag.participants[1].label, "Server");
+    }
+
+    #[test]
+    fn sequence_render_produces_participant_boxes() {
+        let src = "sequenceDiagram\nparticipant A as Alice\nparticipant B as Bob\nA->>B: Hello";
+        let out = render(src).unwrap();
+        assert!(out.contains("Alice"), "missing Alice in:\n{out}");
+        assert!(out.contains("Bob"), "missing Bob in:\n{out}");
+    }
+
+    #[test]
+    fn sequence_render_draws_lifelines() {
+        let out = render("sequenceDiagram\nA->>B: hi").unwrap();
+        assert!(out.contains('┆'), "missing lifeline in:\n{out}");
+    }
+
+    #[test]
+    fn sequence_render_solid_arrow() {
+        let out = render("sequenceDiagram\nA->>B: go").unwrap();
+        assert!(out.contains('▸'), "no solid arrowhead in:\n{out}");
+    }
+
+    #[test]
+    fn sequence_render_dashed_arrow() {
+        let out = render("sequenceDiagram\nA-->>B: back").unwrap();
+        assert!(out.contains('┄'), "no dashed glyph in:\n{out}");
+    }
+
+    #[test]
+    fn sequence_render_message_order_top_to_bottom() {
+        let out =
+            render("sequenceDiagram\nA->>B: first\nB->>A: second").unwrap();
+        let first_row = out.lines().position(|l| l.contains("first")).expect("'first' not found");
+        let second_row =
+            out.lines().position(|l| l.contains("second")).expect("'second' not found");
+        assert!(first_row < second_row, "'first' must appear above 'second':\n{out}");
+    }
+
+    #[test]
+    fn unknown_diagram_types_still_error() {
+        let err = render("stateDiagram-v2\ns1 --> s2").unwrap_err();
+        assert!(
+            matches!(err, Error::UnsupportedDiagram(_)),
+            "expected UnsupportedDiagram, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn render_existing_flowchart_unchanged() {
+        // Sanity check that adding sequence support didn't break flowcharts.
+        let out = render("graph LR; A-->B").unwrap();
+        assert!(out.contains('A'), "missing A in:\n{out}");
+        assert!(out.contains('B'), "missing B in:\n{out}");
+        assert!(out.contains('▸') || out.contains('-'), "no arrow in:\n{out}");
     }
 
     // ---- Perpendicular-direction subgraph tests ---------------------------
