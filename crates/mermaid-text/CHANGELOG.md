@@ -3,6 +3,23 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.3.2 — 2026-04-18
+
+### Fixed
+
+- `sequenceDiagram` participant boxes no longer visually overlap when two
+  adjacent participants have wide labels. `MIN_GAP` was interpreted as a
+  centre-to-centre distance, so boxes wider than half that gap had their
+  borders touching or overlapping. It is now the minimum clearance between
+  adjacent box *edges*; the centre-to-centre distance adds half of each
+  neighbor's width on top.
+- `sequenceDiagram` self-messages (`A->>A: text`) no longer collide with the
+  following message's label. The self-loop renders as a two-leg box (top
+  leg + bottom leg) but the previous row-budget treated it as a single-row
+  event, so the next message's label landed on the self-loop's bottom leg.
+  Self-messages now consume 3 rows; the next message starts on the row
+  after.
+
 ## 0.3.1 — 2026-04-18
 
 ### Fixed

@@ -37,10 +37,19 @@ const BOX_PAD: usize = 2;
 const BOX_HEIGHT: usize = 3;
 
 /// Minimum gap between two adjacent participant *centre* columns.
-const MIN_GAP: usize = 16;
+/// Minimum clearance (in cells) between the inner edges of two adjacent
+/// participant boxes. This is the baseline when no message label has to
+/// fit inside the gap; labels crossing the gap widen it further.
+const MIN_GAP: usize = 6;
 
-/// Rows consumed per message event (arrow row + blank spacer row).
+/// Rows consumed per regular (non-self) message event (label row + arrow row).
 const EVENT_ROW_H: usize = 2;
+
+/// Rows consumed per self-message event. Self-messages render as a two-leg
+/// right-loop (`──┐` / `──┘`) plus a label row above, so they need one more
+/// row than a regular message to avoid the bottom leg colliding with the
+/// next message's label.
+const SELF_MSG_ROW_H: usize = 3;
 
 /// Right-pointing solid arrowhead.
 const ARROW_RIGHT: char = '▸';
@@ -174,6 +183,12 @@ fn compute_layout(diag: &SequenceDiagram) -> Vec<ParticipantLayout> {
     }
 
     // Build centre positions cumulatively from the left.
+    //
+    // `gap_mins[i]` is the minimum *clearance* between the inner edges of
+    // box i and box i+1 (not a centre-to-centre distance) so that wide
+    // participant labels don't cause boxes to visually touch. Converting
+    // to centre-to-centre: add half the previous box's width and half the
+    // current box's width.
     let left_margin = box_widths[0] / 2 + 1;
     let mut layouts = Vec::with_capacity(n);
     let mut prev_center = left_margin;
@@ -182,7 +197,10 @@ fn compute_layout(diag: &SequenceDiagram) -> Vec<ParticipantLayout> {
         let center = if i == 0 {
             left_margin
         } else {
-            prev_center + gap_mins[i - 1]
+            prev_center
+                + box_widths[i - 1] / 2
+                + gap_mins[i - 1]
+                + box_widths[i] / 2
         };
         layouts.push(ParticipantLayout {
             center,
@@ -368,7 +386,15 @@ pub fn render(diag: &SequenceDiagram) -> String {
     let body_rows = if num_messages == 0 {
         2 // just lifeline + blank
     } else {
-        1 + num_messages * EVENT_ROW_H
+        // Budget one row per message slot; self-messages need an extra
+        // row each for their loop's second leg.
+        let self_msg_count = diag
+            .messages
+            .iter()
+            .filter(|m| m.from == m.to)
+            .count();
+        let regular_count = num_messages - self_msg_count;
+        1 + regular_count * EVENT_ROW_H + self_msg_count * SELF_MSG_ROW_H
     };
 
     let height = BOX_HEIGHT + body_rows;
@@ -408,18 +434,20 @@ pub fn render(diag: &SequenceDiagram) -> String {
     }
 
     // 3. Draw messages.
-    // The first message arrow goes on row BOX_HEIGHT + 1 (leaving row BOX_HEIGHT
-    // as the label row).  Each subsequent message is EVENT_ROW_H rows further down.
-    for (msg_idx, msg) in diag.messages.iter().enumerate() {
+    //
+    // Each non-self message consumes `EVENT_ROW_H` rows (label row + arrow
+    // row + 1 blank spacer, with EVENT_ROW_H=2 accounting for label+arrow).
+    // Self-messages span `SELF_MSG_ROW_H` rows because their loop draws a
+    // top leg and a bottom leg — placing the next message's label on
+    // `row+1` would overlap the self-loop's bottom leg.
+    let mut arrow_row = BOX_HEIGHT + 1;
+    for msg in &diag.messages {
         let Some(si) = diag.participant_index(&msg.from) else {
             continue;
         };
         let Some(ti) = diag.participant_index(&msg.to) else {
             continue;
         };
-
-        // Arrow row: BOX_HEIGHT + 1 + msg_idx * EVENT_ROW_H
-        let arrow_row = BOX_HEIGHT + 1 + msg_idx * EVENT_ROW_H;
 
         if si == ti {
             draw_self_message(
@@ -429,6 +457,7 @@ pub fn render(diag: &SequenceDiagram) -> String {
                 &msg.text,
                 msg.style,
             );
+            arrow_row += SELF_MSG_ROW_H;
         } else {
             draw_message(
                 &mut canvas,
@@ -438,6 +467,7 @@ pub fn render(diag: &SequenceDiagram) -> String {
                 &msg.text,
                 msg.style,
             );
+            arrow_row += EVENT_ROW_H;
         }
     }
 
