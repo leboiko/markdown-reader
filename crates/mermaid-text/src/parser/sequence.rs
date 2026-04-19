@@ -87,12 +87,25 @@ pub fn parse(src: &str) -> Result<SequenceDiagram, Error> {
             continue;
         }
 
-        // TODO: block statements (loop, alt, opt, par, critical, break, rect, end)
-        // — not implemented in MVP.
+        // TODO: block statements (loop, alt, opt, par, critical, break, rect).
+        // Block opens, their `else`/`and` separators, and closing `end` are all
+        // skipped so that diagrams that use these constructs still render (their
+        // inner messages are drawn as if the block wasn't there). A full
+        // implementation would draw the block boundary rectangles.
         let lower = line.to_lowercase();
         if matches!(
             lower.split_whitespace().next().unwrap_or(""),
-            "loop" | "alt" | "opt" | "par" | "critical" | "break" | "rect" | "end"
+            "loop"
+                | "alt"
+                | "else"
+                | "opt"
+                | "par"
+                | "and"
+                | "critical"
+                | "option"
+                | "break"
+                | "rect"
+                | "end"
         ) {
             continue;
         }
@@ -281,5 +294,44 @@ mod tests {
         assert_eq!(diag.participants.len(), 1);
         assert_eq!(diag.messages[0].from, "A");
         assert_eq!(diag.messages[0].to, "A");
+    }
+
+    /// Block statements (`alt`/`else`/`end`, `loop`/`end`, nested versions)
+    /// must be silently skipped so the inner messages still render. A real
+    /// Mermaid sequence diagram frequently uses these for conditional flow,
+    /// and rejecting them caused the TUI to show raw source.
+    #[test]
+    fn parse_block_statements_are_skipped() {
+        let src = r#"sequenceDiagram
+    participant W
+    participant CP
+    W->>CP: read
+    alt Batch is empty
+        W->>W: beat heartbeat
+    else Batch has events
+        alt Success
+            W->>CP: save checkpoint
+        else Retry exhausted
+            W->>W: back off
+        end
+    end
+    loop Every second
+        W->>W: tick
+    end
+    par A to B
+        W->>CP: write
+    and C to D
+        W->>CP: read
+    end"#;
+        let diag = parse(src).expect("block statements should be skipped, not error");
+        // Inner messages are kept (7 total: read, beat, save, back off, tick,
+        // write, read). Block keywords themselves contribute no messages.
+        assert_eq!(
+            diag.messages.len(),
+            7,
+            "expected 7 messages, got {}: {:?}",
+            diag.messages.len(),
+            diag.messages.iter().map(|m| &m.text).collect::<Vec<_>>()
+        );
     }
 }

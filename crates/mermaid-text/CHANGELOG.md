@@ -3,6 +3,18 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.3.1 — 2026-04-18
+
+### Fixed
+
+- `sequenceDiagram` parser no longer errors on `else`, `and`, and `option`
+  block keywords. The v0.3.0 parser skipped block-opening keywords
+  (`alt`, `loop`, `opt`, `par`, etc.) and their closing `end`, but missed
+  the separators (`else`, `and`) and `option`, which caused real-world
+  diagrams using `alt … else … end` to return `ParseError` and the
+  markdown-reader TUI to fall back to raw source display. Inner messages
+  inside these blocks are preserved.
+
 ## 0.3.0 — 2026-04-18
 
 ### Added
