@@ -3,6 +3,19 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.3.3 — 2026-04-18
+
+### Fixed
+
+- `sequenceDiagram` rendering no longer over-widens gaps between
+  participants. v0.3.2 fixed box-overlap by switching `MIN_GAP` to an
+  edge-to-edge measure but left the value at 6, producing 200-300 column
+  diagrams that wrapped inside the markdown-reader viewer pane.
+  Reduced `MIN_GAP` to 2 (just enough breathing room for edges to not
+  touch) and tightened the per-label padding from 6 to 2. Multi-span
+  message labels now drive gap width via `(label + 2) / spans` instead of
+  `(label + 6) / spans`.
+
 ## 0.3.2 — 2026-04-18
 
 ### Fixed

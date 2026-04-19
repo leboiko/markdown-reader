@@ -38,9 +38,14 @@ const BOX_HEIGHT: usize = 3;
 
 /// Minimum gap between two adjacent participant *centre* columns.
 /// Minimum clearance (in cells) between the inner edges of two adjacent
-/// participant boxes. This is the baseline when no message label has to
-/// fit inside the gap; labels crossing the gap widen it further.
-const MIN_GAP: usize = 6;
+/// participant boxes. Baseline when no message label crosses the gap;
+/// labels widen it further via [`LABEL_PADDING`].
+const MIN_GAP: usize = 2;
+
+/// Cells added to a message label's width when computing how much gap
+/// space that label needs. Covers one cell of visual padding at the left
+/// of the label and one at the right of the arrow tip.
+const LABEL_PADDING: usize = 2;
 
 /// Rows consumed per regular (non-self) message event (label row + arrow row).
 const EVENT_ROW_H: usize = 2;
@@ -174,8 +179,9 @@ fn compute_layout(diag: &SequenceDiagram) -> Vec<ParticipantLayout> {
         let lo = si.min(ti);
         let hi = si.max(ti);
         let spans = hi - lo;
-        // Label needs label_len + 6 cells of horizontal space.
-        let label_need = msg.text.width() + 6;
+        // Label needs `label_width + LABEL_PADDING` cells of clearance along
+        // its arrow; divide across the spans the arrow crosses.
+        let label_need = msg.text.width() + LABEL_PADDING;
         let per_gap = label_need.div_ceil(spans);
         for slot in gap_mins.iter_mut().take(hi).skip(lo) {
             *slot = (*slot).max(per_gap);
