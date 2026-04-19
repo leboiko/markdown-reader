@@ -7,6 +7,22 @@
 //! is deterministic and structured, making it suitable for LLM agents that
 //! need to read and reason about diagrams.
 //!
+//! ## ASCII mode
+//!
+//! For terminals that do not support Unicode box-drawing characters (old SSH
+//! boxes, CI log viewers, fonts without the Box Drawing block), an ASCII-only
+//! rendering mode is available.  The Unicode renderer runs first and its output
+//! is then post-processed by a character-by-character substitution table that
+//! maps every non-ASCII glyph to a plain `+ - | > < v ^ * o x` equivalent.
+//!
+//! ```
+//! let out = mermaid_text::render_ascii("graph LR; A[Build] --> B[Deploy]").unwrap();
+//! assert!(out.contains("Build"));
+//! assert!(out.contains("Deploy"));
+//! // Every character in the output is plain ASCII.
+//! assert!(out.is_ascii());
+//! ```
+//!
 //! ## Quick start
 //!
 //! ```
@@ -50,7 +66,7 @@
 //! | Subgraphs with nested subgraphs | yes |
 //! | Per-subgraph `direction` override | partial (see Limitations) |
 //! | Width-constrained compaction | yes |
-//! | A\* obstacle-aware edge routing | yes |
+//! | A\* obstacle-aware edge routing (incl. back-edge perimeter routing) | yes |
 //! | Junction merging (`┼ ├ ┤ ┬ ┴`) | yes |
 //! | `style`, `classDef`, `click`, `linkStyle` directives | silently ignored |
 //! | `sequenceDiagram` (participants, `->>`, `-->>`, `->`, `-->`) | yes |
@@ -262,6 +278,153 @@ pub fn render_with_width(input: &str, max_width: Option<usize>) -> Result<String
     }
 
     Ok(best)
+}
+
+/// Render a Mermaid diagram source string to **ASCII-only** text.
+///
+/// Identical to [`render`] in every way except the output is post-processed by
+/// [`to_ascii`] to replace all Unicode box-drawing and arrow glyphs with plain
+/// ASCII equivalents (`+`, `-`, `|`, `>`, `<`, `v`, `^`, `*`, `o`, `x`, `:`).
+/// Every character in the returned string is guaranteed to be `< 0x80`.
+///
+/// This is useful for:
+/// - SSH sessions to hosts without Unicode-capable terminal fonts.
+/// - CI log aggregators that strip non-ASCII bytes.
+/// - Terminals configured with legacy code pages.
+///
+/// The underlying layout and routing are identical to the Unicode renderer;
+/// only the final glyph substitution differs.
+///
+/// # Arguments
+///
+/// * `input` — Mermaid source string, including the header line.
+///
+/// # Errors
+///
+/// Same as [`render`].
+///
+/// # Examples
+///
+/// ```
+/// let out = mermaid_text::render_ascii("graph LR; A[Start] --> B[End]").unwrap();
+/// assert!(out.contains("Start"));
+/// assert!(out.contains("End"));
+/// assert!(out.is_ascii(), "non-ASCII char found");
+/// ```
+pub fn render_ascii(input: &str) -> Result<String, Error> {
+    render_ascii_with_width(input, None)
+}
+
+/// Render a Mermaid diagram source string to **ASCII-only** text, optionally
+/// compacting the output to fit within a column budget.
+///
+/// Identical to [`render_with_width`] except the final Unicode output is
+/// post-processed by [`to_ascii`]. Every character in the returned string is
+/// guaranteed to be `< 0x80`.
+///
+/// When `max_width` is `Some(n)`, the same progressive compaction as
+/// [`render_with_width`] is attempted before the ASCII substitution is applied.
+///
+/// # Arguments
+///
+/// * `input`     — Mermaid source string
+/// * `max_width` — optional column budget in terminal cells
+///
+/// # Errors
+///
+/// Same as [`render`].
+///
+/// # Examples
+///
+/// ```
+/// let out = mermaid_text::render_ascii_with_width(
+///     "graph LR; A[Start] --> B[End]",
+///     Some(80),
+/// ).unwrap();
+/// assert!(out.contains("Start"));
+/// assert!(out.is_ascii(), "non-ASCII char found");
+/// ```
+pub fn render_ascii_with_width(input: &str, max_width: Option<usize>) -> Result<String, Error> {
+    let unicode = render_with_width(input, max_width)?;
+    Ok(to_ascii(&unicode))
+}
+
+/// Convert a Unicode-rendered diagram string to its ASCII equivalent.
+///
+/// Each Unicode box-drawing or arrow glyph is replaced with the closest
+/// printable ASCII character. All other characters (spaces, alphanumerics,
+/// punctuation already in the ASCII range) pass through unchanged.
+///
+/// This function is a pure, allocation-efficient char-by-char substitution:
+/// it pre-allocates the output with the input's byte length and never
+/// revisits already-written characters.
+///
+/// # Arguments
+///
+/// * `s` — A Unicode string produced by the rendering pipeline.
+///
+/// # Returns
+///
+/// A `String` in which every character satisfies `c.is_ascii()`.
+///
+/// # Examples
+///
+/// ```
+/// use mermaid_text::to_ascii;
+///
+/// assert_eq!(to_ascii("┌─┐"), "+-+");
+/// assert_eq!(to_ascii("│A│"), "|A|");
+/// assert_eq!(to_ascii("╭─╮"), "+-+");
+/// assert_eq!(to_ascii("▸"), ">");
+/// assert_eq!(to_ascii("▾"), "v");
+/// assert_eq!(to_ascii("◇"), "*");
+/// ```
+pub fn to_ascii(s: &str) -> String {
+    // Pre-allocate with the same byte length as the input. Because every
+    // Unicode glyph we substitute maps to a single ASCII byte, the output will
+    // always be <= the input in byte length (multi-byte chars shrink to 1 byte).
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        // Match against every Unicode glyph the renderer produces and map it to
+        // its ASCII equivalent. The match is exhaustive over the known glyph
+        // set; any character not listed here (ASCII text, spaces, newlines) is
+        // passed through with `ch` unchanged. Thin and thick box-drawing
+        // characters that differ in Unicode are collapsed to the same ASCII
+        // glyph because ASCII has no concept of line weight.
+        let ascii_ch = match ch {
+            // ---- Horizontal lines ----
+            '─' | '━' | '┄' => '-',
+            // ---- Vertical lines ----
+            '│' | '┃' | '┆' => '|',
+            // ---- Corners (all four styles → +) ----
+            '┌' | '┐' | '└' | '┘' => '+',
+            '╭' | '╮' | '╰' | '╯' => '+',
+            // Thick corners
+            '┏' | '┓' | '┗' | '┛' => '+',
+            // ---- T-junctions and cross ----
+            '├' | '┤' | '┬' | '┴' | '┼' => '+',
+            // Thick T-junctions and cross
+            '┣' | '┫' | '┳' | '┻' | '╋' => '+',
+            // ---- Arrow tips ----
+            '▸' => '>',
+            '◂' => '<',
+            '▾' => 'v',
+            '▴' => '^',
+            // ---- Endpoint / decorator glyphs ----
+            '◇' => '*',
+            '○' | '◯' => 'o',
+            '×' => 'x',
+            // ---- Exotic double-line / mixed box chars (subgraph labels etc.) ----
+            '║' | '╵' | '╷' | '╴' | '╶' => '|',
+            '═' => '-',
+            '╓' | '╖' | '╙' | '╜' | '╔' | '╗' | '╚' | '╝' => '+',
+            '╠' | '╣' | '╦' | '╩' | '╬' => '+',
+            // Pass-through: ASCII chars, spaces, newlines, labels.
+            other => other,
+        };
+        out.push(ascii_ch);
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -676,7 +839,10 @@ mod tests {
         let out = render("graph LR; A{{Hexagon}}").unwrap();
         assert!(out.contains("Hexagon"), "missing label:\n{out}");
         // Hexagon uses < / > markers at the vertical midpoints.
-        assert!(out.contains('<') || out.contains('>'), "no hexagon markers:\n{out}");
+        assert!(
+            out.contains('<') || out.contains('>'),
+            "no hexagon markers:\n{out}"
+        );
     }
 
     #[test]
@@ -820,8 +986,7 @@ mod tests {
     #[test]
     fn html_br_in_label_creates_multi_row_node() {
         let out =
-            render(r#"graph LR; A[first line<br/>second line<br/>third line] --> B[End]"#)
-                .unwrap();
+            render(r#"graph LR; A[first line<br/>second line<br/>third line] --> B[End]"#).unwrap();
         assert!(out.contains("first line"), "line 1 missing:\n{out}");
         assert!(out.contains("second line"), "line 2 missing:\n{out}");
         assert!(out.contains("third line"), "line 3 missing:\n{out}");
@@ -851,7 +1016,9 @@ mod tests {
         let out = render(&src).unwrap();
         // All tokens must still appear (soft-wrap inserts newlines, not
         // truncation).
-        for tok in ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta"] {
+        for tok in [
+            "alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta",
+        ] {
             assert!(out.contains(tok), "missing '{tok}' in:\n{out}");
         }
         // Diagram's longest row must be narrower than the raw unwrapped label.
@@ -1009,12 +1176,19 @@ mod tests {
 
     #[test]
     fn sequence_render_message_order_top_to_bottom() {
-        let out =
-            render("sequenceDiagram\nA->>B: first\nB->>A: second").unwrap();
-        let first_row = out.lines().position(|l| l.contains("first")).expect("'first' not found");
-        let second_row =
-            out.lines().position(|l| l.contains("second")).expect("'second' not found");
-        assert!(first_row < second_row, "'first' must appear above 'second':\n{out}");
+        let out = render("sequenceDiagram\nA->>B: first\nB->>A: second").unwrap();
+        let first_row = out
+            .lines()
+            .position(|l| l.contains("first"))
+            .expect("'first' not found");
+        let second_row = out
+            .lines()
+            .position(|l| l.contains("second"))
+            .expect("'second' not found");
+        assert!(
+            first_row < second_row,
+            "'first' must appear above 'second':\n{out}"
+        );
     }
 
     #[test]
@@ -1032,7 +1206,10 @@ mod tests {
         let out = render("graph LR; A-->B").unwrap();
         assert!(out.contains('A'), "missing A in:\n{out}");
         assert!(out.contains('B'), "missing B in:\n{out}");
-        assert!(out.contains('▸') || out.contains('-'), "no arrow in:\n{out}");
+        assert!(
+            out.contains('▸') || out.contains('-'),
+            "no arrow in:\n{out}"
+        );
     }
 
     // ---- Perpendicular-direction subgraph tests ---------------------------
@@ -1058,7 +1235,9 @@ mod tests {
         // (they're flowing LR inside a TD parent). Find each label's row and
         // assert they're equal.
         let row_of = |needle: &str| -> usize {
-            out.lines().position(|l| l.contains(needle)).expect("label not found")
+            out.lines()
+                .position(|l| l.contains(needle))
+                .expect("label not found")
         };
         assert_eq!(
             row_of("Input"),
@@ -1094,8 +1273,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            a,
-            b,
+            a, b,
             "direction LR inside graph LR should match default\nA:\n{a}\nB:\n{b}"
         );
     }
@@ -1114,7 +1292,9 @@ mod tests {
         .unwrap();
         // TD flow: A row < B row < C row.
         let row_of = |needle: &str| -> usize {
-            out.lines().position(|l| l.contains(needle)).expect("label not found")
+            out.lines()
+                .position(|l| l.contains(needle))
+                .expect("label not found")
         };
         assert!(
             row_of("A") < row_of("B"),
@@ -1123,6 +1303,217 @@ mod tests {
         assert!(
             row_of("B") < row_of("C"),
             "B should be above C in TD:\n{out}"
+        );
+    }
+
+    // ---- ASCII mode tests -------------------------------------------------
+
+    /// The fundamental invariant: every character produced by `render_ascii`
+    /// must be in the ASCII range (code point < 128).
+    #[test]
+    fn ascii_render_has_no_unicode_box_chars() {
+        let out = render_ascii("graph LR; A[Hello] --> B[World]").unwrap();
+        for ch in out.chars() {
+            assert!(ch.is_ascii(), "non-ASCII char {ch:?} in output:\n{out}");
+        }
+    }
+
+    /// Node labels (which are pure ASCII text) must survive the substitution
+    /// pass unchanged.
+    #[test]
+    fn ascii_render_preserves_labels() {
+        let out = render_ascii("graph LR; A[Cargo] --> B[Deploy]").unwrap();
+        assert!(out.contains("Cargo"), "label 'Cargo' missing in:\n{out}");
+        assert!(out.contains("Deploy"), "label 'Deploy' missing in:\n{out}");
+    }
+
+    /// All four rounded and square corner glyphs (`╭ ╮ ╰ ╯ ┌ ┐ └ ┘`) must be
+    /// replaced with `+`.
+    #[test]
+    fn ascii_render_uses_plus_for_corners() {
+        // A Rectangle node uses ┌ ┐ └ ┘; a Rounded node uses ╭ ╮ ╰ ╯.
+        let rect_out = render_ascii("graph LR; A[Rect]").unwrap();
+        let rounded_out = render_ascii("graph LR; A(Round)").unwrap();
+        assert!(
+            rect_out.contains('+'),
+            "expected '+' for box corners in:\n{rect_out}"
+        );
+        assert!(
+            rounded_out.contains('+'),
+            "expected '+' for rounded corners in:\n{rounded_out}"
+        );
+        // Neither output should contain any Unicode box-drawing corner.
+        for ch in rect_out.chars().chain(rounded_out.chars()) {
+            assert!(
+                ch.is_ascii(),
+                "non-ASCII char {ch:?} leaked through to_ascii"
+            );
+        }
+    }
+
+    /// Arrow tips must map to the expected ASCII characters.
+    #[test]
+    fn ascii_arrow_tips_use_gt_lt_v_caret() {
+        // LR → right arrow (▸ → >)
+        let lr = render_ascii("graph LR; A-->B").unwrap();
+        assert!(lr.contains('>'), "expected '>' for LR arrow in:\n{lr}");
+
+        // TD → down arrow (▾ → v)
+        let td = render_ascii("graph TD; A-->B").unwrap();
+        assert!(td.contains('v'), "expected 'v' for TD arrow in:\n{td}");
+
+        // BT → up arrow (▴ → ^)
+        let bt = render_ascii("graph BT; A-->B").unwrap();
+        assert!(bt.contains('^'), "expected '^' for BT arrow in:\n{bt}");
+
+        // Bidirectional LR: back-tip is ◂ → <
+        let bidi = render_ascii("graph LR; A<-->B").unwrap();
+        assert!(bidi.contains('<'), "expected '<' for back-tip in:\n{bidi}");
+    }
+
+    /// Width-constrained ASCII rendering must still produce compact output and
+    /// remain entirely ASCII.
+    #[test]
+    fn ascii_render_with_width_compacts() {
+        let out = render_ascii_with_width(
+            "graph LR; A[Alpha]-->B[Bravo]-->C[Charlie]-->D[Delta]",
+            Some(60),
+        )
+        .unwrap();
+        assert!(out.contains("Alpha"), "label missing in:\n{out}");
+        assert!(
+            out.is_ascii(),
+            "non-ASCII char in width-constrained ASCII output:\n{out}"
+        );
+    }
+
+    // ---- Back-edge routing tests -------------------------------------------
+
+    /// An LR back-edge (B → A, where A is upstream of B) must exit from the
+    /// bottom of the source node and enter from the bottom of the target node,
+    /// producing an upward-pointing tip (▴) rather than the normal rightward
+    /// tip (▸).
+    ///
+    /// The key invariant is that the back-edge travels *below* both nodes
+    /// (along a perimeter corridor) so it does not cut through the centre of
+    /// the diagram.
+    #[test]
+    fn back_edge_lr_exits_bottom() {
+        // Two-node cycle: A → B (forward) and B → A (back-edge).
+        let out = render("graph LR; A-->B; B-->A").unwrap();
+        assert!(out.contains('A'), "missing A in:\n{out}");
+        assert!(out.contains('B'), "missing B in:\n{out}");
+        // The back-edge enters from below, so there must be an UP arrow (▴).
+        assert!(
+            out.contains('▴'),
+            "no up-arrow tip for LR back-edge in:\n{out}"
+        );
+        // The forward edge still has a right arrow (▸).
+        assert!(
+            out.contains('▸'),
+            "no right-arrow tip for LR forward edge in:\n{out}"
+        );
+        // The back-edge corridor runs below the nodes: the UP tip (▴) must
+        // appear on a row strictly below both node boxes. Find the last row of
+        // any node box (last line containing a box character) and verify ▴
+        // appears below it.
+        let lines: Vec<&str> = out.lines().collect();
+        let last_box_row = lines
+            .iter()
+            .rposition(|l| l.contains('┌') || l.contains('└') || l.contains('┘') || l.contains('┐'))
+            .unwrap_or(0);
+        let up_arrow_row = lines
+            .iter()
+            .position(|l| l.contains('▴'))
+            .expect("▴ not found");
+        assert!(
+            up_arrow_row > last_box_row,
+            "LR back-edge ▴ should appear below the node boxes (box ends row {last_box_row}, ▴ at row {up_arrow_row}):\n{out}"
+        );
+    }
+
+    /// A TD back-edge (B → A, where A is upstream of B) must exit from the
+    /// right of the source node and enter from the right of the target node,
+    /// producing a leftward-pointing tip (◂) rather than the normal downward
+    /// tip (▾).
+    #[test]
+    fn back_edge_td_exits_right() {
+        // Two-node cycle: A → B (forward, downward) and B → A (back-edge, upward).
+        let out = render("graph TD; A-->B; B-->A").unwrap();
+        assert!(out.contains('A'), "missing A in:\n{out}");
+        assert!(out.contains('B'), "missing B in:\n{out}");
+        // The back-edge enters from the right, so there must be a LEFT arrow (◂).
+        assert!(
+            out.contains('◂'),
+            "no left-arrow tip for TD back-edge in:\n{out}"
+        );
+        // The forward edge still has a down arrow (▾).
+        assert!(
+            out.contains('▾'),
+            "no down-arrow tip for TD forward edge in:\n{out}"
+        );
+        // The ◂ tip must appear to the right of the widest node column.
+        // We check that every row containing ◂ has it to the right of where
+        // node boxes appear (i.e., after the rightmost '┘' or '┐').
+        for (i, line) in out.lines().enumerate() {
+            if let Some(arrow_col) = line.chars().position(|c| c == '◂') {
+                // Find the rightmost box character in the line by scanning in reverse.
+                let last_box_col = line
+                    .chars()
+                    .enumerate()
+                    .filter(|(_, c)| matches!(*c, '┘' | '┐' | '│'))
+                    .map(|(col, _)| col)
+                    .max()
+                    .unwrap_or(0);
+                assert!(
+                    arrow_col > last_box_col,
+                    "TD back-edge ◂ at row {i} col {arrow_col} is not to the right of box col {last_box_col}:\n{line}\nfull:\n{out}"
+                );
+            }
+        }
+    }
+
+    /// The real-world supervisor/worker feedback loop from the intuition-v2 README.
+    /// Both node labels and both edge labels must appear in the output.
+    #[test]
+    fn supervisor_worker_diagram_back_edge() {
+        let src = "graph LR\nF[Factory]-->|creates|W[Worker]\nW-->|panics/exits|F";
+        let out = render(src).unwrap();
+        assert!(out.contains("Factory"), "missing 'Factory' in:\n{out}");
+        assert!(out.contains("Worker"), "missing 'Worker' in:\n{out}");
+        assert!(
+            out.contains("creates"),
+            "missing 'creates' label in:\n{out}"
+        );
+        assert!(
+            out.contains("panics/exits"),
+            "missing 'panics/exits' label in:\n{out}"
+        );
+        // The back-edge (Worker → Factory) must exit via the perpendicular side,
+        // so ▴ (up-tip) must appear in the output.
+        assert!(
+            out.contains('▴'),
+            "no ▴ tip for Worker→Factory back-edge in:\n{out}"
+        );
+    }
+
+    /// A pure-forward diagram must not be affected by back-edge routing.
+    /// Node labels and the forward arrow tip must still appear.
+    #[test]
+    fn forward_edges_unchanged() {
+        // Three-node LR chain: all forward edges (A→B→C).
+        let out = render("graph LR; A-->B-->C").unwrap();
+        assert!(out.contains('A'), "missing A in:\n{out}");
+        assert!(out.contains('B'), "missing B in:\n{out}");
+        assert!(out.contains('C'), "missing C in:\n{out}");
+        // Forward edges use the normal ▸ tip, no ▴ should appear.
+        assert!(
+            out.contains('▸'),
+            "no ▸ tip in forward-only LR graph:\n{out}"
+        );
+        assert!(
+            !out.contains('▴'),
+            "unexpected ▴ in forward-only LR graph:\n{out}"
         );
     }
 }

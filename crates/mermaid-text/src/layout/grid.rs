@@ -953,11 +953,7 @@ impl Grid {
     /// The `tip` and `back_tip` cells must be placed by the caller after this
     /// call — they are not in `path_cells` (the path slice passed here should
     /// exclude the terminal arrow cell).
-    pub fn overdraw_path_style(
-        &mut self,
-        path_cells: &[(usize, usize)],
-        style: EdgeLineStyle,
-    ) {
+    pub fn overdraw_path_style(&mut self, path_cells: &[(usize, usize)], style: EdgeLineStyle) {
         if style == EdgeLineStyle::Solid {
             return;
         }
@@ -976,9 +972,9 @@ impl Grid {
                     // get dotted glyphs; junctions stay solid to avoid
                     // mismatched box-drawing characters.
                     self.cells[r][c] = match bits {
-                        0b0001..=0b0011 => dotted::V,    // any vertical-only
+                        0b0001..=0b0011 => dotted::V,          // any vertical-only
                         0b0100 | 0b1000 | 0b1100 => dotted::H, // any horizontal-only
-                        _ => DIR_TO_CHAR[bits as usize],  // junction → stay solid
+                        _ => DIR_TO_CHAR[bits as usize],       // junction → stay solid
                     };
                 }
                 EdgeLineStyle::Thick => {

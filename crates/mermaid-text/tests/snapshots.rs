@@ -235,3 +235,24 @@ fn crossing_edges_with_cross_junction() {
     let out = mermaid_text::render(src).unwrap();
     assert_snapshot!("crossing_edges_with_cross_junction", out);
 }
+
+// ---------------------------------------------------------------------------
+// 16. ASCII mode — same source as simple_chain_lr rendered without Unicode
+// ---------------------------------------------------------------------------
+#[test]
+fn ascii_mode() {
+    let out = mermaid_text::render_ascii("graph LR; A-->B-->C").unwrap();
+    // Snapshot the ASCII output so any future visual regression is caught.
+    assert_snapshot!("ascii_mode", out);
+}
+
+// ---------------------------------------------------------------------------
+// 17. Back-edge LR — chain with a feedback edge (C → A)
+//     Regression guard: the back-edge must route below the node row (▴ tip)
+//     and must not cut through any node box.
+// ---------------------------------------------------------------------------
+#[test]
+fn back_edge_lr() {
+    let out = mermaid_text::render("graph LR; A-->B-->C; C-->A").unwrap();
+    assert_snapshot!("back_edge_lr", out);
+}

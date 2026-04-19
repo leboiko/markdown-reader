@@ -162,7 +162,10 @@ fn collect_orthogonal_sets<'a>(
     out: &mut Vec<Vec<String>>,
 ) {
     for sg in subs {
-        if sg.direction.is_some_and(|sg_dir| is_orthogonal(parent_direction, sg_dir)) {
+        if sg
+            .direction
+            .is_some_and(|sg_dir| is_orthogonal(parent_direction, sg_dir))
+        {
             // This subgraph's direct children should collapse to one layer.
             out.push(sg.node_ids.clone());
         }
@@ -181,7 +184,12 @@ fn collect_orthogonal_sets<'a>(
 /// subgraphs relative to the graph's own direction.
 fn orthogonal_node_sets(graph: &Graph) -> Vec<Vec<String>> {
     let mut result = Vec::new();
-    collect_orthogonal_sets(&graph.subgraphs, &graph.subgraphs, graph.direction, &mut result);
+    collect_orthogonal_sets(
+        &graph.subgraphs,
+        &graph.subgraphs,
+        graph.direction,
+        &mut result,
+    );
     result
 }
 
@@ -244,12 +252,18 @@ fn assign_layers(graph: &Graph) -> HashMap<String, usize> {
     let ortho_sets = orthogonal_node_sets(graph);
     if !ortho_sets.is_empty() {
         // Build flat set of all orthogonal node IDs for fast membership tests.
-        let all_ortho: std::collections::HashSet<&str> =
-            ortho_sets.iter().flat_map(|s| s.iter().map(String::as_str)).collect();
+        let all_ortho: std::collections::HashSet<&str> = ortho_sets
+            .iter()
+            .flat_map(|s| s.iter().map(String::as_str))
+            .collect();
 
         // Collapse each set to min layer.
         for set in &ortho_sets {
-            let present: Vec<&str> = set.iter().map(String::as_str).filter(|id| layer.contains_key(*id)).collect();
+            let present: Vec<&str> = set
+                .iter()
+                .map(String::as_str)
+                .filter(|id| layer.contains_key(*id))
+                .collect();
             if present.is_empty() {
                 continue;
             }
@@ -411,8 +425,7 @@ fn order_within_layers(graph: &Graph, layers: &HashMap<String, usize>) -> Vec<Ve
                     topo.push(node.to_owned());
                     // Clone successor list to avoid borrow conflicts while we
                     // mutate `in_degree` in the same loop body.
-                    let succs: Vec<&str> =
-                        successors.get(node).cloned().unwrap_or_default();
+                    let succs: Vec<&str> = successors.get(node).cloned().unwrap_or_default();
                     for succ in succs {
                         let d = in_degree.entry(succ).or_default();
                         *d = d.saturating_sub(1);
@@ -583,10 +596,9 @@ fn node_box_width(graph: &Graph, id: &str) -> usize {
             NodeShape::Diamond => inner,
             // Circle/Stadium/Hexagon/Asymmetric add 1 extra char on each side
             // for their distinctive markers inside the border.
-            NodeShape::Circle
-            | NodeShape::Stadium
-            | NodeShape::Hexagon
-            | NodeShape::Asymmetric => inner + 2,
+            NodeShape::Circle | NodeShape::Stadium | NodeShape::Hexagon | NodeShape::Asymmetric => {
+                inner + 2
+            }
             // Subroutine adds 1 extra char on each side for inner vertical bars.
             NodeShape::Subroutine => inner + 2,
             // Cylinder: standard width — arcs are drawn at top/bottom centre.

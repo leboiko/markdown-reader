@@ -108,7 +108,10 @@ fn main() {
     // --- Part A: New node shapes ---
     dump("stadium node", "graph LR; A([Stadium]) --> B[End]");
     dump("subroutine node", "graph LR; A[[Subroutine]] --> B[End]");
-    dump("cylinder (database) node", "graph LR; A[(Database)] --> B[End]");
+    dump(
+        "cylinder (database) node",
+        "graph LR; A[(Database)] --> B[End]",
+    );
     dump("hexagon node", "graph LR; A{{Hexagon}} --> B[End]");
     dump("asymmetric node", "graph LR; A>Flag] --> B[End]");
     dump("parallelogram node", "graph LR; A[/Lean/] --> B[End]");

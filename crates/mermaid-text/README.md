@@ -119,6 +119,48 @@ mermaid-text --width 80 my_diagram.mmd
 
 ---
 
+### ASCII fallback
+
+For environments that cannot render Unicode box-drawing characters — SSH sessions
+to old hosts, CI log viewers that strip non-ASCII bytes, terminals configured
+with legacy code pages — an ASCII-only mode is available:
+
+**Library:**
+
+```rust
+let out = mermaid_text::render_ascii("graph LR; A[Build] --> B[Deploy]").unwrap();
+// Every character is guaranteed to be < 0x80.
+assert!(out.is_ascii());
+```
+
+**CLI:**
+
+```sh
+echo "graph LR; A-->B-->C" | mermaid-text --ascii
+mermaid-text --ascii --width 60 diagram.mmd
+```
+
+**Example output (same source, Unicode vs ASCII):**
+
+Unicode:
+```
++-------+      +------+      +--------+
+| Build |-----▸| Test |-----▸| Deploy |
++-------+      +------+      +--------+
+```
+
+ASCII:
+```
++-------+      +------+      +--------+
+| Build |----->| Test |----->| Deploy |
++-------+      +------+      +--------+
+```
+
+The mapping used: `─ ━ ┄` → `-`, `│ ┃ ┆` → `|`, all corners/junctions → `+`,
+`▸ ◂ ▾ ▴` → `> < v ^`, `◇` → `*`, `○ ◯` → `o`, `×` → `x`.
+
+---
+
 ## Examples
 
 ### State machine

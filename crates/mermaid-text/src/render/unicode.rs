@@ -58,14 +58,13 @@ impl NodeGeom {
                 text_row: 1,
             },
             // Circle, stadium, hexagon, asymmetric: +2 width for side markers.
-            NodeShape::Circle
-            | NodeShape::Stadium
-            | NodeShape::Hexagon
-            | NodeShape::Asymmetric => NodeGeom {
-                width: inner_w + 2,
-                height: 3 + extra_lines,
-                text_row: 1,
-            },
+            NodeShape::Circle | NodeShape::Stadium | NodeShape::Hexagon | NodeShape::Asymmetric => {
+                NodeGeom {
+                    width: inner_w + 2,
+                    height: 3 + extra_lines,
+                    text_row: 1,
+                }
+            }
             // Subroutine: +2 width for inner vertical bars.
             NodeShape::Subroutine => NodeGeom {
                 width: inner_w + 2,
@@ -164,6 +163,89 @@ fn entry_point(pos: GridPos, geom: NodeGeom, dir: Direction) -> Attach {
     }
 }
 
+/// Compute the **back-edge exit** point: the perpendicular side opposite to the
+/// flow direction.
+///
+/// For LR/RL graphs, back-edges exit from the bottom of the source node.
+/// For TD/BT graphs, back-edges exit from the right of the source node.
+/// This pushes the back-edge path around the perimeter rather than through the
+/// centre of the diagram.
+fn exit_point_back_edge(pos: GridPos, geom: NodeGeom, dir: Direction) -> Attach {
+    let (c, r) = pos;
+    match dir {
+        // Horizontal flow (LR or RL): exit from the bottom centre.
+        Direction::LeftToRight | Direction::RightToLeft => Attach {
+            col: c + geom.cx(),
+            row: r + geom.height, // one row below the bottom border
+        },
+        // Vertical flow (TD or BT): exit from the right centre.
+        Direction::TopToBottom | Direction::BottomToTop => Attach {
+            col: c + geom.width, // one column past the right border
+            row: r + geom.cy(),
+        },
+    }
+}
+
+/// Compute the **back-edge entry** point: the perpendicular side opposite to
+/// the flow direction on the destination node.
+///
+/// Symmetric to [`exit_point_back_edge`]: back-edges enter from the bottom for
+/// LR/RL graphs, and from the right for TD/BT graphs.
+fn entry_point_back_edge(pos: GridPos, geom: NodeGeom, dir: Direction) -> Attach {
+    let (c, r) = pos;
+    match dir {
+        // Horizontal flow: enter from the bottom centre.
+        Direction::LeftToRight | Direction::RightToLeft => Attach {
+            col: c + geom.cx(),
+            row: r + geom.height, // one row below the bottom border
+        },
+        // Vertical flow: enter from the right centre.
+        Direction::TopToBottom | Direction::BottomToTop => Attach {
+            col: c + geom.width, // one column past the right border
+            row: r + geom.cy(),
+        },
+    }
+}
+
+/// Return the arrow-tip character appropriate when a back-edge *arrives* at its
+/// destination via the perpendicular side.
+///
+/// For LR/RL: the edge enters from below the target node, so the tip points UP.
+/// For TD/BT: the edge enters from the right of the target node, so the tip
+/// points LEFT.
+fn tip_char_for_back_edge(dir: Direction) -> char {
+    match dir {
+        Direction::LeftToRight | Direction::RightToLeft => arrow::UP,
+        Direction::TopToBottom | Direction::BottomToTop => arrow::LEFT,
+    }
+}
+
+/// Determine whether an edge is a "back-edge" — one whose target is strictly
+/// upstream of its source in the flow direction.
+///
+/// Back-edges travel against the primary layout axis (e.g. a feedback loop in
+/// an LR graph that goes from a downstream node back to an upstream one). They
+/// are rerouted around the perimeter to avoid cutting across the diagram.
+///
+/// Edges between nodes at the **same** layer position (equal column for LR, equal
+/// row for TD, etc.) are NOT treated as back-edges — they are perpendicular-axis
+/// connections (e.g. internal edges of a TD subgraph inside an LR parent) and
+/// should use the normal routing path.
+fn is_back_edge(from_pos: GridPos, to_pos: GridPos, dir: Direction) -> bool {
+    let (fc, fr) = from_pos;
+    let (tc, tr) = to_pos;
+    match dir {
+        // LR: back-edge if target column is strictly left of source column.
+        Direction::LeftToRight => tc < fc,
+        // RL: back-edge if target column is strictly right of source column.
+        Direction::RightToLeft => tc > fc,
+        // TD: back-edge if target row is strictly above source row.
+        Direction::TopToBottom => tr < fr,
+        // BT: back-edge if target row is strictly below source row.
+        Direction::BottomToTop => tr > fr,
+    }
+}
+
 /// Select the correct back-tip glyph (source end of a bidirectional edge).
 ///
 /// The back-tip always points in the reverse direction of the flow.
@@ -197,6 +279,10 @@ fn tip_char(dir: Direction) -> char {
 /// The grid must be wide/tall enough to hold node boxes plus any edge labels
 /// and subgraph border rectangles. Both axes also receive a fixed +4 margin
 /// for arrow heads and routing headroom.
+///
+/// When back-edges are present, an additional 4-row (LR/RL) or 4-column
+/// (TD/BT) corridor is added so that A\* can route the perimeter path without
+/// going out of bounds.
 fn grid_size(
     graph: &Graph,
     positions: &HashMap<String, GridPos>,
@@ -233,6 +319,36 @@ fn grid_size(
         // label positions (labels on back-edges can appear at the far edge).
         max_col += max_label_w + 2;
         max_row += max_label_w + 2;
+    }
+
+    // Extra corridor for back-edge perimeter routing.
+    //
+    // Back-edges exit from the bottom (LR/RL) or right (TD/BT) of both source
+    // and target nodes, then travel around the perimeter. Without extra room
+    // below (or to the right of) the last node row/column, A* runs out of
+    // bounds and falls back to Manhattan routing that cuts through the middle.
+    // Four cells is enough for the corridor + arrow tip.
+    let has_back_edge = graph.edges.iter().any(|e| {
+        let Some(&fp) = positions.get(&e.from) else {
+            return false;
+        };
+        let Some(&tp) = positions.get(&e.to) else {
+            return false;
+        };
+        is_back_edge(fp, tp, graph.direction)
+    });
+
+    if has_back_edge {
+        match graph.direction {
+            // LR/RL: back-edges travel along a row *below* all nodes.
+            Direction::LeftToRight | Direction::RightToLeft => {
+                max_row += 4;
+            }
+            // TD/BT: back-edges travel along a column *to the right* of all nodes.
+            Direction::TopToBottom | Direction::BottomToTop => {
+                max_col += 4;
+            }
+        }
     }
 
     (max_col.max(1), max_row.max(1))
@@ -336,13 +452,37 @@ pub fn render(
         };
         let (src, dst) = (*src, *dst);
 
+        // Determine whether this edge is a back-edge so we can select the
+        // correct tip character. Back-edges enter their target from a
+        // perpendicular side, so the tip must point in the perpendicular
+        // direction rather than the primary flow direction.
+        let edge_is_back = {
+            let from_pos = positions.get(&edge.from).copied();
+            let to_pos = positions.get(&edge.to).copied();
+            match (from_pos, to_pos) {
+                (Some(fp), Some(tp)) => is_back_edge(fp, tp, graph.direction),
+                _ => false,
+            }
+        };
+
         // Select the forward tip character (destination end).
         // For EdgeEndpoint::None (plain line), we route with the normal arrow
         // so the path is drawn correctly by route_edge, then immediately clear
         // the tip protection so the no-arrow cell merges into the path glyph.
-        let fwd_tip = tip_char(graph.direction);
+        let fwd_tip = if edge_is_back {
+            tip_char_for_back_edge(graph.direction)
+        } else {
+            tip_char(graph.direction)
+        };
         let horizontal_first = graph.direction.is_horizontal();
-        let path = grid.route_edge(src.col, src.row, dst.col, dst.row, horizontal_first, fwd_tip);
+        let path = grid.route_edge(
+            src.col,
+            src.row,
+            dst.col,
+            dst.row,
+            horizontal_first,
+            fwd_tip,
+        );
 
         // Post-process the destination tip cell for non-arrow endpoints.
         //
@@ -361,7 +501,14 @@ pub fn render(
                 EdgeEndpoint::None => {
                     // Continue the last segment direction without an arrowhead.
                     // For LR/RL flow the last segment is horizontal; for TD/BT vertical.
-                    if horizontal_first { '─' } else { '│' }
+                    // For back-edges the last segment is vertical (LR) or horizontal (TD).
+                    if edge_is_back {
+                        if horizontal_first { '│' } else { '─' }
+                    } else if horizontal_first {
+                        '─'
+                    } else {
+                        '│'
+                    }
                 }
                 EdgeEndpoint::Circle => endpoint::CIRCLE,
                 EdgeEndpoint::Cross => endpoint::CROSS,
@@ -463,6 +610,10 @@ fn compute_spread_attaches(
     geoms: &HashMap<String, NodeGeom>,
 ) -> Vec<Option<(Attach, Attach)>> {
     // --- Build the base (unspread) attach points ---
+    //
+    // Back-edges (target upstream of source in the flow direction) use
+    // perpendicular attach points so they travel around the perimeter instead
+    // of cutting across the centre of the diagram.
     let mut pairs: Vec<Option<(Attach, Attach)>> = graph
         .edges
         .iter()
@@ -471,9 +622,15 @@ fn compute_spread_attaches(
             let to_pos = *positions.get(&edge.to)?;
             let from_geom = *geoms.get(&edge.from)?;
             let to_geom = *geoms.get(&edge.to)?;
-            let src = exit_point(from_pos, from_geom, graph.direction);
-            let dst = entry_point(to_pos, to_geom, graph.direction);
-            Some((src, dst))
+            if is_back_edge(from_pos, to_pos, graph.direction) {
+                let src = exit_point_back_edge(from_pos, from_geom, graph.direction);
+                let dst = entry_point_back_edge(to_pos, to_geom, graph.direction);
+                Some((src, dst))
+            } else {
+                let src = exit_point(from_pos, from_geom, graph.direction);
+                let dst = entry_point(to_pos, to_geom, graph.direction);
+                Some((src, dst))
+            }
         })
         .collect();
 

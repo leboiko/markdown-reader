@@ -376,8 +376,8 @@ fn tokenise_chain(stmt: &str) -> Vec<String> {
         // We look for `-`, `=`, or `<` (for bidirectional) not inside a node bracket.
         let ch = chars[i];
 
-        let is_potential_arrow_start = (ch == '-' || ch == '=' || ch == '<')
-            && !current.trim().is_empty();
+        let is_potential_arrow_start =
+            (ch == '-' || ch == '=' || ch == '<') && !current.trim().is_empty();
 
         if is_potential_arrow_start && is_arrow_start(&chars, i) {
             // Push the current node token
@@ -452,17 +452,26 @@ fn classify_arrow(arrow: &str) -> (EdgeStyle, EdgeEndpoint, EdgeEndpoint) {
     // Thick with arrow: ==>
     if base.starts_with('=') {
         let has_arrow = base.ends_with('>');
-        let end = if has_arrow { EdgeEndpoint::Arrow } else { EdgeEndpoint::None };
+        let end = if has_arrow {
+            EdgeEndpoint::Arrow
+        } else {
+            EdgeEndpoint::None
+        };
         return (EdgeStyle::Thick, EdgeEndpoint::None, end);
     }
     // Dotted: -.- or -.->
     if base.contains(".-") || base.contains("-.") {
         let has_arrow = base.ends_with('>');
-        let end = if has_arrow { EdgeEndpoint::Arrow } else { EdgeEndpoint::None };
+        let end = if has_arrow {
+            EdgeEndpoint::Arrow
+        } else {
+            EdgeEndpoint::None
+        };
         return (EdgeStyle::Dotted, EdgeEndpoint::None, end);
     }
     // Solid no-arrow: ---  or "-- label --" (no trailing >)
-    if base.starts_with('-') && !base.ends_with('>') && !base.ends_with('o') && !base.ends_with('x') {
+    if base.starts_with('-') && !base.ends_with('>') && !base.ends_with('o') && !base.ends_with('x')
+    {
         return (EdgeStyle::Solid, EdgeEndpoint::None, EdgeEndpoint::None);
     }
     // Default: solid arrow -->
@@ -515,7 +524,9 @@ fn consume_arrow(chars: &[char], start: usize) -> (String, usize) {
             }
         }
         let has_arrow = remaining[len..].starts_with('>');
-        if has_arrow { len += 1; }
+        if has_arrow {
+            len += 1;
+        }
         let (label_part, extra) = try_consume_pipe_label(&remaining[len..]);
         let tok = format!("{}{label_part}", &remaining[..len]);
         return (tok, len + extra);
@@ -694,8 +705,7 @@ pub(crate) fn parse_node_definition(token: &str) -> Option<Node> {
         else if rest.starts_with('>') && rest.ends_with(']') {
             let inner = rest[1..rest.len() - 1].trim().to_string();
             (id, inner, NodeShape::Asymmetric)
-        }
-        else {
+        } else {
             // Unrecognised bracket pattern — treat entire token as bare ID.
             let id = token.to_string();
             (id.clone(), id, NodeShape::Rectangle)

@@ -3,6 +3,35 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.3.0 — 2026-04-18
+
+### Added
+
+- **`sequenceDiagram` support (MVP)** — `sequenceDiagram` with
+  `participant`/`actor` declarations (optional `as Alias`) and message
+  arrows (`->>`, `-->>`, `->`, `-->`) now renders as a sequence diagram
+  with participant boxes across the top, dashed `┆` lifelines, and
+  horizontally-drawn message arrows. Block statements, activation bars,
+  notes, and `autonumber` are parsed-and-skipped with TODO markers.
+- **ASCII rendering mode** — `render_ascii(input)` and
+  `render_ascii_with_width(input, max_width)` produce output in which every
+  character is in the ASCII range.  The Unicode renderer runs unchanged; a
+  post-processing pass (`to_ascii`) substitutes each box-drawing or arrow glyph
+  with a plain ASCII equivalent (`+`, `-`, `|`, `>`, `<`, `v`, `^`, `*`, `o`,
+  `x`).  All three functions are exported at the crate root.
+- **`--ascii` CLI flag** — `mermaid-text --ascii [--width N] [FILE]` invokes
+  `render_ascii_with_width` instead of `render_with_width`.  `--help` text
+  updated.
+- **Back-edge perimeter routing** — edges that travel against the primary flow
+  direction (e.g. `W --> F` in an `LR` graph where `F` is upstream of `W`)
+  now exit the source from the perpendicular side (bottom for `LR`/`RL`,
+  right for `TD`/`BT`), travel along a corridor outside the node grid, and
+  enter the target from the same perpendicular side.  The arrow tip reflects
+  the entry direction (`▴` for `LR`/`RL` back-edges, `◂` for `TD`/`BT`).
+  This prevents back-edges from cutting through the middle of the diagram and
+  makes feedback loops (circuit breakers, supervisor/worker restart arcs)
+  visually distinct from forward edges.
+
 ## 0.2.5 — 2026-04-18
 
 ### Fixed

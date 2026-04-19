@@ -17,8 +17,8 @@
 //! assert_eq!(diag.messages.len(), 1);
 //! ```
 
-use crate::sequence::{Message, MessageStyle, Participant, SequenceDiagram};
 use crate::Error;
+use crate::sequence::{Message, MessageStyle, Participant, SequenceDiagram};
 
 // ---------------------------------------------------------------------------
 // Arrow token table — ordered longest-first so the greediest match wins.
@@ -197,7 +197,12 @@ fn try_parse_message(line: &str) -> Option<Message> {
                 continue;
             }
 
-            return Some(Message { from, to, text, style });
+            return Some(Message {
+                from,
+                to,
+                text,
+                style,
+            });
         }
     }
     None

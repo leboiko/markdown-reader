@@ -1282,7 +1282,7 @@ dependencies = [
 
 [[package]]
 name = "mermaid-text"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "insta",
  "unicode-width",

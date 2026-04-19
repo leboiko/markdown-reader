@@ -153,8 +153,12 @@ fn compute_layout(diag: &SequenceDiagram) -> Vec<ParticipantLayout> {
     let mut gap_mins = vec![MIN_GAP; n.saturating_sub(1)];
 
     for msg in &diag.messages {
-        let Some(si) = diag.participant_index(&msg.from) else { continue };
-        let Some(ti) = diag.participant_index(&msg.to) else { continue };
+        let Some(si) = diag.participant_index(&msg.from) else {
+            continue;
+        };
+        let Some(ti) = diag.participant_index(&msg.to) else {
+            continue;
+        };
         if si == ti {
             continue; // self-message; handled separately
         }
@@ -388,7 +392,12 @@ pub fn render(diag: &SequenceDiagram) -> String {
 
     // 1. Draw participant boxes.
     for (i, p) in diag.participants.iter().enumerate() {
-        draw_participant_box(&mut canvas, layouts[i].center, layouts[i].box_width, &p.label);
+        draw_participant_box(
+            &mut canvas,
+            layouts[i].center,
+            layouts[i].box_width,
+            &p.label,
+        );
     }
 
     // 2. Draw lifelines from bottom of boxes to end of canvas.
@@ -402,14 +411,24 @@ pub fn render(diag: &SequenceDiagram) -> String {
     // The first message arrow goes on row BOX_HEIGHT + 1 (leaving row BOX_HEIGHT
     // as the label row).  Each subsequent message is EVENT_ROW_H rows further down.
     for (msg_idx, msg) in diag.messages.iter().enumerate() {
-        let Some(si) = diag.participant_index(&msg.from) else { continue };
-        let Some(ti) = diag.participant_index(&msg.to) else { continue };
+        let Some(si) = diag.participant_index(&msg.from) else {
+            continue;
+        };
+        let Some(ti) = diag.participant_index(&msg.to) else {
+            continue;
+        };
 
         // Arrow row: BOX_HEIGHT + 1 + msg_idx * EVENT_ROW_H
         let arrow_row = BOX_HEIGHT + 1 + msg_idx * EVENT_ROW_H;
 
         if si == ti {
-            draw_self_message(&mut canvas, layouts[si].center, arrow_row, &msg.text, msg.style);
+            draw_self_message(
+                &mut canvas,
+                layouts[si].center,
+                arrow_row,
+                &msg.text,
+                msg.style,
+            );
         } else {
             draw_message(
                 &mut canvas,
@@ -495,5 +514,4 @@ mod tests {
         let diag = crate::sequence::SequenceDiagram::default();
         assert_eq!(render(&diag), "");
     }
-
 }
