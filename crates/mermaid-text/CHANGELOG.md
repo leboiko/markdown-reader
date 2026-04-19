@@ -3,6 +3,19 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.3.4 — 2026-04-18
+
+### Fixed
+
+- `sequenceDiagram` self-messages (`A->>A: text`) now read as visually
+  attached to their source lifeline. Previously the loop's top and bottom
+  legs started with the dashed lifeline char `┆`, which on most fonts
+  doesn't visually join the solid horizontal `─` — users reported the
+  loop looked like a floating box disconnected from the lifeline.
+  Replaced the lifeline cell at both leg rows with `├` (solid T-junction
+  branching right) and moved the return arrow `◂` one cell inward so
+  both connection points read clearly.
+
 ## 0.3.3 — 2026-04-18
 
 ### Fixed

@@ -325,24 +325,30 @@ fn draw_self_message(canvas: &mut Canvas, cx: usize, row: usize, text: &str, sty
     let loop_w = text.width().max(4) + 4;
     let right = cx + loop_w;
 
-    // Top horizontal leg
+    // Top leg: `├──────┐`. `├` at the lifeline column makes the branch-off
+    // from the lifeline visually explicit (otherwise the dashed `┆` lifeline
+    // cell reads as disconnected from the solid horizontal). Horizontal
+    // segment fills the rest, `┐` is the top-right corner.
+    canvas.put(row, cx, '├');
     for c in (cx + 1)..right {
         canvas.put(row, c, h_char);
     }
     canvas.put(row, right, '┐');
 
-    // Bottom horizontal leg (row + 1)
-    for c in (cx + 1)..right {
+    // Bottom leg: `├◂─────┘`. T-junction at the lifeline, arrow tip
+    // immediately inside the loop so the return-to-sender direction reads
+    // clearly, then horizontal segment, then `┘` corner. For plain-line
+    // (no-arrow) style the arrow slot becomes another horizontal char.
+    canvas.put(row + 1, cx, '├');
+    if style.has_arrow() {
+        canvas.put(row + 1, cx + 1, ARROW_LEFT);
+    } else {
+        canvas.put(row + 1, cx + 1, h_char);
+    }
+    for c in (cx + 2)..right {
         canvas.put(row + 1, c, h_char);
     }
     canvas.put(row + 1, right, '┘');
-
-    // Arrowhead or plain line at the return point.
-    if style.has_arrow() {
-        canvas.put(row + 1, cx, ARROW_LEFT);
-    } else {
-        canvas.put(row + 1, cx, h_char);
-    }
 
     // Label above.
     if !text.is_empty() && row > 0 {
