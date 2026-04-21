@@ -16,10 +16,89 @@ use std::collections::HashMap;
 
 use unicode_width::UnicodeWidthStr;
 
-use crate::types::{Graph, Subgraph};
+use crate::types::{Direction, Graph, Subgraph};
 
 /// Cells of padding between nodes and the subgraph border.
 pub const SG_BORDER_PAD: usize = 2;
+
+/// Compute extra horizontal/vertical room a subgraph needs because of
+/// parallel-edge labels between its direct members.
+///
+/// Returns `(extra_w, extra_h)` cells.
+///
+/// **Only fires when the subgraph overrides the parent graph's flow
+/// direction** (e.g., a `direction TB` subgraph inside an `LR` graph).
+/// When the subgraph inherits the parent direction, the existing
+/// `label_gap` mechanism in `compute_positions` already widens the
+/// inter-layer crossing to fit parallel labels — adding extra here
+/// would double-count and inflate empty subgraph rows/cols.
+///
+/// Axis: perpendicular to the subgraph's own flow direction.
+///   - TB/BT subgraph: labels stack horizontally between rows →
+///     expand WIDTH (so the LR/RL parent layer that contains the
+///     subgraph's column gets wider).
+///   - LR/RL subgraph: labels stack vertically between columns →
+///     expand HEIGHT (so the TB/BT parent layer that contains the
+///     subgraph's row gets taller).
+///
+/// Both [`compute_subgraph_bounds`] and the layered layout consume
+/// this so the border wraps cleanly around the labels AND external
+/// nodes get pushed out by the same amount, avoiding collisions.
+pub fn parallel_label_extra(graph: &Graph, sg: &Subgraph) -> (usize, usize) {
+    // Only kicks in when the subgraph overrides the parent direction.
+    let Some(sg_dir) = sg.direction else {
+        return (0, 0);
+    };
+    if direction_axis(sg_dir) == direction_axis(graph.direction) {
+        return (0, 0);
+    }
+
+    let parallel_groups = graph.parallel_edge_groups();
+    if parallel_groups.is_empty() {
+        return (0, 0);
+    }
+    let members: std::collections::HashSet<&str> =
+        sg.node_ids.iter().map(|s| s.as_str()).collect();
+
+    let mut max_label_width: usize = 0;
+    for group in &parallel_groups {
+        let Some(&first_idx) = group.first() else { continue };
+        let Some(first_edge) = graph.edges.get(first_idx) else { continue };
+        if !members.contains(first_edge.from.as_str())
+            || !members.contains(first_edge.to.as_str())
+        {
+            continue;
+        }
+        for &edge_idx in group {
+            if let Some(edge) = graph.edges.get(edge_idx)
+                && let Some(label) = &edge.label
+            {
+                max_label_width = max_label_width.max(UnicodeWidthStr::width(label.as_str()));
+            }
+        }
+    }
+
+    if max_label_width == 0 {
+        return (0, 0);
+    }
+
+    // 2 cells of breathing room beyond the widest label so neither end
+    // touches the border or the adjacent box edge.
+    let extra = max_label_width + 2;
+    match sg_dir {
+        Direction::TopToBottom | Direction::BottomToTop => (extra, 0),
+        Direction::LeftToRight | Direction::RightToLeft => (0, extra),
+    }
+}
+
+/// Returns `'h'` for horizontal flows (LR/RL) and `'v'` for vertical
+/// (TB/BT). Used to decide whether two directions share an axis.
+fn direction_axis(d: Direction) -> char {
+    match d {
+        Direction::LeftToRight | Direction::RightToLeft => 'h',
+        Direction::TopToBottom | Direction::BottomToTop => 'v',
+    }
+}
 
 /// Axis-aligned bounding box for a rendered subgraph border.
 ///
@@ -175,18 +254,24 @@ fn compute_bounds_recursive(
         return None; // subgraph has no placed nodes — skip
     }
 
+    // Per-axis extra room needed for parallel-edge labels between
+    // direct members. The layered layout has already widened the
+    // matching layer/row by the same amount (see `compute_positions`),
+    // so external nodes won't collide with the grown border.
+    let (extra_w, extra_h) = parallel_label_extra(graph, sg);
+
     // Apply padding: expand the raw content rect by SG_BORDER_PAD on all
     // sides. The label is written into the top border line itself.
     let border_col = min_col.saturating_sub(SG_BORDER_PAD);
     let border_row = min_row.saturating_sub(SG_BORDER_PAD);
 
-    let content_width = (max_col - min_col) + SG_BORDER_PAD * 2;
+    let content_width = (max_col - min_col) + SG_BORDER_PAD * 2 + extra_w;
     // Ensure the border is wide enough to show the full label with 2-cell
     // padding on each side (the corners count as 1 cell each).
     let label_width = UnicodeWidthStr::width(sg.label.as_str()) + 4;
     let border_width = content_width.max(label_width);
 
-    let border_height = (max_row - min_row) + SG_BORDER_PAD * 2;
+    let border_height = (max_row - min_row) + SG_BORDER_PAD * 2 + extra_h;
 
     let bounds = SubgraphBounds {
         id: sg.id.clone(),

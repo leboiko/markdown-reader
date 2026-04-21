@@ -15,7 +15,7 @@ use std::collections::HashMap;
 
 use unicode_width::UnicodeWidthStr;
 
-use crate::layout::subgraph::SG_BORDER_PAD;
+use crate::layout::subgraph::{SG_BORDER_PAD, parallel_label_extra};
 use crate::types::{BarOrientation, Direction, Graph, NodeShape, Subgraph};
 
 // ---------------------------------------------------------------------------
@@ -1178,6 +1178,52 @@ fn sibling_gap(
     base_gap + boundaries * SG_GAP_PER_BOUNDARY
 }
 
+/// Extra columns to add to a layer's width when one or more of its
+/// nodes lives in a subgraph that contains parallel-edge labels.
+/// Mirrors the bounds-side calculation so the border wraps cleanly
+/// around the labels and external nodes get pushed out by the same
+/// amount, avoiding collisions.
+fn layer_parallel_label_extra_width(
+    graph: &Graph,
+    layer_nodes: &[String],
+    node_to_sg: &HashMap<String, String>,
+) -> usize {
+    layer_parallel_label_extra(graph, layer_nodes, node_to_sg, /* axis_w = */ true)
+}
+
+fn layer_parallel_label_extra_height(
+    graph: &Graph,
+    layer_nodes: &[String],
+    node_to_sg: &HashMap<String, String>,
+) -> usize {
+    layer_parallel_label_extra(graph, layer_nodes, node_to_sg, /* axis_w = */ false)
+}
+
+/// Take the max parallel-edge-label extra (per `parallel_label_extra`)
+/// across the subgraphs that own any of `layer_nodes`. `axis_w` picks
+/// the width-axis (`true`) or height-axis (`false`) component of the
+/// returned `(extra_w, extra_h)` tuple.
+fn layer_parallel_label_extra(
+    graph: &Graph,
+    layer_nodes: &[String],
+    node_to_sg: &HashMap<String, String>,
+    axis_w: bool,
+) -> usize {
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut max_extra: usize = 0;
+    for nid in layer_nodes {
+        let Some(sg_id) = node_to_sg.get(nid) else { continue };
+        if !seen.insert(sg_id.as_str()) {
+            continue;
+        }
+        let Some(sg) = graph.find_subgraph(sg_id) else { continue };
+        let (w, h) = parallel_label_extra(graph, sg);
+        let extra = if axis_w { w } else { h };
+        max_extra = max_extra.max(extra);
+    }
+    max_extra
+}
+
 /// Convert the ordered layer buckets into character-grid `(col, row)` positions.
 fn compute_positions(
     graph: &Graph,
@@ -1209,12 +1255,22 @@ fn compute_positions(
                     continue;
                 }
 
-                // Column width = widest node in this layer
-                let layer_width = layer_nodes
+                // Column width = widest node in this layer, plus any
+                // extra room a containing subgraph needs for its
+                // parallel-edge labels (TB/BT subgraph stacks members
+                // vertically — labels run horizontally between them
+                // and steal column width).
+                let base_layer_width = layer_nodes
                     .iter()
                     .map(|id| node_box_width(graph, id))
                     .max()
                     .unwrap_or(6);
+                let extra_w = layer_parallel_label_extra_width(
+                    graph,
+                    layer_nodes,
+                    &node_to_sg,
+                );
+                let layer_width = base_layer_width + extra_w;
 
                 let mut row = 0usize;
                 let mut prev: Option<&str> = None;
@@ -1274,12 +1330,22 @@ fn compute_positions(
                     continue;
                 }
 
-                // Row height = tallest node in this layer
-                let layer_height = layer_nodes
+                // Row height = tallest node in this layer, plus any
+                // extra room a containing subgraph needs for its
+                // parallel-edge labels (LR/RL subgraph stacks members
+                // horizontally — labels run vertically between them
+                // and steal row height).
+                let base_layer_height = layer_nodes
                     .iter()
                     .map(|id| node_box_height(graph, id))
                     .max()
                     .unwrap_or(3);
+                let extra_h = layer_parallel_label_extra_height(
+                    graph,
+                    layer_nodes,
+                    &node_to_sg,
+                );
+                let layer_height = base_layer_height + extra_h;
 
                 let mut col = 0usize;
                 let mut prev: Option<&str> = None;

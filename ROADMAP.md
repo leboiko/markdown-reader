@@ -137,7 +137,7 @@ with box-integrity improvements; 10 new unit tests + 2 reproducer
 snapshots (`supervisor_bidirectional_in_subgraph` and
 `cicd_parallel_styles_to_same_target`).
 
-#### 2. Multiple labelled edges between same node pair — **SHIPPED IN 0.12.0** ✓
+#### 2. Multiple labelled edges between same node pair — **SHIPPED IN 0.12.0 + 0.13.0** ✓
 
 **What 0.9.5 first did:** subgraph borders stopped getting
 punctured — in the CI/CD case `pass` landed at col 41

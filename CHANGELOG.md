@@ -5,6 +5,18 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.14.0] - 2026-04-22
+
+### Fixed
+
+- **Subgraph labels in mixed-direction diagrams have breathing room
+  from the border** (via `mermaid-text` 0.13.0). Phase 3 of the
+  parallel-edge work: `direction TB` subgraphs inside an `LR` graph
+  (and vice versa) widen their bounds when they contain
+  parallel-edge labels, with the layered layout pre-allocating the
+  same extra space so external nodes don't collide. Visible on the
+  README Supervisor (`creates`/`panics`) example. Free upgrade.
+
 ## [1.13.5] - 2026-04-22
 
 ### Fixed

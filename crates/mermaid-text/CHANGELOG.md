@@ -3,6 +3,42 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.13.0 — 2026-04-22
+
+### Fixed
+
+- **Subgraphs containing parallel-edge labels now have visible
+  breathing room** (Phase 3 of the parallel-edges scope, ROADMAP
+  item #2 second-pass). The Supervisor reproducer used to render
+  with `creates` and `panics` labels glued flush against the
+  subgraph's right border:
+  ```
+  Before:                       After:
+  ╭─Supervisor──╮               ╭─Supervisor───────────╮
+  │└─────creates│               │└─────creates         │
+  │┌────panics┼┘│               │┌────panics┼┘         │
+  ```
+
+  The fix lives in two coordinated places so layout and bounds
+  agree: `parallel_label_extra` in `layout/subgraph.rs` computes
+  per-subgraph extra room, and the layered layout's per-layer
+  width/height calculation pre-allocates the same amount. Result:
+  the subgraph border wraps the labels, AND external nodes get
+  pushed out by the matching amount instead of overlapping the
+  grown border (which was the broken first attempt — easy trap).
+
+  Only fires when the **subgraph overrides the parent direction**
+  (e.g., `direction TB` inside an `LR` graph). When directions
+  match, `label_gap`'s existing inter-layer widening already
+  handles the labels — adding extra would inflate the subgraph
+  with empty rows.
+
+  ### Added
+
+  - `parallel_label_extra(graph, sg) -> (extra_w, extra_h)` —
+    public helper in `layout::subgraph` so downstream consumers
+    building their own bounds can stay in sync.
+
 ## 0.12.2 — 2026-04-22
 
 ### Fixed
