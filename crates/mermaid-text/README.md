@@ -330,27 +330,6 @@ graph TD
     Failed -->|retry| Idle
 ```
 
-```
-       ┌──────┐
-       │ Idle │
-       └──────┘
-          │ event
-          ▾
-       ┌─────────┐       ┌────────┐
-       │ Running │──────▸│  Done  │
-       └─────────┘  done └────────┘
-          │ error
-          ▾
-       ┌────────┐
-       │ Failed │
-       └────────┘
-          │ retry
-          ▾
-       ┌──────┐
-       │ Idle │
-       └──────┘
-```
-
 ### Supervisor pattern
 
 ```mermaid
@@ -404,27 +383,6 @@ sequenceDiagram
     API-->>-U: 200 + session
 ```
 
-```
- ┌────────┐               ┌───────┐
- │  User  │               │  API  │
- └────────┘               └───────┘
-      ┆ [1] POST /login       ┃
-      ────────────────────────▸
-      ┆                       ┃
-╔═[alt: cache hit]═════════════════╗
-║     ┆ [2] cached token      ┃    ║
-║     ◂────────────────────────    ║
-║     ┆                       ┃    ║
-╠┄[cache miss]┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╣
-║     ┆ [3] fresh token       ┃    ║
-║     ◂────────────────────────    ║
-║     ┆                       ┃    ║
-╚══════════════════════════════════╝
-      ┆ [4] 200 + session     ┃
-      ◂┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
-      ┆                       ┆
-```
-
 The four sequence-diagram polish features (autonumber, notes, activation
 bars, block statements) all compose. See
 [`docs/mermaid-gallery.md`](https://github.com/leboiko/markdown-reader/blob/master/docs/mermaid-gallery.md)
@@ -437,14 +395,6 @@ pie showData title Pet Counts
     "Dogs" : 386
     "Cats" : 85
     "Rats" : 15
-```
-
-```
-                              Pet Counts
-
-Dogs  ███████████████████████████████████████░░░░░░░░░░   79.4%  (386)
-Cats  █████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   17.5%   (85)
-Rats  ██░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░    3.1%   (15)
 ```
 
 Bar columns auto-scale to the `--width` budget (default 80). Without
