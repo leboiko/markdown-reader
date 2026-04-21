@@ -9,6 +9,27 @@ You can also paste any code block into a `.mmd` file and run
 `mermaid-text path/to/file.mmd` to see the same output on the command
 line.
 
+## What's covered
+
+- **Flowcharts** (`graph` / `flowchart`) with subgraphs, edge styles,
+  `classDef` colours, and long-edge waypoint routing for clean channels
+  through complex graphs.
+- **State diagrams** with composite (nested) states, `<<choice>>` /
+  `<<fork>>` / `<<join>>` shape modifiers, anchored notes, and
+  `classDef` colour styling.
+- **Sequence diagrams** — feature-complete: `autonumber`, notes
+  (single + multi-anchor + `<br>` line breaks), activation bars
+  (explicit + inline `+`/`-`), block statements (`loop`/`alt`/`opt`/
+  `par`/`critical`/`break` with arbitrary nesting), and bracketed
+  lifelines (boxes top AND bottom).
+- **Pie charts** rendered as horizontal bar charts (more legible in
+  monospace than any ASCII pie attempt).
+
+Recent rendering improvements: arrow tips merge into destination box
+borders (`┌─▾─┐` instead of floating `▾` above), edge labels never
+puncture node corners or subgraph borders, and block-statement frames
+use a Mermaid-style two-tag style (`╔═[alt]══[cache hit]══╗`).
+
 ---
 
 ## Flowcharts
@@ -280,15 +301,19 @@ percentage. Decimal values are supported.
 These Mermaid diagram types fall back to showing source text rather
 than rendering:
 
-- `gantt`
-- `journey`
-- `erDiagram`
-- `classDiagram`
-- `rect …` colour-highlight blocks inside sequence diagrams (the
-  block grammar itself is supported — only the colour form is
-  deferred)
-- Slice colours in pie charts (rendered monochrome in v1)
+- `erDiagram` — most-requested missing type; **active work in
+  progress** per the [ROADMAP](../ROADMAP.md). Tracked across the
+  0.11.x release series.
+- `gantt`, `journey`, `classDiagram` — lower priority; may land if
+  a real use case shows up.
+- `rect <colour>` colour-highlight blocks inside sequence diagrams
+  (the block grammar itself is supported — only the colour form is
+  deferred; Mermaid's grammar is hard to express without bigger
+  changes to our colour system).
+- Slice colours in pie charts (rendered monochrome in v1; the bar
+  chart approach is so legible in monospace that colours haven't
+  been requested yet).
 
-See the [ROADMAP](../ROADMAP.md) for what's planned next, and file
-issues at <https://github.com/leboiko/markdown-reader/issues> if you
-hit something specific.
+File issues at <https://github.com/leboiko/markdown-reader/issues>
+if you hit something specific. Quality bugs (rendering glitches,
+edge-case crashes) get the fastest turnaround.
