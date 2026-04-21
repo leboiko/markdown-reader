@@ -1029,37 +1029,68 @@ fn label_gap(
     layer_a: usize,
     layer_b: usize,
     default_gap: usize,
+    parallel_groups: &[Vec<usize>],
 ) -> usize {
-    // Collect widths of all labels on edges that cross this gap.
-    let mut label_widths: Vec<usize> = graph
+    // Collect widths of all labels on edges that cross this gap, and
+    // remember the edge index alongside so we can match against
+    // parallel groups.
+    let crossings: Vec<(usize, usize)> = graph // (edge_idx, label_width)
         .edges
         .iter()
-        .filter(|e| {
+        .enumerate()
+        .filter(|(_, e)| {
             let fl = node_layer.get(e.from.as_str()).copied().unwrap_or(0);
             let tl = node_layer.get(e.to.as_str()).copied().unwrap_or(0);
             // Edge crosses the gap in either direction.
             (fl == layer_a && tl == layer_b) || (fl == layer_b && tl == layer_a)
         })
-        .filter_map(|e| e.label.as_deref())
-        .map(UnicodeWidthStr::width)
+        .filter_map(|(i, e)| {
+            e.label.as_deref().map(|l| (i, UnicodeWidthStr::width(l)))
+        })
         .collect();
 
-    if label_widths.is_empty() {
+    if crossings.is_empty() {
         return default_gap;
     }
 
-    // Widest single label + 2 padding cells.
-    let max_lbl = label_widths.iter().copied().max().unwrap_or(0);
+    let max_lbl = crossings.iter().map(|(_, w)| *w).max().unwrap_or(0);
     let needed_for_width = max_lbl + 2;
 
-    // If multiple labels compete for vertical space in the same gap, each
-    // occupies 2 rows (one for the label text, one spacing row). We keep at
-    // least that many rows available.
-    label_widths.sort_unstable();
-    let count = label_widths.len();
+    // If multiple labels compete for vertical space in the same gap,
+    // each occupies 2 rows (label + spacer). Keep that many rows free.
+    let mut widths: Vec<usize> = crossings.iter().map(|(_, w)| *w).collect();
+    widths.sort_unstable();
+    let count = widths.len();
     let needed_for_stacking = count * 2 + 1;
 
-    default_gap.max(needed_for_width).max(needed_for_stacking)
+    // Parallel-edge breathing room (Phase 2a of the layout-pass
+    // widening work — see `docs/scope-parallel-edges.md`). When the
+    // edges crossing this gap include a parallel-edge group of
+    // `count >= 2`, the labels would otherwise sit flush against
+    // each adjacent box / subgraph border (CI/CD `│pass┌`,
+    // Supervisor `└─creates│`). Add extra gap so each label has at
+    // least 1 cell of clearance on each side.
+    let parallel_extra = parallel_groups
+        .iter()
+        .filter_map(|group| {
+            // How many edges of this parallel group cross this gap?
+            let count_in_gap: usize = group
+                .iter()
+                .filter(|&&edge_idx| crossings.iter().any(|(i, _)| *i == edge_idx))
+                .count();
+            if count_in_gap < 2 {
+                return None;
+            }
+            // Each additional parallel label past the first needs
+            // `max_lbl + 2` cells of its own breathing room.
+            Some((count_in_gap - 1) * (max_lbl + 2))
+        })
+        .max()
+        .unwrap_or(0);
+
+    default_gap
+        .max(needed_for_width + parallel_extra)
+        .max(needed_for_stacking)
 }
 
 /// Build the subgraph parent map: child subgraph id → parent subgraph id.
@@ -1158,6 +1189,11 @@ fn compute_positions(
     // Build a node-to-layer map once; used by the label-gap calculation.
     let node_layer = build_node_layer_map(ordered);
 
+    // Pre-compute parallel-edge groups so `label_gap` can widen the
+    // inter-layer gap when a parallel group's labels would otherwise
+    // sit flush against neighbouring boxes / subgraph borders.
+    let parallel_groups = graph.parallel_edge_groups();
+
     // Subgraph membership lookups — used to widen the gap between two
     // adjacent same-layer nodes when a subgraph boundary sits between them.
     let node_to_sg = graph.node_to_subgraph();
@@ -1211,6 +1247,7 @@ fn compute_positions(
                         layer_idx,
                         layer_idx + 1,
                         config.layer_gap,
+                        &parallel_groups,
                     )
                 } else {
                     config.layer_gap
@@ -1267,6 +1304,7 @@ fn compute_positions(
                         layer_idx,
                         layer_idx + 1,
                         config.layer_gap,
+                        &parallel_groups,
                     )
                 } else {
                     config.layer_gap

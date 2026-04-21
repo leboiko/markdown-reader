@@ -3,6 +3,45 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.12.0 — 2026-04-22
+
+### Fixed
+
+- **Parallel labelled edges between the same node pair no longer
+  cram their labels into one shared cell** (ROADMAP issues #2 +
+  #4). Previously, when two or more labelled edges connected the
+  same pair of nodes (Supervisor's `creates`/`panics`,
+  CI/CD's `pass`/`skip`), all labels competed for one inter-layer
+  channel and visually collided — `pass│skip` glued together,
+  `creates`/`panics` overlapping the subgraph border, etc.
+
+  `Graph::parallel_edge_groups()` (added in the 0.11.x line as
+  pure infrastructure) now feeds `label_gap` in the layered layout
+  pass: when N labels share an inter-layer crossing, the gap
+  widens by `(N − 1) × (max_label_width + 2)` so each label can
+  occupy its own row (LR/RL flow) or column (TD/BT flow). Labels
+  remain in the same channel — the channel just gets wider — so
+  no path-routing changes are needed (Phase 2a of the scope doc).
+
+  Visible improvements: CI/CD pipeline shows `pass` and `skip`
+  on adjacent rows with full breathing room. State diagrams with
+  bidirectional transitions (CircuitClosed↔CircuitOpen,
+  Working↔Idle's `done`/`task` pair) also benefit — labels that
+  had been clipped against subgraph borders or overwritten by
+  other labels now render cleanly.
+
+  Snapshot triage: 4 existing snapshots updated, all confirmed as
+  visual improvements (the canonical `cicd_parallel_styles_to_same_target`
+  is the target-case snapshot). No regressions.
+
+### Added
+
+- `Graph::parallel_edge_groups()` — public method returning groups
+  of edge indices that share an unordered endpoint pair (so
+  `A → B` and `B → A` group together). Powers Phase 2a above; also
+  available to downstream consumers building their own layout
+  passes.
+
 ## 0.11.2 — 2026-04-22
 
 ### Fixed

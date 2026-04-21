@@ -137,26 +137,27 @@ with box-integrity improvements; 10 new unit tests + 2 reproducer
 snapshots (`supervisor_bidirectional_in_subgraph` and
 `cicd_parallel_styles_to_same_target`).
 
-#### 2. Multiple labelled edges between same node pair — **PARTIAL FIX in 0.9.5; full fix needs layout-pass work**
+#### 2. Multiple labelled edges between same node pair — **SHIPPED IN 0.12.0** ✓
 
-**What 0.9.5 fixed:** subgraph borders no longer get punctured —
-in the CI/CD case `pass` lands at col 41 (immediately right of
-CI's `│` at col 40) instead of overwriting the border. Box
-outlines stay intact.
+**What 0.9.5 first did:** subgraph borders stopped getting
+punctured — in the CI/CD case `pass` landed at col 41
+(immediately right of CI's `│` at col 40) instead of overwriting
+the border. Box outlines stayed intact, but labels still glued
+to each other.
 
-**What's still cramped:** the labels themselves remain visually
-glued to nearby chrome because the layout pipeline doesn't widen
-the gap between `T` (inside CI subgraph) and `D` (outside) to
-account for parallel labels. Empirical finding from the 0.9.5
-development cycle: trying a label-placement-only patch with
-1-cell padding around protected regions just detaches labels
-from their edges entirely. Real fix needs layout-pass work —
-during layered layout, detect parallel-edge pairs and add
-column/row spacing between their endpoints proportional to the
-combined label widths.
+**What 0.12.0 fixes (full fix):** `Graph::parallel_edge_groups()`
+detects edges sharing an unordered endpoint pair (so `A→B` and
+`B→A` group together). The layered layout's `label_gap` then
+widens the inter-layer gap by `(N − 1) × (max_label_width + 2)`
+when N parallel labels cross it — each label gets its own row
+(LR/RL) or column (TD/BT). No path-routing changes were needed
+("Phase 2a" of the parallel-edges scope doc).
 
-**Decision:** rolled into item #6 (sugiyama improvements) below.
-Don't try to solve this purely in the label-placement pass.
+Visible wins: CI/CD pipeline `pass`/`skip` now stack on adjacent
+rows; CircuitClosed↔CircuitOpen state diagram has clear breathing
+room between `5 errors` and `timeout reached` labels;
+`done`/`task` style transitions in composite states render
+cleanly. Four existing snapshots updated, all visual improvements.
 
 #### 3. Arrow termination doesn't visually merge with destination box — **SHIPPED IN 0.9.6** ✓
 
