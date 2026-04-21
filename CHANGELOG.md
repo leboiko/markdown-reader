@@ -5,6 +5,18 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.1] - 2026-04-20
+
+### Added
+
+- **Notes anchored to states** in mermaid state diagrams (via
+  `mermaid-text` 0.8.1). `note left of X : text`,
+  `note right of X : text`, `note over X : text`, plus the
+  multi-line `note left of X / … / end note` form. Each note
+  renders as a small rounded box connected to its anchor by a
+  dotted, no-arrow line. Free upgrade — no markdown-reader code
+  changes.
+
 ## [1.10.0] - 2026-04-20
 
 ### Added

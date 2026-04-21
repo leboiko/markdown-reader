@@ -514,6 +514,45 @@ CapsLockOn --> CapsLockOff : EvCapsLockPressed
 }
 
 #[test]
+fn state_diagram_with_note_right_of() {
+    // Single-line note anchored to the right of a state. The note
+    // renders as a small rounded box connected by a dotted line
+    // (no arrow tip).
+    let src = "stateDiagram-v2
+[*] --> Active
+Active --> Done
+note right of Active : retries 3x with backoff";
+    let out = mermaid_text::render(src).unwrap();
+    assert!(
+        out.contains("retries 3x with backoff"),
+        "note text must appear in rendered output"
+    );
+    assert!(
+        out.contains('┄') || out.contains('┆'),
+        "dotted connector glyph must appear"
+    );
+    assert_snapshot!("state_diagram_with_note_right_of", out);
+}
+
+#[test]
+fn state_diagram_with_multiline_note() {
+    // Multi-line `note left of X / … / end note` form. The body
+    // lines are joined with `\n` into the note's label, which the
+    // existing multi-line label rendering handles.
+    let src = "stateDiagram-v2
+[*] --> Idle
+Idle --> Working
+note left of Idle
+  worker pool size = 4
+  shared with retry queue
+end note";
+    let out = mermaid_text::render(src).unwrap();
+    assert!(out.contains("worker pool size"));
+    assert!(out.contains("shared with retry queue"));
+    assert_snapshot!("state_diagram_with_multiline_note", out);
+}
+
+#[test]
 fn state_circuit_breaker() {
     // The user's exact input — the primary acceptance test for v1.
     let src = r#"stateDiagram-v2

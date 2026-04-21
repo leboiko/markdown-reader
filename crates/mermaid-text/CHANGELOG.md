@@ -3,6 +3,48 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.8.1 — 2026-04-20
+
+### Added
+
+- **Notes anchored to states** for state diagrams. Both single-line
+  (`note left of X : text`) and multi-line (`note left of X / lines /
+  end note`) forms supported, with `left of`, `right of`, and `over`
+  positions. Each note synthesises a `NodeShape::Note` (rounded box)
+  connected to its anchor by a dotted, no-arrow edge. Position is
+  encoded via edge direction so the existing layered layout places
+  the note appropriately. Notes inside composite states are
+  registered as members of the enclosing composite. Multi-line note
+  text is joined with `\n` into the note's label and renders via
+  the existing multi-line label path.
+- **New `NodeShape::Note` variant** — same dimensions as Rounded;
+  the dotted connector visually distinguishes it from regular
+  rounded states.
+- **New shared helper `parser::common::parse_note_anchor`** plus
+  `NoteSide` enum, available to any future diagram parser that
+  wants to support Mermaid notes.
+
+### Fixed
+
+- **`rewrite_composite_edges` in the state parser was silently
+  resetting edge `style` / `end` / `start` fields** to defaults
+  (Solid, Arrow) when rebuilding edges via `Edge::new`. Discovered
+  while wiring synthetic note edges (which need Dotted + None
+  endpoints). Now preserves all fields via direct struct
+  construction. No user-visible change for pre-0.8.1 inputs.
+
+### Notes
+
+- Out of scope (intentional follow-ups, see ROADMAP): real
+  dashed-border note shape (custom primitive); `note over X,Y`
+  multi-anchor; floating notes (`note "text" as N1` — silently
+  skipped); notes for sequence diagrams; `<br>` line-break
+  conversion inside note text.
+- Layout placement honours the `left of` / `right of` / `over`
+  hint via edge direction, but the barycenter heuristic may
+  compromise to minimise crossings — the dotted connector keeps
+  the relationship readable regardless of distance.
+
 ## 0.8.0 — 2026-04-20
 
 ### Added

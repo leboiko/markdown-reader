@@ -129,6 +129,14 @@ pub enum NodeShape {
     /// Mermaid syntax: `state X <<fork>>` / `state X <<join>>`
     /// (and the `[[…]]` alternative spellings).
     Bar(BarOrientation),
+    /// State-diagram note (Mermaid `note left|right|over of …`).
+    /// Synthesised at parse time as a regular [`Node`] with this
+    /// shape and connected to its anchor via an [`EdgeStyle::Dotted`]
+    /// / [`EdgeEndpoint::None`] edge. Renders as a small rounded box
+    /// — the dotted connector visually distinguishes it from regular
+    /// rounded states without needing a separate dashed-border
+    /// primitive (a future variant could add one).
+    Note,
 }
 
 /// Orientation for a [`NodeShape::Bar`] (fork/join synchronisation bar).

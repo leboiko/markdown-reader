@@ -268,7 +268,9 @@ to Active's start/end, distinct from the top-level. Per-composite
 | Concurrent regions `--` | not yet |
 | `<<choice>>` shape modifier | yes (renders as decision Diamond) |
 | `<<fork>>` / `<<join>>` shape modifiers | yes (renders as Bar perpendicular to flow) |
-| Notes | silently ignored |
+| Notes (`note left of X : …` / `note right of …` / `note over …`, single + multi-line) | yes |
+| Floating notes (`note "text" as N1`) | silently ignored |
+| `note over X,Y` multi-anchor | silently ignored |
 | `classDef` / `class` / `:::className` / `style` / `linkStyle` | yes (opt-in via `--color`) |
 | `class CompositeId styleName` (subgraph border colour) | yes (opt-in) |
 | `click` | silently ignored |

@@ -19,14 +19,6 @@ _Nothing actively in progress._
 
 ## Next up (ordered roughly by ROI)
 
-### Notes anchored to states — `mermaid-text`
-
-`note left of X : text`, `note right of X : text`, `note over X : text`,
-multi-line block form `note left of X / … / end note`. Render as a
-small box connected to the target state by a dotted edge. The dotted
-edge style + the A* router that handles arbitrary endpoints already
-exist; this is mostly parser + edge synthesis. ~1 day.
-
 ### Sequence diagram polish — `mermaid-text`
 
 Wire up the four parser TODOs that currently silently skip:
@@ -138,8 +130,33 @@ Mermaid `click NodeId "https://…"` makes the node clickable. In a
 text terminal we'd render a footnote-style link reference, or use
 OSC 8 hyperlinks where supported. Separate ticket.
 
+### Real dashed-border note shape — `mermaid-text`
+
+v1 of notes uses a solid rounded box; the dotted connector
+distinguishes it from regular states. A real Mermaid-style note
+would have a dashed border too. Needs a new `Grid::draw_note_box`
+primitive mixing rounded corners with dotted top/bottom and dotted
+vertical sides. Add later if anyone asks.
+
+### `note over X,Y` multi-anchor — `mermaid-text`
+
+Mermaid's `note over X,Y` spans two anchors. v1 silently skips
+multi-anchor forms. Adding it needs either: a new "spanning" edge
+that anchors to multiple targets, or a renderer pass that draws
+two separate dotted lines from one note. Defer.
+
+### Floating notes (`note "text" as N1`) — `mermaid-text`
+
+Mermaid's no-anchor form. Rendering is ill-specified upstream;
+defer until someone files a real use case.
+
 ## Done since 1.7.1 (recent history — see CHANGELOGs for detail)
 
+- **0.8.1**: notes anchored to states (`note left|right|over of X`,
+  single + multi-line). Each note synthesises a `NodeShape::Note`
+  connected by a dotted, no-arrow edge. Also fixed a latent bug in
+  `rewrite_composite_edges` that was silently dropping edge style
+  fields.
 - **0.8.0**: `classDef` + `class` + `:::className` shorthand for
   flowcharts and state diagrams. New `Graph::class_defs` /
   `subgraph_styles` registries. Subgraph border colouring. State

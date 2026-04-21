@@ -1,0 +1,12 @@
+---
+source: crates/mermaid-text/tests/snapshots.rs
+expression: out
+---
+╭─────╮      ╭────────╮      ╭──────╮
+│( ● )│─────▸│ Active │─────▸│ Done │
+╰─────╯      ╰────────╯┄┄┄┄┄┐╰──────╯
+                            ┆
+                            ┆
+                            ┆╭─────────────────────────╮
+                            ─│ retries 3x with backoff │
+                             ╰─────────────────────────╯

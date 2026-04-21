@@ -607,8 +607,8 @@ fn node_box_width(graph: &Graph, id: &str) -> usize {
             NodeShape::Parallelogram | NodeShape::Trapezoid => inner + 2,
             // DoubleCircle: needs 4 extra chars for the concentric inner border.
             NodeShape::DoubleCircle => inner + 4,
-            // Plain shapes.
-            NodeShape::Rectangle | NodeShape::Rounded => inner,
+            // Plain shapes (and notes — same width as Rounded).
+            NodeShape::Rectangle | NodeShape::Rounded | NodeShape::Note => inner,
             // Fork/join bar: perpendicular to flow. Horizontal bars
             // span 5 cells; vertical bars are a single column.
             NodeShape::Bar(BarOrientation::Horizontal) => 5,
@@ -637,7 +637,8 @@ fn node_box_height(graph: &Graph, id: &str) -> usize {
             | NodeShape::Asymmetric
             | NodeShape::Parallelogram
             | NodeShape::Trapezoid
-            | NodeShape::Subroutine => 3 + extra,
+            | NodeShape::Subroutine
+            | NodeShape::Note => 3 + extra,
             // Cylinder needs 4 rows: top border, lid line, text, bottom border.
             NodeShape::Cylinder => 4 + extra,
             // DoubleCircle needs 5 rows for the concentric inner border.

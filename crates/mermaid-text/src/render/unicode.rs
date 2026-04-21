@@ -108,6 +108,14 @@ impl NodeGeom {
                 height: 5,
                 text_row: 0,
             },
+            // Note: same dimensions as Rounded — visual distinction
+            // comes from the dotted connector edge synthesised by the
+            // parser, not from the box itself.
+            NodeShape::Note => NodeGeom {
+                width: inner_w,
+                height: 3 + extra_lines,
+                text_row: 1,
+            },
         }
     }
 
@@ -1121,6 +1129,12 @@ fn draw_node_box(grid: &mut Grid, node: &Node, pos: GridPos, geom: NodeGeom) {
         }
         NodeShape::Bar(BarOrientation::Vertical) => {
             grid.draw_vertical_bar(col, row, geom.height);
+        }
+        // Note boxes share the rounded shape; the dotted connector
+        // edge synthesised by the parser does the visual work of
+        // marking it as a note rather than a regular state.
+        NodeShape::Note => {
+            grid.draw_rounded_box(col, row, geom.width, geom.height);
         }
     }
 }

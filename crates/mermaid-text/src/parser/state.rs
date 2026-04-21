@@ -30,11 +30,11 @@ use std::collections::{HashMap, HashSet};
 use crate::{
     Error,
     parser::common::{
-        apply_pending_classes, extract_class_modifier, matches_keyword,
+        NoteSide, apply_pending_classes, extract_class_modifier, matches_keyword,
         parse_class_def_directive, parse_class_directive, parse_link_style_directive,
-        parse_style_directive, strip_inline_comment,
+        parse_note_anchor, parse_style_directive, strip_inline_comment,
     },
-    types::{BarOrientation, Direction, Edge, Graph, Node, NodeShape, Subgraph},
+    types::{BarOrientation, Direction, Edge, EdgeEndpoint, EdgeStyle, Graph, Node, NodeShape, Subgraph},
 };
 
 const START_PREFIX: &str = "__start__";
@@ -109,18 +109,26 @@ fn tokenise(input: &str) -> Result<Vec<(usize, String)>, Error> {
             continue;
         }
 
-        // Multi-line note: `note left of X` / `note right of X` (no colon)
-        // → skip until `end note`.
+        // Multi-line note: `note left of X` / `note right of X`
+        // (no colon on the opener) → join the body lines into a
+        // single `note <anchor> : <joined text>` statement so the
+        // parse loop's note handler sees a unified form.
         if let Some(rest) = stripped.strip_prefix("note ")
             && !rest.contains(':')
         {
+            let mut text_lines: Vec<String> = Vec::new();
             while i < lines.len() {
                 let body = lines[i].trim();
                 i += 1;
                 if body == "end note" {
                     break;
                 }
+                if !body.is_empty() {
+                    text_lines.push(body.to_string());
+                }
             }
+            let joined = format!("note {} : {}", rest, text_lines.join("\n"));
+            out.push((lineno, joined));
             continue;
         }
 
@@ -171,6 +179,11 @@ struct Walker {
     /// here too once it's known so the helpers don't need separate
     /// state.
     style_scratch: Graph,
+    /// Monotonically increasing counter for synthesised note IDs
+    /// (`__note_1__`, `__note_2__`, …). Each `note left|right|over of
+    /// X : text` directive bumps this and creates one synthetic node
+    /// plus one dotted edge connecting it to its anchor.
+    note_counter: usize,
 }
 
 impl Default for Walker {
@@ -202,6 +215,7 @@ impl Default for Walker {
             // Direction will be overwritten in materialise; the
             // helpers don't read it, so any value works as the seed.
             style_scratch: Graph::new(Direction::LeftToRight),
+            note_counter: 0,
         }
     }
 }
@@ -243,9 +257,15 @@ impl Walker {
                 continue;
             }
 
-            // `note … :` single-line — silently skip. (Multi-line was already
-            // consumed at tokenisation time.)
-            if stmt.starts_with("note ") {
+            // `note left|right|over of <Id> : <text>` — synthesise a
+            // note node with a dotted, no-arrow connector to the
+            // anchor. Multi-line `note … end note` was already
+            // collapsed into this single-line form at tokenisation
+            // time. The floating `note "text" as N1` form returns
+            // None from parse_note_anchor and is silently skipped
+            // (out of scope per ROADMAP).
+            if let Some(rest) = stmt.strip_prefix("note ") {
+                self.handle_note(rest, path);
                 i += 1;
                 continue;
             }
@@ -390,6 +410,60 @@ impl Walker {
                     .push(id.to_string());
             }
         }
+    }
+
+    /// Process a `note <anchor> : <text>` statement (already with the
+    /// leading `note ` keyword stripped). Synthesises a [`NodeShape::Note`]
+    /// node with the text as label and a dotted, no-arrow connector
+    /// to the anchor — direction encodes "left of" vs "right of"/"over"
+    /// so the existing layered layout places the note appropriately.
+    ///
+    /// Silently skips:
+    /// - Floating `note "text" as N1` form ([`parse_note_anchor`]
+    ///   returns None).
+    /// - `note over X,Y` multi-anchor (anchor id contains `,`).
+    fn handle_note(&mut self, body: &str, path: &[String]) {
+        // Find the `:` that separates the anchor spec from the text.
+        let Some(colon_pos) = body.find(':') else {
+            return;
+        };
+        let anchor_part = body[..colon_pos].trim();
+        let text = body[colon_pos + 1..].trim().to_string();
+        let Some((side, anchor)) = parse_note_anchor(anchor_part) else {
+            return;
+        };
+        // Defensive: `note over X,Y` is multi-anchor; we don't handle it
+        // and silently skip rather than synthesise an edge to a bogus id.
+        if anchor.contains(',') {
+            return;
+        }
+        self.register_note(&anchor, side, text, path);
+    }
+
+    fn register_note(&mut self, anchor: &str, side: NoteSide, text: String, path: &[String]) {
+        self.note_counter += 1;
+        let note_id = format!("__note_{}__", self.note_counter);
+        self.register_node(&note_id, path);
+        self.shapes.insert(note_id.clone(), NodeShape::Note);
+        self.explicit_labels.insert(note_id.clone(), text);
+        // Register the anchor too — Mermaid lets a note reference a
+        // state that hasn't been seen yet (e.g. declared later via
+        // `state X` or in a transition). Without this the synthetic
+        // edge would point at an unknown id and the layered layout
+        // wouldn't place the note.
+        self.register_node(anchor, path);
+        // Direction encodes position: left → note upstream of anchor,
+        // right/over → note downstream. EdgeStyle::Dotted +
+        // EdgeEndpoint::None gives a dashed line with no arrow tip.
+        let (from, to) = match side {
+            NoteSide::Left => (note_id.clone(), anchor.to_string()),
+            NoteSide::Right | NoteSide::Over => (anchor.to_string(), note_id.clone()),
+        };
+        let mut edge = Edge::new(from, to, None);
+        edge.style = EdgeStyle::Dotted;
+        edge.end = EdgeEndpoint::None;
+        edge.start = EdgeEndpoint::None;
+        self.edges.push(edge);
     }
 
     fn resolve_endpoint(&mut self, raw: &str, side: EndpointSide, path: &[String]) -> String {
@@ -570,7 +644,19 @@ impl Walker {
                 new_to = id;
             }
 
-            rewritten.push(Edge::new(new_from, new_to, edge.label));
+            // Preserve the original edge's style/end/start fields —
+            // synthesised note edges (Dotted, no arrows) and any
+            // future styled edges must survive the composite rewrite.
+            // Using Edge::new here would silently reset them to the
+            // default Solid arrow.
+            rewritten.push(Edge {
+                from: new_from,
+                to: new_to,
+                label: edge.label,
+                style: edge.style,
+                end: edge.end,
+                start: edge.start,
+            });
         }
         self.edges = rewritten;
     }
@@ -957,17 +1043,21 @@ mod tests {
     }
 
     #[test]
-    fn single_line_note_silently_skipped() {
+    fn single_line_note_now_synthesises_an_edge() {
+        // Pre-0.8.1 this was silently skipped; now notes create one
+        // dotted connector edge to their anchor.
         let g = parse("stateDiagram-v2\nA --> B\nnote right of A : hello").unwrap();
-        assert_eq!(g.edges.len(), 1);
+        assert_eq!(g.edges.len(), 2, "1 user edge + 1 note connector");
+        assert!(g.has_node("__note_1__"));
     }
 
     #[test]
-    fn multi_line_note_silently_skipped() {
+    fn multi_line_note_now_synthesises_an_edge() {
         let src =
             "stateDiagram-v2\nA --> B\nnote right of A\n  some text\n  more text\nend note\nB --> C";
         let g = parse(src).unwrap();
-        assert_eq!(g.edges.len(), 2);
+        assert_eq!(g.edges.len(), 3, "2 user edges + 1 note connector");
+        assert_eq!(g.node("__note_1__").unwrap().label, "some text\nmore text");
     }
 
     #[test]
@@ -1132,6 +1222,128 @@ style A fill:#abc";
         assert_eq!(
             g.node_styles.get("A").and_then(|s| s.fill),
             Some(crate::types::Rgb(0xaa, 0xbb, 0xcc))
+        );
+    }
+
+    // ---- Notes ---------------------------------------------------------
+
+    /// Helper: count edges that look like our synthesised dotted
+    /// no-arrow note connector.
+    fn note_connector_count(g: &Graph) -> usize {
+        g.edges
+            .iter()
+            .filter(|e| {
+                e.style == crate::types::EdgeStyle::Dotted
+                    && e.end == crate::types::EdgeEndpoint::None
+                    && e.start == crate::types::EdgeEndpoint::None
+            })
+            .count()
+    }
+
+    #[test]
+    fn note_left_of_creates_note_node_with_dotted_edge() {
+        let g = parse("stateDiagram-v2\nA --> B\nnote left of A : hello").unwrap();
+        // Synthesised note id.
+        let note = g.node("__note_1__").expect("note node missing");
+        assert_eq!(note.shape, NodeShape::Note);
+        assert_eq!(note.label, "hello");
+        // Edge: note → A (left of → upstream).
+        let edge = g
+            .edges
+            .iter()
+            .find(|e| e.from == "__note_1__")
+            .expect("note → anchor edge missing");
+        assert_eq!(edge.to, "A");
+        assert_eq!(edge.style, crate::types::EdgeStyle::Dotted);
+        assert_eq!(edge.end, crate::types::EdgeEndpoint::None);
+        assert_eq!(edge.start, crate::types::EdgeEndpoint::None);
+    }
+
+    #[test]
+    fn note_right_of_creates_anchor_to_note_edge() {
+        let g = parse("stateDiagram-v2\nA --> B\nnote right of A : hello").unwrap();
+        let edge = g
+            .edges
+            .iter()
+            .find(|e| e.to == "__note_1__")
+            .expect("anchor → note edge missing");
+        assert_eq!(edge.from, "A");
+    }
+
+    #[test]
+    fn note_over_treated_as_right_of_for_v1() {
+        // `over` doesn't have a true "perpendicular" axis in the
+        // layered text layout; it shares direction with right.
+        let g = parse("stateDiagram-v2\nA --> B\nnote over A : hello").unwrap();
+        let edge = g
+            .edges
+            .iter()
+            .find(|e| e.to == "__note_1__")
+            .expect("anchor → note edge missing for `over`");
+        assert_eq!(edge.from, "A");
+    }
+
+    #[test]
+    fn multiline_note_joins_lines_into_label() {
+        let src = "stateDiagram-v2
+A --> B
+note right of A
+  first line
+  second line
+end note";
+        let g = parse(src).unwrap();
+        let note = g.node("__note_1__").unwrap();
+        assert_eq!(note.label, "first line\nsecond line");
+    }
+
+    #[test]
+    fn multiple_notes_get_distinct_synthetic_ids() {
+        let src = "stateDiagram-v2
+A --> B
+note left of A : first
+note right of B : second";
+        let g = parse(src).unwrap();
+        assert!(g.has_node("__note_1__"));
+        assert!(g.has_node("__note_2__"));
+        assert_eq!(g.node("__note_1__").unwrap().label, "first");
+        assert_eq!(g.node("__note_2__").unwrap().label, "second");
+        assert_eq!(note_connector_count(&g), 2);
+    }
+
+    #[test]
+    fn floating_note_silently_skipped() {
+        // `note "text" as N1` — out of scope. Parses without panic
+        // and produces no synthetic note.
+        let src = "stateDiagram-v2
+A --> B
+note \"floating text\" as N1";
+        let g = parse(src).unwrap();
+        assert!(g.node("__note_1__").is_none());
+        assert_eq!(note_connector_count(&g), 0);
+    }
+
+    #[test]
+    fn note_over_multi_anchor_silently_skipped() {
+        // `note over X,Y` is multi-anchor — defer per ROADMAP.
+        // Defensive: do NOT synthesise an edge to the bogus id `X,Y`.
+        let src = "stateDiagram-v2\nA --> B\nnote over A,B : shared";
+        let g = parse(src).unwrap();
+        assert!(g.node("__note_1__").is_none());
+        assert_eq!(note_connector_count(&g), 0);
+    }
+
+    #[test]
+    fn note_inside_composite_is_a_member_of_that_composite() {
+        let src = "stateDiagram-v2
+state Active {
+  Idle --> Working
+  note right of Idle : worker pool size = 4
+}";
+        let g = parse(src).unwrap();
+        let active = g.subgraphs.iter().find(|s| s.id == "Active").unwrap();
+        assert!(
+            active.node_ids.contains(&"__note_1__".to_string()),
+            "note must be registered as a member of its enclosing composite"
         );
     }
 

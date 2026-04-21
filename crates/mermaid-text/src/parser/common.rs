@@ -250,6 +250,60 @@ pub(crate) fn parse_class_directive(stmt: &str, pending_classes: &mut Vec<(Strin
     }
 }
 
+/// Position of a state-diagram note relative to its anchor.
+///
+/// The renderer encodes this as edge direction so the existing
+/// layered layout places the note on the appropriate side of the
+/// anchor without needing dedicated layout machinery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NoteSide {
+    /// `note left of X` — note becomes upstream layer (edge: note → X).
+    Left,
+    /// `note right of X` — note becomes downstream layer (edge: X → note).
+    Right,
+    /// `note over X` — defaults to the same direction as `Right` for v1
+    /// (the layered layout has no concept of "over"; the note sits
+    /// adjacent to the anchor on the flow axis).
+    Over,
+}
+
+/// Parse the anchor specifier of a `note <left|right|over> of <Id>`
+/// directive — the part after the `note ` keyword and before the
+/// optional `: text`. Returns `Some((side, anchor_id))` on success,
+/// `None` for unrecognised forms (including the floating
+/// `note "text" as Id` which we don't support).
+///
+/// Mermaid's grammar uses `note over X` (no `of`) but `note left of X`
+/// / `note right of X` (with `of`). Both forms are handled here.
+///
+/// Defensive: an `over X,Y` multi-anchor form returns the comma-laden
+/// id verbatim — the caller should reject it before synthesising
+/// edges (no real state will ever have `,` in its id).
+pub(crate) fn parse_note_anchor(s: &str) -> Option<(NoteSide, String)> {
+    let s = s.trim();
+    let (side_word, rest) = s.split_once(char::is_whitespace)?;
+    let side = match side_word {
+        "left" => NoteSide::Left,
+        "right" => NoteSide::Right,
+        "over" => NoteSide::Over,
+        _ => return None,
+    };
+    let rest = rest.trim();
+    // `left`/`right` require `of <Id>`; `over` accepts either
+    // `over <Id>` (Mermaid's actual syntax) or `over of <Id>`.
+    let id_str = if let Some(stripped) = rest.strip_prefix("of ") {
+        stripped.trim()
+    } else if matches!(side, NoteSide::Over) {
+        rest
+    } else {
+        return None;
+    };
+    if id_str.is_empty() {
+        return None;
+    }
+    Some((side, id_str.to_string()))
+}
+
 /// Resolve `(target_id, class_name)` pairs into concrete style entries
 /// on `graph.node_styles` or `graph.subgraph_styles`. Multiple classes
 /// per target stack via [`merge_node_style`] in source order. Class
@@ -386,6 +440,51 @@ mod tests {
         assert_eq!(merged.fill, Some(Rgb(9, 9, 9))); // overlay wins
         assert_eq!(merged.stroke, Some(Rgb(2, 2, 2))); // base preserved
         assert_eq!(merged.color, Some(Rgb(5, 5, 5))); // overlay supplies
+    }
+
+    // ---- parse_note_anchor --------------------------------------------
+
+    #[test]
+    fn parse_note_anchor_left_of() {
+        assert_eq!(
+            parse_note_anchor("left of MyState"),
+            Some((NoteSide::Left, "MyState".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_note_anchor_right_of() {
+        assert_eq!(
+            parse_note_anchor("right of OPEN"),
+            Some((NoteSide::Right, "OPEN".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_note_anchor_over_no_of() {
+        // Mermaid's actual syntax is `note over X` (no `of`).
+        assert_eq!(
+            parse_note_anchor("over Active"),
+            Some((NoteSide::Over, "Active".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_note_anchor_left_without_of_is_rejected() {
+        assert_eq!(parse_note_anchor("left X"), None);
+    }
+
+    #[test]
+    fn parse_note_anchor_floating_note_form_returns_none() {
+        // `note "text" as N1` is the floating form — we don't support
+        // it. The caller will silently skip when this returns None.
+        assert_eq!(parse_note_anchor("\"some text\" as N1"), None);
+    }
+
+    #[test]
+    fn parse_note_anchor_empty_id_returns_none() {
+        assert_eq!(parse_note_anchor("left of "), None);
+        assert_eq!(parse_note_anchor("over"), None);
     }
 
     #[test]
