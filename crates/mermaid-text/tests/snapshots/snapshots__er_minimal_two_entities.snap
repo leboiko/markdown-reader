@@ -5,6 +5,5 @@ expression: out
 ┌────────────┐    ┌─────────┐
 │  CUSTOMER  │    │  ORDER  │
 └────────────┘    └─────────┘
-
-               1:0..N places
-              ───▸
+              places
+              1──*

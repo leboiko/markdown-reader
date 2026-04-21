@@ -3,6 +3,49 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.11.1 — 2026-04-22
+
+### Added
+
+- **erDiagram Phase 2**: entity attributes render inside the boxes
+  as aligned columns (type / name / keys), with crisp dividers
+  between the header and the attribute table:
+  ```
+  ┌───────────────────┐
+  │     CUSTOMER      │
+  ├───────────────────┤
+  │  string name      │
+  │  string email PK  │
+  └───────────────────┘
+  ```
+  Column widths are computed per-entity so every box is snug — no
+  wasted horizontal space.
+- **Cardinality glyphs at relationship endpoints**: each end of
+  the arrow now carries a single-character cardinality marker:
+  `1` (exactly one), `?` (zero or one), `+` (one or many),
+  `*` (zero or many). Relationship labels sit on their own row
+  above the arrow:
+  ```
+                places
+                1──*
+  ```
+  Chose single-char glyphs over multi-cell crow's-foot
+  approximations because they read unambiguously in any monospace
+  font and keep the horizontal footprint small.
+
+### Changed
+
+- The `1:0..N` compound cardinality summary in the label (Phase 1)
+  is replaced by per-endpoint glyphs. The user-supplied label now
+  carries only the relationship name.
+
+### Notes
+
+- Phase 3 (grid layout for diagrams with more than ~4 entities)
+  is the remaining piece of the erDiagram series. The single-row
+  source-order layout shipped here works for up to 4-5 entities
+  on an 80-column terminal.
+
 ## 0.11.0 — 2026-04-22
 
 ### Added

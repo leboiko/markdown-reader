@@ -5,6 +5,16 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.13.1] - 2026-04-22
+
+### Changed
+
+- **`erDiagram` visual polish** (via `mermaid-text` 0.11.1). Phase
+  2 of the erDiagram series: entity boxes now render with attribute
+  tables inside (type / name / keys columns), and relationship
+  arrows carry single-character cardinality glyphs at each endpoint
+  (`1`, `?`, `+`, `*`). Free upgrade.
+
 ## [1.13.0] - 2026-04-22
 
 ### Added

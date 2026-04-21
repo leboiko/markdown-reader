@@ -927,7 +927,9 @@ fn er_minimal_two_entities() {
     let out = mermaid_text::render(src).unwrap();
     assert!(out.contains("CUSTOMER"));
     assert!(out.contains("ORDER"));
-    assert!(out.contains("▸"));
+    // Cardinality glyphs at the endpoints: `1` (ExactlyOne) on the
+    // source side, `*` (ZeroOrMany) on the target.
+    assert!(out.contains('1') && out.contains('*'));
     assert!(out.contains("places"));
     assert_snapshot!("er_minimal_two_entities", out);
 }

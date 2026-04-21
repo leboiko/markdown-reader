@@ -5,6 +5,5 @@ expression: out
 ┌──────────┐    ┌─────────┐
 │  PARENT  │    │  CHILD  │
 └──────────┘    └─────────┘
-
-             1:0..N optiona
-            ┄┄┄▸
+            optional
+            1┄┄*

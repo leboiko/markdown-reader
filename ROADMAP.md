@@ -358,14 +358,19 @@ defer until someone files a real use case.
 
 ## Done since 1.7.1 (recent history — see CHANGELOGs for detail)
 
+- **0.11.1**: erDiagram Phase 2 — entity attribute tables render
+  inside the boxes with aligned type/name/keys columns and a
+  header divider; relationship endpoints carry single-character
+  cardinality glyphs (`1`, `?`, `+`, `*`). Ships the visual
+  polish that makes erDiagram feel like a first-class diagram
+  type.
 - **0.11.0**: `erDiagram` (entity-relationship) support — Phase 1
   of a 3-phase series. Parser handles the full Mermaid grammar
   (cardinality codes, identifying vs non-identifying, attribute
   blocks with PK/FK/UK modifiers, quoted labels and comments).
   Renderer ships a single-row source-order layout with name-only
-  entity boxes and labelled arrows between. Phase 2 adds
-  attribute tables + crow's-foot glyphs; Phase 3 adds grid layout.
-  The most-requested missing diagram type per earlier ROADMAP.
+  entity boxes and labelled arrows between. The most-requested
+  missing diagram type per earlier ROADMAP.
 - **0.10.1**: median + transpose crossing-minimisation passes
   (Phase A.3 of the layered-layout improvements series). Median
   is more robust to outlier neighbours than barycenter alone;
