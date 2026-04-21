@@ -24,12 +24,11 @@ _Nothing actively in progress._
 Four parser TODOs to retire. **0.9.0 shipped autonumber** plus the
 foundation data model on `SequenceDiagram` for the rest. **0.9.1
 shipped notes** (single-anchor + multi-anchor `over X,Y`, `<br>`
-line breaks, defensive `end note` error). Remaining:
+line breaks, defensive `end note` error). **0.9.2 shipped
+activation bars** (`activate`/`deactivate` directives + inline
+`+`/`-` shorthand on message targets, stack-based pairing for
+nested activations, `┃` overlay on lifelines). Remaining:
 
-- **Activation bars** — explicit `activate X` / `deactivate X` plus
-  inline `A->>+B` / `A-->>-B` shorthand. Stack-based parser pairing.
-  Renderer overlays `┃` on lifelines between the activate and
-  deactivate rows. ~half day.
 - **Block statements** — `loop` / `alt`/`else` / `opt` / `par`/`and`
   / `critical`/`option` / `break`. Stack-based parser tracking with
   matched continuation keywords. Renderer draws labelled brackets
@@ -170,6 +169,13 @@ defer until someone files a real use case.
 
 ## Done since 1.7.1 (recent history — see CHANGELOGs for detail)
 
+- **0.9.2**: sequence-diagram activation bars — both explicit
+  `activate X` / `deactivate X` directives and inline `A->>+B` /
+  `A-->>-B` shorthand. Stack-based pairing supports nested
+  activations on the same participant. Renderer overlays heavy
+  `┃` on the participant's lifeline column for the duration of
+  each span; orphan deactivate is a hard parse error, unclosed
+  activate auto-closes at the last message.
 - **0.9.1**: sequence-diagram notes — `note left of X : text`,
   `note right of X`, `note over X`, and the multi-anchor
   `note over X,Y` span form. `<br>` / `<br/>` in note text become

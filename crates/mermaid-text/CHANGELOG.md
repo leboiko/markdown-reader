@@ -3,6 +3,40 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.9.2 — 2026-04-21
+
+### Added
+
+- **Sequence-diagram activation bars** — both forms supported:
+  - **Explicit**: `activate X` / `deactivate X` directives.
+  - **Inline shorthand**: `+` / `-` on the message target — `A->>+B`
+    activates B at the call; `A-->>-B` deactivates the SOURCE at the
+    reply, preserving the canonical call/reply pattern
+    `A->>+B; B-->>-A`.
+- **Stack-based pairing** with per-participant LIFO stacks so nested
+  activations on the same participant render as separate `Activation`
+  spans. Orphan `deactivate` is a hard `Error::ParseError` with the
+  participant name; unclosed `activate` auto-closes at the last
+  message (matches Mermaid).
+- **Renderer overlay**: heavy `┃` (U+2503) drawn on the participant's
+  lifeline column for the duration of each activation span. Skips
+  cells already holding arrow / junction glyphs so the bar reads as
+  "behind" the arrow. Range includes the activating message's label
+  row so single-message activations stay visible.
+- **3 new snapshot tests** (`sequence_with_explicit_activation`,
+  `sequence_with_inline_call_reply_activation`,
+  `sequence_with_nested_activations`) plus 7 new parser unit tests
+  and 3 new helper tests for `strip_activation_marker`.
+
+### Notes
+
+- The bar is single-cell-thick (`┃`) — Mermaid renders a wider
+  filled rectangle, but that needs a multi-cell primitive. Tracked
+  in ROADMAP.
+- Activation rendering uses `arrow_row - 1` as the start row to
+  ensure visibility when the underlying arrow row is fully
+  overwritten by message glyphs.
+
 ## 0.9.1 — 2026-04-19
 
 ### Added

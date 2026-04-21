@@ -700,6 +700,57 @@ note left of API : audit log entry<br/>recorded async";
 }
 
 #[test]
+fn sequence_with_explicit_activation() {
+    // `activate X` / `deactivate X` overlay heavy `┃` bars on the
+    // participant's lifeline between the activate and deactivate rows.
+    let src = "sequenceDiagram
+participant U as User
+participant API
+U->>API: POST /login
+activate API
+API->>U: 200 OK
+deactivate API";
+    let out = mermaid_text::render(src).unwrap();
+    assert!(out.contains('┃'), "expected activation bar in:\n{out}");
+    assert_snapshot!("sequence_with_explicit_activation", out);
+}
+
+#[test]
+fn sequence_with_inline_call_reply_activation() {
+    // Canonical Mermaid pattern: `+B` activates B at the call,
+    // `-A` deactivates the source (A) at the reply — though
+    // visually the bar attaches to B (the active participant).
+    let src = "sequenceDiagram
+participant U as User
+participant API
+participant DB
+U->>+API: POST /login
+API->>+DB: SELECT user
+DB-->>-API: user record
+API-->>-U: 200 + token";
+    let out = mermaid_text::render(src).unwrap();
+    assert!(out.contains('┃'), "expected activation bar in:\n{out}");
+    assert_snapshot!("sequence_with_inline_call_reply_activation", out);
+}
+
+#[test]
+fn sequence_with_nested_activations() {
+    // Two activations on the same participant (B) nest LIFO.
+    let src = "sequenceDiagram
+A->>B: outer call
+activate B
+A->>B: inner call
+activate B
+B->>A: inner reply
+deactivate B
+B->>A: outer reply
+deactivate B";
+    let out = mermaid_text::render(src).unwrap();
+    assert!(out.contains('┃'));
+    assert_snapshot!("sequence_with_nested_activations", out);
+}
+
+#[test]
 fn sequence_end_note_returns_helpful_error() {
     // Mermaid's sequence grammar has no `end note` form (state diagrams
     // do; sequence uses `<br>`). Make sure the parser flags this with a

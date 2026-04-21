@@ -120,7 +120,7 @@ mermaid-text --width 80 my_diagram.mmd
 | `class id1,id2 className` | yes (opt-in) |
 | `id:::className` shorthand (stackable: `A:::a:::b`) | yes (opt-in) |
 | `stateDiagram` / `stateDiagram-v2` | yes (transformed to flowchart) |
-| `sequenceDiagram` (incl. `autonumber`, notes `left of`/`right of`/`over`/`over X,Y`) | yes (separate pipeline) |
+| `sequenceDiagram` (incl. `autonumber`, notes, activation bars `activate`/`deactivate`/inline `+`/`-`) | yes (separate pipeline) |
 | `pie`, `gantt`, `journey`, `erDiagram`, etc. | not supported |
 
 ---

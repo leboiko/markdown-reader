@@ -19,12 +19,23 @@
 
 use crate::Error;
 use crate::parser::common::{
-    parse_sequence_note_anchor, strip_inline_comment, strip_keyword_prefix,
+    parse_sequence_note_anchor, strip_activation_marker, strip_inline_comment,
+    strip_keyword_prefix,
 };
 use crate::sequence::{
-    AutonumberChange, AutonumberState, Message, MessageStyle, NoteEvent, Participant,
-    SequenceDiagram,
+    Activation, AutonumberChange, AutonumberState, Message, MessageStyle, NoteEvent,
+    Participant, SequenceDiagram,
 };
+use std::collections::HashMap;
+
+/// Internal event collected during the parse loop. Activations are
+/// recorded raw (open / close at a given message index) and paired
+/// up by `finalize_activations` at end-of-parse, so partial parse
+/// errors still surface a useful stack-state error message.
+enum ActEvent {
+    Open { participant: String, at: usize },
+    Close { participant: String, at: usize },
+}
 
 // ---------------------------------------------------------------------------
 // Arrow token table — ordered longest-first so the greediest match wins.
@@ -62,6 +73,7 @@ const ARROWS: &[(&str, MessageStyle)] = &[
 /// ```
 pub fn parse(src: &str) -> Result<SequenceDiagram, Error> {
     let mut diag = SequenceDiagram::default();
+    let mut act_events: Vec<ActEvent> = Vec::new();
 
     for raw in src.lines() {
         // Strip inline `%% comment` (outside quoted strings) before
@@ -146,10 +158,39 @@ pub fn parse(src: &str) -> Result<SequenceDiagram, Error> {
             continue;
         }
 
-        // TODO: activate/deactivate — not implemented in MVP.
-        if line.to_lowercase().starts_with("activate ")
-            || line.to_lowercase().starts_with("deactivate ")
-        {
+        // `activate X` / `deactivate X` — record the raw event; pairing
+        // happens in `finalize_activations` after the whole source is
+        // parsed so the stack-error message can reference the full
+        // diagram. Activation indices use the *next* message position
+        // (matching Mermaid: `activate X` before message N attaches at N).
+        if let Some(rest) = strip_keyword_prefix(line, "activate") {
+            let participant = rest.trim();
+            if participant.is_empty() {
+                return Err(Error::ParseError(
+                    "`activate` directive missing participant".to_string(),
+                ));
+            }
+            act_events.push(ActEvent::Open {
+                participant: participant.to_string(),
+                at: diag.messages.len(),
+            });
+            continue;
+        }
+        if let Some(rest) = strip_keyword_prefix(line, "deactivate") {
+            let participant = rest.trim();
+            if participant.is_empty() {
+                return Err(Error::ParseError(
+                    "`deactivate` directive missing participant".to_string(),
+                ));
+            }
+            // Deactivate attaches to the *previous* message — the
+            // participant was active *during* the message, not after.
+            // For the very first message position, clamp to 0.
+            let at = diag.messages.len().saturating_sub(1);
+            act_events.push(ActEvent::Close {
+                participant: participant.to_string(),
+                at,
+            });
             continue;
         }
 
@@ -191,11 +232,30 @@ pub fn parse(src: &str) -> Result<SequenceDiagram, Error> {
             continue;
         }
 
-        // Message arrow lines: `From<arrow>To: text`
-        if let Some(msg) = try_parse_message(line) {
-            diag.ensure_participant(&msg.from.clone());
-            diag.ensure_participant(&msg.to.clone());
+        // Message arrow lines: `From<arrow>To: text`. The optional
+        // `+`/`-` activation marker on the target token is peeled here:
+        //   `A->>+B` → push msg A→B, then Open(B) at this index
+        //   `A-->>-B` → push msg A→B, then Close(A) (the SOURCE — per
+        //     `Activation`'s doc-comment, this preserves the canonical
+        //     call/reply pattern `A->>+B; B-->>-A`)
+        if let Some((msg, marker)) = try_parse_message(line) {
+            let from = msg.from.clone();
+            let to = msg.to.clone();
+            let msg_idx = diag.messages.len();
+            diag.ensure_participant(&from);
+            diag.ensure_participant(&to);
             diag.messages.push(msg);
+            match marker {
+                Some(true) => act_events.push(ActEvent::Open {
+                    participant: to,
+                    at: msg_idx,
+                }),
+                Some(false) => act_events.push(ActEvent::Close {
+                    participant: from,
+                    at: msg_idx,
+                }),
+                None => {}
+            }
             continue;
         }
 
@@ -206,7 +266,53 @@ pub fn parse(src: &str) -> Result<SequenceDiagram, Error> {
         )));
     }
 
+    finalize_activations(&act_events, &mut diag)?;
     Ok(diag)
+}
+
+/// Pair raw activate/deactivate events into `Activation` spans using a
+/// per-participant LIFO stack (so nested activations on the same
+/// participant nest correctly). An orphan close is a hard error; an
+/// unclosed open auto-closes at the last message — matches Mermaid's
+/// lenient behaviour and the doc-comment on `Activation::end_message`.
+fn finalize_activations(
+    events: &[ActEvent],
+    diag: &mut SequenceDiagram,
+) -> Result<(), Error> {
+    let mut stacks: HashMap<String, Vec<usize>> = HashMap::new();
+    for ev in events {
+        match ev {
+            ActEvent::Open { participant, at } => {
+                stacks.entry(participant.clone()).or_default().push(*at);
+            }
+            ActEvent::Close { participant, at } => {
+                let start = stacks
+                    .get_mut(participant)
+                    .and_then(|s| s.pop())
+                    .ok_or_else(|| {
+                        Error::ParseError(format!(
+                            "deactivate `{participant}` with no matching activate"
+                        ))
+                    })?;
+                diag.activations.push(Activation {
+                    participant: participant.clone(),
+                    start_message: start,
+                    end_message: *at,
+                });
+            }
+        }
+    }
+    let last = diag.messages.len().saturating_sub(1);
+    for (participant, mut stack) in stacks {
+        while let Some(start) = stack.pop() {
+            diag.activations.push(Activation {
+                participant: participant.clone(),
+                start_message: start,
+                end_message: last,
+            });
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -244,30 +350,42 @@ fn parse_participant_decl(rest: &str) -> Result<Participant, Error> {
     }
 }
 
-/// Attempt to parse a message arrow line of the form `From<arrow>To: text`.
+/// Attempt to parse a message arrow line of the form `From<arrow>To: text`,
+/// recognising the inline activation shorthand `+`/`-` on the target token.
 ///
 /// Returns `None` when no known arrow token is found in the line.
-fn try_parse_message(line: &str) -> Option<Message> {
+/// Otherwise returns `(message, marker)` where `marker` is
+/// `Some(true)` for `+` (activate target), `Some(false)` for `-`
+/// (deactivate source — see `Activation` doc-comment), `None` for none.
+fn try_parse_message(line: &str) -> Option<(Message, Option<bool>)> {
     for &(arrow, style) in ARROWS {
         if let Some((from, rest)) = line.split_once(arrow) {
             let from = from.trim().to_string();
             // Remaining text: `To: message text` or just `To`
-            let (to, text) = if let Some((to_part, msg_part)) = rest.split_once(':') {
+            let (to_token, text) = if let Some((to_part, msg_part)) = rest.split_once(':') {
                 (to_part.trim().to_string(), msg_part.trim().to_string())
             } else {
                 (rest.trim().to_string(), String::new())
             };
 
+            // Peel the optional inline activation marker from the
+            // target token. The id stripped of the marker is the
+            // actual participant id pushed into the message.
+            let (to, marker) = strip_activation_marker(&to_token);
+
             if from.is_empty() || to.is_empty() {
                 continue;
             }
 
-            return Some(Message {
-                from,
-                to,
-                text,
-                style,
-            });
+            return Some((
+                Message {
+                    from,
+                    to,
+                    text,
+                    style,
+                },
+                marker,
+            ));
         }
     }
     None
@@ -511,5 +629,109 @@ mod tests {
         assert_eq!(diag.notes.len(), 2);
         assert_eq!(diag.notes[0].after_message, 1);
         assert_eq!(diag.notes[1].after_message, 2);
+    }
+
+    // ---- activations (0.9.2) ------------------------------------------
+
+    #[test]
+    fn parse_explicit_activate_deactivate_pair() {
+        let diag = parse(
+            "sequenceDiagram\n\
+             A->>B: hi\n\
+             activate B\n\
+             B->>A: ok\n\
+             deactivate B",
+        )
+        .unwrap();
+        assert_eq!(diag.activations.len(), 1);
+        assert_eq!(diag.activations[0].participant, "B");
+        // `activate B` after message 0 attaches at index 1 (next msg).
+        assert_eq!(diag.activations[0].start_message, 1);
+        // `deactivate B` after message 1 attaches at the previous (1).
+        assert_eq!(diag.activations[0].end_message, 1);
+    }
+
+    #[test]
+    fn parse_inline_plus_activates_target() {
+        let diag = parse("sequenceDiagram\nA->>+B: hi").unwrap();
+        // The unclosed activation auto-closes at the last message.
+        assert_eq!(diag.activations.len(), 1);
+        assert_eq!(diag.activations[0].participant, "B");
+        assert_eq!(diag.activations[0].start_message, 0);
+        assert_eq!(diag.activations[0].end_message, 0);
+        // Target id is stripped of the `+` marker.
+        assert_eq!(diag.messages[0].to, "B");
+    }
+
+    #[test]
+    fn parse_inline_minus_deactivates_source() {
+        // The inline `-` deactivates the SOURCE per the doc-comment on
+        // `Activation` (preserves `A->>+B; B-->>-A` call/reply pattern).
+        let diag = parse(
+            "sequenceDiagram\n\
+             A->>+B: call\n\
+             B-->>-A: reply",
+        )
+        .unwrap();
+        assert_eq!(diag.activations.len(), 1);
+        assert_eq!(diag.activations[0].participant, "B");
+        assert_eq!(diag.activations[0].start_message, 0);
+        assert_eq!(diag.activations[0].end_message, 1);
+        assert_eq!(diag.messages[1].to, "A");
+    }
+
+    #[test]
+    fn parse_nested_activations_same_participant() {
+        let diag = parse(
+            "sequenceDiagram\n\
+             A->>B: outer\n\
+             activate B\n\
+             A->>B: inner\n\
+             activate B\n\
+             B->>A: inner reply\n\
+             deactivate B\n\
+             B->>A: outer reply\n\
+             deactivate B",
+        )
+        .unwrap();
+        // Two nested activations on B: inner (LIFO) then outer.
+        assert_eq!(diag.activations.len(), 2);
+        // Inner pops first.
+        assert_eq!(diag.activations[0].participant, "B");
+        assert_eq!(diag.activations[0].start_message, 2);
+        assert_eq!(diag.activations[1].participant, "B");
+        assert_eq!(diag.activations[1].start_message, 1);
+    }
+
+    #[test]
+    fn parse_orphan_deactivate_errors() {
+        let err = parse("sequenceDiagram\nA->>B: hi\ndeactivate B")
+            .expect_err("orphan deactivate must error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("deactivate") && msg.contains('B'),
+            "error mentions deactivate and the participant: {msg}"
+        );
+    }
+
+    #[test]
+    fn parse_unclosed_activate_extends_to_last_message() {
+        let diag = parse(
+            "sequenceDiagram\n\
+             activate B\n\
+             A->>B: one\n\
+             B->>A: two",
+        )
+        .unwrap();
+        assert_eq!(diag.activations.len(), 1);
+        assert_eq!(diag.activations[0].start_message, 0);
+        assert_eq!(diag.activations[0].end_message, 1, "extends to last msg");
+    }
+
+    #[test]
+    fn parse_activate_missing_participant_errors() {
+        let err = parse("sequenceDiagram\nactivate")
+            .expect_err("bare `activate` is malformed");
+        assert!(err.to_string().contains("activate"));
     }
 }

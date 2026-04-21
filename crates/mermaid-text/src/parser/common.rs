@@ -381,6 +381,27 @@ pub(crate) fn parse_sequence_note_anchor(s: &str) -> Option<NoteAnchor> {
     None
 }
 
+/// Peel a leading `+` or `-` from an identifier token. Used by the
+/// sequence-diagram parser to recognise the inline activation
+/// shorthand on a message target: `A->>+B` (activate target) and
+/// `A-->>-B` (deactivate, applied per `Activation`'s docs to the
+/// SOURCE — preserves the call/reply pattern `A->>+B; B-->>-A`).
+///
+/// Returns `(stripped_id, marker)` where `marker` is `Some(true)` for
+/// `+`, `Some(false)` for `-`, and `None` for no marker. The stripped
+/// id has surrounding whitespace removed so the caller can use it
+/// directly as a participant id.
+pub(crate) fn strip_activation_marker(token: &str) -> (String, Option<bool>) {
+    let t = token.trim_start();
+    if let Some(rest) = t.strip_prefix('+') {
+        (rest.trim().to_string(), Some(true))
+    } else if let Some(rest) = t.strip_prefix('-') {
+        (rest.trim().to_string(), Some(false))
+    } else {
+        (t.trim().to_string(), None)
+    }
+}
+
 /// Resolve `(target_id, class_name)` pairs into concrete style entries
 /// on `graph.node_styles` or `graph.subgraph_styles`. Multiple classes
 /// per target stack via [`merge_node_style`] in source order. Class
@@ -625,6 +646,30 @@ mod tests {
         assert_eq!(parse_sequence_note_anchor("over"), None); // empty body
         assert_eq!(parse_sequence_note_anchor(""), None);
         assert_eq!(parse_sequence_note_anchor("over Alice,"), None); // empty pair half
+    }
+
+    // ---- strip_activation_marker (sequence-diagram inline +/- shorthand) -
+
+    #[test]
+    fn strip_activation_marker_plus() {
+        assert_eq!(strip_activation_marker("+B"), ("B".to_string(), Some(true)));
+        // Whitespace inside `+ B` is tolerated; the id trims clean.
+        assert_eq!(strip_activation_marker("+ B"), ("B".to_string(), Some(true)));
+    }
+
+    #[test]
+    fn strip_activation_marker_minus() {
+        assert_eq!(
+            strip_activation_marker("-Alice"),
+            ("Alice".to_string(), Some(false))
+        );
+    }
+
+    #[test]
+    fn strip_activation_marker_no_marker() {
+        assert_eq!(strip_activation_marker("B"), ("B".to_string(), None));
+        assert_eq!(strip_activation_marker("  B  "), ("B".to_string(), None));
+        assert_eq!(strip_activation_marker(""), (String::new(), None));
     }
 
     #[test]

@@ -5,6 +5,16 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.2] - 2026-04-21
+
+### Added
+
+- **Sequence-diagram activation bars** in markdown mermaid blocks
+  (via `mermaid-text` 0.9.2). Both `activate X` / `deactivate X`
+  directives and the inline `A->>+B` / `B-->>-A` shorthand render
+  as heavy `┃` overlays on participant lifelines. Free upgrade —
+  no markdown-reader code changes.
+
 ## [1.11.1] - 2026-04-19
 
 ### Added

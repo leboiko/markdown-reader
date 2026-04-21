@@ -1,0 +1,16 @@
+---
+source: crates/mermaid-text/tests/snapshots.rs
+expression: out
+---
+ ┌──────┐             ┌──────┐
+ │  A   │             │  B   │
+ └──────┘             └──────┘
+     ┆ outer call         ┆
+     ─────────────────────▸
+     ┆ inner call         ┃
+     ─────────────────────▸
+     ┆ inner reply        ┃
+     ◂─────────────────────
+     ┆ outer reply        ┃
+     ◂─────────────────────
+     ┆                    ┆

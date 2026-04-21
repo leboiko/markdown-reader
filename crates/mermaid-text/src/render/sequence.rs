@@ -71,6 +71,10 @@ const H_DASH: char = '┄';
 /// Lifeline character.
 const LIFELINE: char = '┆';
 
+// Activation bar — solid heavy vertical, overlays the dashed lifeline.
+// Visually distinct from `┆` so the active span reads as "executing".
+const ACTIVATION_BAR: char = '┃';
+
 // ---------------------------------------------------------------------------
 // Canvas
 // ---------------------------------------------------------------------------
@@ -579,6 +583,13 @@ pub fn render(diag: &SequenceDiagram) -> String {
     let mut autonumber = AutonumberState::Off;
     let mut autonumber_cursor = 0usize;
 
+    // Captured arrow row for each message, indexed by message position.
+    // Used by the activation-bar overlay pass to translate
+    // `Activation::start_message` / `end_message` (message indices) into
+    // canvas rows. For self-messages we store the top-leg row so the bar
+    // naturally covers both legs.
+    let mut message_arrow_rows: Vec<usize> = Vec::with_capacity(num_messages);
+
     // Helper closure: render any notes whose `after_message` matches
     // `at`, advancing `arrow_row` by each note's height. Used both
     // before the message loop (for notes with after_message == 0)
@@ -633,6 +644,9 @@ pub fn render(diag: &SequenceDiagram) -> String {
             continue;
         };
 
+        // Capture the arrow row for this message before advancing.
+        message_arrow_rows.push(arrow_row);
+
         if si == ti {
             draw_self_message(
                 &mut canvas,
@@ -658,6 +672,40 @@ pub fn render(diag: &SequenceDiagram) -> String {
         // `after_message` index equals this iteration's index + 1
         // — see NoteEvent::after_message docs in src/sequence.rs).
         render_notes_at(&mut canvas, &mut arrow_row, msg_idx + 1);
+    }
+
+    // 4. Overlay activation bars on participant lifelines. Drawn last so
+    //    they sit on top of the dashed lifeline glyph but skip cells
+    //    already holding arrow / junction characters from messages.
+    //
+    //    The range starts at the *label row* of the activating message
+    //    (arrow_row - 1) so single-message activations still produce a
+    //    visible bar even when the arrow row itself is overwritten by
+    //    arrow chars.
+    for act in &diag.activations {
+        let Some(pi) = diag.participant_index(&act.participant) else {
+            continue;
+        };
+        let cx = layouts[pi].center;
+        let arrow_r0 = message_arrow_rows
+            .get(act.start_message)
+            .copied()
+            .unwrap_or(BOX_HEIGHT + 1);
+        let r1 = message_arrow_rows
+            .get(act.end_message)
+            .copied()
+            .unwrap_or_else(|| height.saturating_sub(2));
+        // Include the label row above the activating message so the bar
+        // is at least 2 rows tall (label + arrow), guaranteeing
+        // visibility even when start == end.
+        let r0 = arrow_r0.saturating_sub(1).max(BOX_HEIGHT);
+        let (lo, hi) = if r0 <= r1 { (r0, r1) } else { (r1, r0) };
+        for r in lo..=hi {
+            let cell = canvas.grid[r][cx];
+            if cell == LIFELINE || cell == ' ' {
+                canvas.put(r, cx, ACTIVATION_BAR);
+            }
+        }
     }
 
     canvas.into_string()

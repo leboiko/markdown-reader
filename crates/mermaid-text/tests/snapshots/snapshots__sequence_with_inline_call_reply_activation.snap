@@ -1,0 +1,16 @@
+---
+source: crates/mermaid-text/tests/snapshots.rs
+expression: out
+---
+ ┌────────┐             ┌───────┐            ┌──────┐
+ │  User  │             │  API  │            │  DB  │
+ └────────┘             └───────┘            └──────┘
+      ┆ POST /login         ┃                    ┆
+      ──────────────────────▸                    ┆
+      ┆                     ┃ SELECT user        ┃
+      ┆                     ─────────────────────▸
+      ┆                     ┃ user record        ┃
+      ┆                     ◂┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+      ┆ 200 + token         ┃                    ┆
+      ◂┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄                    ┆
+      ┆                     ┆                    ┆
