@@ -1211,7 +1211,7 @@ dependencies = [
 
 [[package]]
 name = "markdown-tui-explorer"
-version = "1.15.0"
+version = "1.15.1"
 dependencies = [
  "anyhow",
  "base64",
@@ -1288,7 +1288,7 @@ dependencies = [
 
 [[package]]
 name = "mermaid-text"
-version = "0.14.0"
+version = "0.14.1"
 dependencies = [
  "ascii-dag",
  "insta",

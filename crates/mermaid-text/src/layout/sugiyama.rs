@@ -109,24 +109,27 @@ pub fn sugiyama_layout(graph: &Graph, _config: &LayoutConfig) -> LayoutResult {
 
     // 3. Compute the layout. STANDARD preset — fast enough for
     //    interactive use and produces near-optimal crossings on
-    //    the diagrams we care about. Spacing comes from our own
-    //    `LayoutConfig` so the output matches what the native
-    //    layered backend would produce on simple cases.
+    //    the diagrams we care about.
     //
-    //    Spacing-axis interpretation:
-    //    - ascii-dag's level_spacing is the inter-level gap (rows
-    //      between levels in TD). When transposed for LR, that's
-    //      our layer_gap (cols between layers).
-    //    - ascii-dag's node_spacing is the within-level sibling
-    //      gap. When transposed, that's our node_gap.
+    //    Note: ascii-dag's `level_spacing` and `node_spacing` config
+    //    fields are vestigial in 0.9.1 (line 157 of heap.rs hardcodes
+    //    `+3` regardless). We pass our config values for
+    //    forward-compat but apply our own spacing in step 4.5 below.
     let mut cfg = ALayoutConfig::standard();
     cfg.level_spacing = _config.layer_gap;
     cfg.node_spacing = _config.node_gap;
+    // We need dummy nodes in the IR to look up the level of each
+    // long-edge waypoint when applying per-layer offsets in step 6.
+    cfg.include_dummy_nodes = true;
     let ir = adag.compute_layout_with_config(&cfg);
 
     // 4. Translate IR → our LayoutResult, transposing for LR/RL.
-    let mut positions: HashMap<String, (usize, usize)> =
-        HashMap::with_capacity(ir.nodes().len());
+    //    We collect the level-axis coordinate of each node first so
+    //    step 4.5 can apply per-layer offsets to widen the inter-
+    //    layer gap from ascii-dag's hardcoded 3 cells to our
+    //    `_config.layer_gap` (default 6).
+    let mut raw_positions: Vec<(String, usize, usize, usize)> =
+        Vec::with_capacity(ir.nodes().len()); // (id, col, row, level)
     let mut max_x = 0usize;
     let mut max_y = 0usize;
     for n in ir.nodes() {
@@ -138,9 +141,30 @@ pub fn sugiyama_layout(graph: &Graph, _config: &LayoutConfig) -> LayoutResult {
         }
         let Some(real_id) = usize_to_id.get(&n.id) else { continue };
         let (col, row) = if transpose { (n.y, n.x) } else { (n.x, n.y) };
-        positions.insert(real_id.clone(), (col, row));
+        raw_positions.push((real_id.clone(), col, row, n.level));
         max_x = max_x.max(col);
         max_y = max_y.max(row);
+    }
+
+    // 4.5. Apply per-layer offset along the flow axis to expand
+    //      ascii-dag's hardcoded 3-cell inter-layer spacing to our
+    //      `_config.layer_gap`. For LR/RL the flow axis is `col`;
+    //      for TB/BT it's `row`. Without this, edge-routing chrome
+    //      from our renderer collides with the tight gaps and we
+    //      see junction-glyph mush around node corners.
+    const ASCII_DAG_BASELINE_GAP: usize = 3;
+    let extra_per_layer = _config.layer_gap.saturating_sub(ASCII_DAG_BASELINE_GAP);
+    let mut positions: HashMap<String, (usize, usize)> =
+        HashMap::with_capacity(raw_positions.len());
+    for (id, col, row, level) in raw_positions {
+        let offset = level * extra_per_layer;
+        let (col, row) = match graph.direction {
+            Direction::LeftToRight | Direction::RightToLeft => (col + offset, row),
+            Direction::TopToBottom | Direction::BottomToTop => (col, row + offset),
+        };
+        max_x = max_x.max(col);
+        max_y = max_y.max(row);
+        positions.insert(id, (col, row));
     }
 
     // 5. Mirror the per-axis range for RL / BT.
@@ -158,7 +182,21 @@ pub fn sugiyama_layout(graph: &Graph, _config: &LayoutConfig) -> LayoutResult {
     // 6. Extract edge waypoints. ascii-dag emits `MultiSegment`
     //    for any edge that crossed dummy nodes on its way; the
     //    `waypoints` list is the chain of dummy positions. We
-    //    transpose them the same way as node positions.
+    //    transpose them the same way as node positions, and apply
+    //    the same per-level offset (from step 4.5) so waypoints
+    //    line up with the expanded node positions.
+    //
+    //    Build a (raw_x, raw_y) → level map by scanning every
+    //    node in the IR (real + dummy, since `include_dummy_nodes`
+    //    is on). Waypoints land at dummy node positions, so we can
+    //    look up each waypoint's level by exact-coordinate match
+    //    against this map.
+    let mut coord_to_level: HashMap<(usize, usize), usize> =
+        HashMap::with_capacity(ir.nodes().len());
+    for n in ir.nodes() {
+        coord_to_level.insert((n.x, n.y), n.level);
+    }
+
     let mut edge_waypoints: Vec<EdgeWaypoints> = Vec::new();
     for (idx, edge) in graph.edges.iter().enumerate() {
         let (Some(&from), Some(&to)) = (
@@ -178,7 +216,24 @@ pub fn sugiyama_layout(graph: &Graph, _config: &LayoutConfig) -> LayoutResult {
         if let EdgePath::MultiSegment { waypoints, .. } = &adag_edge.path {
             let mut points: Vec<(usize, usize)> = waypoints
                 .iter()
-                .map(|&(x, y)| if transpose { (y, x) } else { (x, y) })
+                .map(|&(raw_x, raw_y)| {
+                    // Apply the per-layer offset using the dummy node's
+                    // level. Waypoints not landing on a known node
+                    // coord (rare — interpolated path cells) get no
+                    // offset, which keeps them in the right ballpark.
+                    let level = coord_to_level.get(&(raw_x, raw_y)).copied().unwrap_or(0);
+                    let level_offset = level * extra_per_layer;
+                    let (col, row) = if transpose { (raw_y, raw_x) } else { (raw_x, raw_y) };
+                    let (col, row) = match graph.direction {
+                        Direction::LeftToRight | Direction::RightToLeft => {
+                            (col + level_offset, row)
+                        }
+                        Direction::TopToBottom | Direction::BottomToTop => {
+                            (col, row + level_offset)
+                        }
+                    };
+                    (col, row)
+                })
                 .collect();
             // Mirror axis for RL/BT to match the position transform above.
             if matches!(graph.direction, Direction::RightToLeft) {

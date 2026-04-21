@@ -3,6 +3,31 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.14.1 — 2026-04-22
+
+### Fixed
+
+- **Sugiyama backend chrome glitches narrowed.** Previous output
+  glued junction glyphs (`├┐`) flush against node borders because
+  ascii-dag's hardcoded 3-cell inter-layer spacing didn't leave
+  room for our edge-routing A* corners. Now the wrapper applies
+  per-layer offsets (`level × (config.layer_gap − 3)`) to expand
+  the layout to match our preferred spacing, and looks up each
+  long-edge waypoint's level via dummy-node coordinates so the
+  expansion stays consistent. Visible improvement on the README
+  architecture case: gap between App and RabbitMQ widens from 0
+  to 4 cells; the cross-junction now reads as a real `┼` instead
+  of a glued `├┐`.
+
+  Snapshot updated:
+  `architecture_diagram_with_sugiyama_backend`.
+
+### Changed
+
+- `is_multiple_of(2)` instead of `n % 2 == 0` (now that MSRV is
+  1.92, the more idiomatic API is available — keeps clippy happy
+  on Rust 1.93's `manual_is_multiple_of` lint).
+
 ## 0.14.0 — 2026-04-22
 
 ### Added
