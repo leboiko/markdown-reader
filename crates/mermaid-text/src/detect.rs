@@ -12,6 +12,8 @@ pub enum DiagramKind {
     /// `stateDiagram` and `stateDiagram-v2` diagrams. Both keywords share the
     /// same grammar in upstream Mermaid; only the JS renderer differs.
     State,
+    /// `pie` charts. Render as a horizontal bar chart in text mode.
+    Pie,
 }
 
 /// Detect the kind of Mermaid diagram described by `input`.
@@ -40,8 +42,9 @@ pub enum DiagramKind {
 /// assert_eq!(detect("graph LR\nA-->B").unwrap(), DiagramKind::Flowchart);
 /// assert_eq!(detect("flowchart TD\nA-->B").unwrap(), DiagramKind::Flowchart);
 /// assert_eq!(detect("sequenceDiagram\nA->>B: hi").unwrap(), DiagramKind::Sequence);
+/// assert_eq!(detect("pie title Pets").unwrap(), DiagramKind::Pie);
 /// assert!(detect("").is_err());
-/// assert!(detect("pie title Pets").is_err());
+/// assert!(detect("gantt title Roadmap").is_err());
 /// ```
 pub fn detect(input: &str) -> Result<DiagramKind, Error> {
     let first = input
@@ -57,6 +60,7 @@ pub fn detect(input: &str) -> Result<DiagramKind, Error> {
         "graph" | "flowchart" => Ok(DiagramKind::Flowchart),
         "sequencediagram" => Ok(DiagramKind::Sequence),
         "statediagram" | "statediagram-v2" => Ok(DiagramKind::State),
+        "pie" => Ok(DiagramKind::Pie),
         other => Err(Error::UnsupportedDiagram(other.to_string())),
     }
 }
@@ -86,10 +90,17 @@ mod tests {
 
     #[test]
     fn unknown_type_returns_error() {
+        // `gantt` is still unsupported; `pie` was added in 0.9.4.
         assert!(matches!(
-            detect("pie title Pets"),
+            detect("gantt title Roadmap"),
             Err(Error::UnsupportedDiagram(_))
         ));
+    }
+
+    #[test]
+    fn detects_pie_keyword() {
+        assert_eq!(detect("pie title Pets\n\"Dogs\" : 5").unwrap(), DiagramKind::Pie);
+        assert_eq!(detect("PIE\n\"X\" : 1").unwrap(), DiagramKind::Pie);
     }
 
     #[test]

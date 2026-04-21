@@ -19,6 +19,14 @@ _Nothing actively in progress._
 
 ## Next up (ordered roughly by ROI)
 
+### Pie chart slice colours
+
+`pie` charts ship monochrome in 0.9.4. Wiring the existing 24-bit
+ANSI colour pipeline through `render::pie::render` would let users
+`--color` their pies (auto-assign distinct colours per slice, or
+honour an explicit `pieDef <name> fill:#…` directive if Mermaid
+adopts one). Small extension once someone asks.
+
 ### Sequence-polish follow-ups (deferred)
 
 The four-part sequence-diagram polish series shipped over 0.9.0–
@@ -43,12 +51,6 @@ The four-part sequence-diagram polish series shipped over 0.9.0–
 ---
 
 ## Bigger ideas
-
-### `pie` charts — `mermaid-text`
-
-Smallest new diagram type. `pie title Pet Counts \n "Dogs" : 386 \n
-"Cats" : 85`. Render as either a horizontal bar chart or labelled
-slices. ~200 LOC.
 
 ### Concurrent regions `--` — `mermaid-text`
 
@@ -160,6 +162,14 @@ defer until someone files a real use case.
 
 ## Done since 1.7.1 (recent history — see CHANGELOGs for detail)
 
+- **0.9.4**: `pie` chart support — first new diagram type since
+  `sequenceDiagram` in 0.9.0. Accepts the standard `pie [showData]
+  [title <text>]` header plus `"label" : value` slice lines.
+  Renders as a horizontal bar chart in monospace text (more
+  legible than any ASCII pie attempt) — `█` filled / `░` unfilled,
+  percentage column, optional value column when `showData` is set.
+  Bar width auto-scales to the `--width` budget. Slice colours are
+  deferred (monochrome v1).
 - **0.9.3**: sequence-diagram block statements — `loop`, `alt`/
   `else`, `opt`, `par`/`and`, `critical`/`option`, `break`. Stack-
   based parser with proper validation (orphan `end`, wrong

@@ -839,6 +839,54 @@ end";
     assert_snapshot!("sequence_with_par_and_critical_blocks", out);
 }
 
+// ---------------------------------------------------------------------------
+// Pie charts (0.9.4) — first full diagram-type addition since sequence in
+// 0.9.0. Renders as a horizontal bar chart in monospace text.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pie_minimal() {
+    let src = "pie\n\"A\" : 1\n\"B\" : 1\n\"C\" : 2";
+    let out = mermaid_text::render(src).unwrap();
+    assert!(out.contains('█'));
+    assert!(out.contains("50.0%"));
+    assert_snapshot!("pie_minimal", out);
+}
+
+#[test]
+fn pie_with_title() {
+    let src = "pie title Pet Counts\n\"Dogs\" : 386\n\"Cats\" : 85\n\"Rats\" : 15";
+    let out = mermaid_text::render(src).unwrap();
+    assert!(out.contains("Pet Counts"));
+    assert_snapshot!("pie_with_title", out);
+}
+
+#[test]
+fn pie_with_show_data() {
+    let src = "pie showData title Browser Share\n\"Chrome\" : 60\n\"Firefox\" : 25\n\"Safari\" : 15";
+    let out = mermaid_text::render(src).unwrap();
+    assert!(out.contains("(60)"));
+    assert!(out.contains("(25)"));
+    assert_snapshot!("pie_with_show_data", out);
+}
+
+#[test]
+fn pie_many_slices_with_decimals() {
+    // Stresses label-column padding (varying widths) and decimal value
+    // formatting. The value column should align by closing paren.
+    let src = "pie showData title Releases\n\
+        \"v0.9.0\" : 12\n\
+        \"v0.9.1\" : 8.5\n\
+        \"v0.9.2\" : 17.25\n\
+        \"v0.9.3\" : 30\n\
+        \"v0.9.4\" : 5\n\
+        \"older\" : 27.25";
+    let out = mermaid_text::render(src).unwrap();
+    assert!(out.contains("(8.5)"));
+    assert!(out.contains("(17.25)"));
+    assert_snapshot!("pie_many_slices_with_decimals", out);
+}
+
 #[test]
 fn sequence_end_note_returns_helpful_error() {
     // Mermaid's sequence grammar has no `end note` form (state diagrams

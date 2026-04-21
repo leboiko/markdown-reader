@@ -3,6 +3,42 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.9.4 — 2026-04-21
+
+### Added
+
+- **`pie` chart support** — first new diagram type since
+  `sequenceDiagram` in 0.9.0. Mermaid syntax accepted:
+  ```mermaid
+  pie [showData] [title <text>]
+      "Label1" : 386
+      "Label2" : 85
+  ```
+  - Optional `showData` keyword (case-insensitive) toggles the raw
+    value column on each row.
+  - Optional `title <text>` rendered centred above the chart.
+  - Slice values may be integer or decimal; non-positive values
+    are rejected with a clear `Error::ParseError`.
+- **Renderer**: horizontal bar chart per slice — much more legible
+  in monospace text than any ASCII pie attempt. Bars use `█`
+  (filled) and `░` (unfilled); columns are: label, bar, percentage,
+  optional value-in-parens. Width auto-scales to the `--width`
+  budget (default 80 cols). Integer values render without trailing
+  `.0` (`(386)`, not `(386.0)`).
+- New public types `PieChart` and `PieSlice` re-exported from the
+  crate root. `DiagramKind::Pie` added to the detection enum.
+- **4 new snapshot tests** (`pie_minimal`, `pie_with_title`,
+  `pie_with_show_data`, `pie_many_slices_with_decimals`) plus 13
+  parser unit tests and 6 renderer tests.
+
+### Notes
+
+- Slice colours are deferred: pie renders monochrome in v1. Wiring
+  the existing 24-bit ANSI color pipeline through the bar renderer
+  would let users `--color` their pies — tracked as a follow-up.
+- `gantt`, `journey`, `erDiagram`, and `classDiagram` remain the
+  most-requested unsupported diagram types.
+
 ## 0.9.3 — 2026-04-21
 
 ### Added

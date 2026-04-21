@@ -70,7 +70,8 @@
 //! | Junction merging (`┼ ├ ┤ ┬ ┴`) | yes |
 //! | `style`, `classDef`, `click`, `linkStyle` directives | silently ignored |
 //! | `sequenceDiagram` (participants, `->>`, `-->>`, `->`, `-->`) | yes |
-//! | `pie`, `gantt`, `stateDiagram`, etc. | not supported |
+//! | `pie` (with optional `showData` and `title`) | yes (rendered as horizontal bar chart) |
+//! | `gantt`, `journey`, `erDiagram`, `classDiagram`, etc. | not supported |
 //!
 //! ## Limitations
 //!
@@ -100,9 +101,11 @@ pub mod detect;
 pub mod layout;
 pub mod parser;
 pub mod render;
+pub mod pie;
 pub mod sequence;
 pub mod types;
 
+pub use pie::{PieChart, PieSlice};
 pub use sequence::{Message, MessageStyle, Participant, SequenceDiagram};
 pub use types::{Direction, Edge, EdgeEndpoint, EdgeStyle, Graph, Node, NodeShape};
 
@@ -225,6 +228,12 @@ pub fn render_with_width(input: &str, max_width: Option<usize>) -> Result<String
             // Sequence diagrams have a fixed layout; no compaction pass.
             let diag = parser::sequence::parse(input)?;
             return Ok(render::sequence::render(&diag));
+        }
+        DiagramKind::Pie => {
+            // Pie charts render as a horizontal bar chart — fixed layout,
+            // honours the optional width budget directly.
+            let chart = parser::pie::parse(input)?;
+            return Ok(render::pie::render(&chart, max_width));
         }
         DiagramKind::Flowchart => parser::parse(input)?,
         DiagramKind::State => {
@@ -404,6 +413,12 @@ pub fn render_with_options(input: &str, opts: &RenderOptions) -> Result<String, 
             // pipeline, no style directives wired up yet).
             let diag = parser::sequence::parse(input)?;
             render::sequence::render(&diag)
+        }
+        DiagramKind::Pie => {
+            // Pie charts honour `max_width` (bar columns scale to fit) but
+            // ignore `color` for now — slice colours are a follow-up.
+            let chart = parser::pie::parse(input)?;
+            render::pie::render(&chart, opts.max_width)
         }
         DiagramKind::Flowchart => {
             let graph = parser::parse(input)?;
@@ -752,7 +767,8 @@ mod tests {
 
     #[test]
     fn unknown_diagram_type_returns_error() {
-        let err = render("pie title Pets").unwrap_err();
+        // `pie` was added in 0.9.4; `gantt` remains unsupported.
+        let err = render("gantt title Roadmap").unwrap_err();
         assert!(
             matches!(err, Error::UnsupportedDiagram(_)),
             "expected UnsupportedDiagram, got {err:?}"
@@ -1333,7 +1349,8 @@ mod tests {
 
     #[test]
     fn unknown_diagram_types_still_error() {
-        let err = render("pie title Pets\n\"Dogs\" : 40").unwrap_err();
+        // `pie` was added in 0.9.4; `journey` remains unsupported.
+        let err = render("journey\ntitle Onboarding\nsection sign-up\nfill out form: 5: User").unwrap_err();
         assert!(
             matches!(err, Error::UnsupportedDiagram(_)),
             "expected UnsupportedDiagram, got {err:?}"

@@ -5,6 +5,7 @@
 
 pub(crate) mod common;
 pub mod flowchart;
+pub mod pie;
 pub mod sequence;
 pub mod state;
 

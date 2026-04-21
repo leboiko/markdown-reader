@@ -5,6 +5,16 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.4] - 2026-04-21
+
+### Added
+
+- **`pie` chart support** in markdown mermaid blocks (via
+  `mermaid-text` 0.9.4). First new diagram type since
+  `sequenceDiagram`. Renders as a horizontal bar chart with
+  optional title and optional `showData` value column. Free
+  upgrade — no markdown-reader code changes.
+
 ## [1.11.3] - 2026-04-21
 
 ### Added

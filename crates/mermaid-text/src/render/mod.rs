@@ -1,5 +1,6 @@
 //! Rendering pipeline: graph + positions → Unicode string.
 
+pub mod pie;
 pub mod sequence;
 pub mod unicode;
 
