@@ -388,6 +388,68 @@ graph LR
     Worker --> DB
 ```
 
+### Sequence diagram (autonumber + activations + alt)
+
+```
+sequenceDiagram
+    autonumber
+    participant U as User
+    participant API
+    U->>+API: POST /login
+    alt cache hit
+        API->>U: cached token
+    else cache miss
+        API->>U: fresh token
+    end
+    API-->>-U: 200 + session
+```
+
+```
+ ┌────────┐               ┌───────┐
+ │  User  │               │  API  │
+ └────────┘               └───────┘
+      ┆ [1] POST /login       ┃
+      ────────────────────────▸
+      ┆                       ┃
+╔═[alt: cache hit]═════════════════╗
+║     ┆ [2] cached token      ┃    ║
+║     ◂────────────────────────    ║
+║     ┆                       ┃    ║
+╠┄[cache miss]┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╣
+║     ┆ [3] fresh token       ┃    ║
+║     ◂────────────────────────    ║
+║     ┆                       ┃    ║
+╚══════════════════════════════════╝
+      ┆ [4] 200 + session     ┃
+      ◂┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+      ┆                       ┆
+```
+
+The four sequence-diagram polish features (autonumber, notes, activation
+bars, block statements) all compose. See
+[`docs/mermaid-gallery.md`](https://github.com/leboiko/markdown-reader/blob/master/docs/mermaid-gallery.md)
+for one example of each.
+
+### Pie chart
+
+```
+pie showData title Pet Counts
+    "Dogs" : 386
+    "Cats" : 85
+    "Rats" : 15
+```
+
+```
+                              Pet Counts
+
+Dogs  ███████████████████████████████████████░░░░░░░░░░   79.4%  (386)
+Cats  █████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   17.5%   (85)
+Rats  ██░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░    3.1%   (15)
+```
+
+Bar columns auto-scale to the `--width` budget (default 80). Without
+`showData` the value column is omitted.
+
 ---
 
 ## How It Works

@@ -344,12 +344,18 @@ on- or off-screen), a bordered `scroll to view diagram` placeholder is
 shown instead of a shrunken image. Scrolling the full block into view
 brings the image back.
 
-**Supported diagram types.** Everything `mermaid-rs-renderer` supports,
-which covers flowcharts, sequence diagrams, state diagrams, class
-diagrams, entity-relationship diagrams, Gantt charts, pie charts, and
-more. Fidelity on subgraphs, styles, and complex layouts depends on the
-renderer's pre-1.0 maturity — when a specific diagram fails, the source
-is shown with a short error in the footer.
+**Supported diagram types.** Everything `mermaid-rs-renderer` supports
+in image mode (flowcharts, sequence, state, class, ER, Gantt, pie,
+and more). The text-mode fallback ([`mermaid-text`](crates/mermaid-text/),
+also our own crate) covers flowcharts, state diagrams,
+sequence diagrams (with autonumber, notes, activation bars, and block
+statements), and pie charts. Fidelity on subgraphs and complex layouts
+depends on each renderer's maturity — when a specific diagram fails,
+the source is shown with a short error in the footer.
+
+See [`docs/mermaid-gallery.md`](docs/mermaid-gallery.md) for a
+runnable gallery showing every supported text-mode feature with
+working examples.
 
 ## Wide tables
 
