@@ -71,7 +71,8 @@
 //! | `style`, `classDef`, `click`, `linkStyle` directives | silently ignored |
 //! | `sequenceDiagram` (participants, `->>`, `-->>`, `->`, `-->`) | yes |
 //! | `pie` (with optional `showData` and `title`) | yes (rendered as horizontal bar chart) |
-//! | `gantt`, `journey`, `erDiagram`, `classDiagram`, etc. | not supported |
+//! | `erDiagram` (entities + relationships with cardinality) | yes (Phase 1 — name-only boxes) |
+//! | `gantt`, `journey`, `classDiagram`, etc. | not supported |
 //!
 //! ## Limitations
 //!
@@ -101,10 +102,14 @@ pub mod detect;
 pub mod layout;
 pub mod parser;
 pub mod render;
+pub mod er;
 pub mod pie;
 pub mod sequence;
 pub mod types;
 
+pub use er::{
+    Attribute, AttributeKey, Cardinality, Entity, ErDiagram, LineStyle, Relationship,
+};
 pub use pie::{PieChart, PieSlice};
 pub use sequence::{Message, MessageStyle, Participant, SequenceDiagram};
 pub use types::{Direction, Edge, EdgeEndpoint, EdgeStyle, Graph, Node, NodeShape};
@@ -234,6 +239,12 @@ pub fn render_with_width(input: &str, max_width: Option<usize>) -> Result<String
             // honours the optional width budget directly.
             let chart = parser::pie::parse(input)?;
             return Ok(render::pie::render(&chart, max_width));
+        }
+        DiagramKind::Er => {
+            // Entity-relationship diagrams have their own layout
+            // pipeline (no Sugiyama, no edge router).
+            let chart = parser::er::parse(input)?;
+            return Ok(render::er::render(&chart, max_width));
         }
         DiagramKind::Flowchart => parser::parse(input)?,
         DiagramKind::State => {
@@ -419,6 +430,12 @@ pub fn render_with_options(input: &str, opts: &RenderOptions) -> Result<String, 
             // ignore `color` for now — slice colours are a follow-up.
             let chart = parser::pie::parse(input)?;
             render::pie::render(&chart, opts.max_width)
+        }
+        DiagramKind::Er => {
+            // erDiagram has its own layout pipeline; honours
+            // `max_width` (Phase 3 will use it for grid reflow).
+            let chart = parser::er::parse(input)?;
+            render::er::render(&chart, opts.max_width)
         }
         DiagramKind::Flowchart => {
             let graph = parser::parse(input)?;

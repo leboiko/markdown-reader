@@ -915,6 +915,47 @@ end";
 // 0.9.0. Renders as a horizontal bar chart in monospace text.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// erDiagram — Phase 1: minimal renderer (entity-name boxes + labelled arrows
+// in source-order row). Phases 2-3 add attribute tables, cardinality glyphs,
+// and grid layout.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn er_minimal_two_entities() {
+    let src = "erDiagram\nCUSTOMER ||--o{ ORDER : places";
+    let out = mermaid_text::render(src).unwrap();
+    assert!(out.contains("CUSTOMER"));
+    assert!(out.contains("ORDER"));
+    assert!(out.contains("▸"));
+    assert!(out.contains("places"));
+    assert_snapshot!("er_minimal_two_entities", out);
+}
+
+#[test]
+fn er_canonical_three_entities() {
+    // The Mermaid docs' canonical example — attributes are parsed
+    // but not rendered in Phase 1 (Phase 2 adds attribute tables).
+    let src = "erDiagram
+    CUSTOMER ||--o{ ORDER : places
+    CUSTOMER {
+        string name
+        string email PK
+    }
+    ORDER ||--|{ LINE-ITEM : contains";
+    let out = mermaid_text::render(src).unwrap();
+    assert!(out.contains("CUSTOMER") && out.contains("ORDER") && out.contains("LINE-ITEM"));
+    assert_snapshot!("er_canonical_three_entities", out);
+}
+
+#[test]
+fn er_non_identifying_renders_dashed_line() {
+    let src = "erDiagram\nPARENT ||..o{ CHILD : optional";
+    let out = mermaid_text::render(src).unwrap();
+    assert!(out.contains("┄"), "non-identifying relationship must use dashed glyph");
+    assert_snapshot!("er_non_identifying_renders_dashed_line", out);
+}
+
 #[test]
 fn pie_minimal() {
     let src = "pie\n\"A\" : 1\n\"B\" : 1\n\"C\" : 2";

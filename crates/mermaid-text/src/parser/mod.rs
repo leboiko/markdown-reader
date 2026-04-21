@@ -4,6 +4,7 @@
 //! `stateDiagram-v2` syntax.
 
 pub(crate) mod common;
+pub mod er;
 pub mod flowchart;
 pub mod pie;
 pub mod sequence;

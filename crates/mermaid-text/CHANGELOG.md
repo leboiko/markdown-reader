@@ -3,6 +3,54 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.11.0 — 2026-04-22
+
+### Added
+
+- **`erDiagram` (entity-relationship) support — Phase 1**. The
+  most-requested missing diagram type per our ROADMAP is now
+  rendered natively:
+  - Parser accepts the full Mermaid erDiagram grammar: the header,
+    relationship lines (`ENTITY1 ||--o{ ENTITY2 : "label"`) with
+    all cardinality codes (`||`, `|o`, `}|`, `}o`), both line
+    styles (`--` identifying and `..` non-identifying), entity
+    blocks (`ENTITY { ... }`) with `type name [KEY,KEY] "comment"`
+    attribute rows, and the three recognised key modifiers (`PK`,
+    `FK`, `UK`).
+  - Phase 1 renderer: single-row source-order layout. Entities
+    render as small name-only boxes; relationships render as
+    horizontal arrows below the row, labelled with
+    `from-cardinality:to-cardinality` plus the user-supplied label.
+    Non-identifying relationships use dashed `┄` glyphs.
+  - Public types re-exported from the crate root: `ErDiagram`,
+    `Entity`, `Attribute`, `AttributeKey`, `Cardinality`,
+    `LineStyle`, `Relationship`.
+  - `DiagramKind::Er` added to the detection enum.
+- **16 parser unit tests** covering: minimal header-only,
+  missing-header error, all four cardinality codes round-trip,
+  identifying vs non-identifying, labels with and without quotes,
+  entity blocks with multiple attributes and key modifiers,
+  attribute comments, forward references, unclosed blocks, stray
+  `}`, missing connector, invalid cardinality, comment/blank skip.
+- **5 data-model unit tests** + **3 renderer unit tests** +
+  **3 snapshot tests** (`er_minimal_two_entities`,
+  `er_canonical_three_entities`,
+  `er_non_identifying_renders_dashed_line`).
+
+### Notes
+
+- Phase 1 intentionally ships minimal: no attribute rows in the
+  rendered boxes, no crow's-foot cardinality glyphs at line
+  endpoints, single-row layout only. All three polish items land
+  in 0.11.x follow-ups (Phase 2: attributes + cardinality glyphs;
+  Phase 3: grid layout).
+- Hyphenated entity names (`LINE-ITEM` in the canonical Mermaid
+  example) are parsed as single tokens — Mermaid permits them.
+- This is the first new diagram type since pie (0.9.4). **0.11.0
+  minor bump** because the `DiagramKind` enum gained a variant —
+  source-breaking for external consumers matching exhaustively on
+  it.
+
 ## 0.10.1 — 2026-04-22
 
 ### Added

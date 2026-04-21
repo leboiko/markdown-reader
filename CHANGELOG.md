@@ -5,6 +5,21 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.13.0] - 2026-04-22
+
+### Added
+
+- **`erDiagram` support** in markdown mermaid blocks (via
+  `mermaid-text` 0.11.0). The most-requested missing diagram
+  type per ROADMAP now renders natively. Phase 1 — entity-name
+  boxes in source-order row, relationships drawn as labelled
+  arrows with `1:N` style cardinality summaries, dashed lines for
+  non-identifying (`..`) relationships.
+- Phase 2 (attribute tables + crow's-foot cardinality glyphs)
+  and Phase 3 (grid layout) ship in subsequent `mermaid-text`
+  0.11.x releases. Free upgrade — no markdown-reader code
+  changes.
+
 ## [1.12.1] - 2026-04-22
 
 ### Changed

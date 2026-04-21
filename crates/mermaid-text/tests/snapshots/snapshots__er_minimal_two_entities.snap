@@ -1,0 +1,10 @@
+---
+source: crates/mermaid-text/tests/snapshots.rs
+expression: out
+---
+┌────────────┐    ┌─────────┐
+│  CUSTOMER  │    │  ORDER  │
+└────────────┘    └─────────┘
+
+               1:0..N places
+              ───▸

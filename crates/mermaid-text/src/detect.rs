@@ -14,6 +14,9 @@ pub enum DiagramKind {
     State,
     /// `pie` charts. Render as a horizontal bar chart in text mode.
     Pie,
+    /// `erDiagram` (entity-relationship). Render as labelled entity
+    /// boxes joined by cardinality-tagged relationship lines.
+    Er,
 }
 
 /// Detect the kind of Mermaid diagram described by `input`.
@@ -61,6 +64,7 @@ pub fn detect(input: &str) -> Result<DiagramKind, Error> {
         "sequencediagram" => Ok(DiagramKind::Sequence),
         "statediagram" | "statediagram-v2" => Ok(DiagramKind::State),
         "pie" => Ok(DiagramKind::Pie),
+        "erdiagram" => Ok(DiagramKind::Er),
         other => Err(Error::UnsupportedDiagram(other.to_string())),
     }
 }
