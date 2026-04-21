@@ -76,7 +76,199 @@ unless someone asks. Multi-day each.
 
 ## Quality / polish backlog
 
-### Edge-routing improvements
+### Rendering issues found in the 2026-04-21 gallery review
+
+Reviewing `docs/mermaid-gallery.md` against GitHub's native Mermaid
+rendering surfaced a cluster of rendering-quality issues. Grouped
+by root cause and ordered by ROI (small-targeted-fix first, deep
+rework last). Most of these were discovered together and share
+some underlying machinery, so picking the right order of attack
+matters.
+
+#### 1. Bidirectional edges share label space (targeted, ~2-3h) ★★★
+
+**Symptom (Supervisor pattern):** `F[Factory] -->|creates| W[Worker]`
+plus `W -->|panics| F` produces a render where "creates" and
+"panics" both sit inside the narrow channel between Factory and
+Worker, and "panics" overwrites Factory's bottom border:
+```
+│ ┌─────────┐ │
+│▸│ Factory │││
+││└───panics┘││   ← "panics" written ON Factory's bottom border
+│└─────creates│
+```
+
+**Root cause:** the label-placement pass picks each edge's
+geometric midpoint without checking either (a) whether another
+parallel edge already claimed that channel or (b) whether the
+chosen row collides with a box border or subgraph border.
+
+**Fix scope:**
+- Detect parallel edges (same node pair, opposite direction OR
+  same direction with different style/label) and route them in
+  separate columns/rows.
+- Extend the existing label-vs-node-interior collision guard
+  (shipped in 0.7.1) to also cover box borders and subgraph
+  borders. If the chosen row collides, shift up/down to the
+  nearest non-border row.
+
+**Why ★★★:** small bounded change, fixes the visually worst bug
+in the gallery, and unlocks the same fix for case #2 below.
+
+#### 2. Multiple labelled edges between same node pair (targeted, ~1-2h) ★★★
+
+**Symptom (CI/CD pipeline):** `T ==>|pass| D` plus `T -.->|skip| D`
+produces a render where both labels stack vertically into a
+single-column gap between Test and Deploy:
+```
+... ┌──────┐ │pass┌────────┐
+... │ Test │━│skip│ Deploy │
+... └──────┘┄│┄┄┄▸└────────┘
+```
+
+**Root cause:** same as #1 — parallel edges share a channel.
+Different visual symptom because LR direction collapses the
+shared channel to a tiny vertical gap.
+
+**Fix scope:** lifts directly out of fix #1. When two edges
+connect the same source/target, route the second on a separate
+horizontal lane (above or below the first) with its own label
+row. The dotted style (`-.->`) is already preserved; just needs
+its own routing channel.
+
+**Why ★★★:** trivial once #1 is done; shares the same code path.
+
+#### 3. Arrow termination doesn't visually merge with destination box (targeted, ~1-2h) ★★
+
+**Symptom (state machine):** `▾` lands on the row directly above
+each destination box's top border. In raw text they're adjacent;
+in TUI display the line-height creates a visible gap, especially
+when back-edge perimeter columns insert vertical `│` lines that
+fragment the destination row visually.
+
+**Root cause:** `draw_arrow` terminates the arrowhead one row
+above the destination box. Convention is correct but reads as
+"floating" in proportional-line-height contexts.
+
+**Fix scope:** change arrow termination to land *on* the
+destination box's top border, replacing one `─` with `▾`:
+```
+   │              │
+   │   instead    │
+   ▾   of         ▾   →  ┌──▾──┐
+┌─────┐           ┌─────┐│ Box │
+│ Box │           │ Box │└─────┘
+└─────┘           └─────┘
+```
+
+**Why ★★:** small change, makes every arrow read more clearly,
+benefits every diagram type. Risk: changes existing snapshots
+broadly — need to bulk-update.
+
+#### 4. Sequence-block tag style mismatches Mermaid (targeted, ~2h) ★★
+
+**Symptom (sequence with alt block):** we render
+`╔═[alt: cache hit]═══...═╗` (kind name and first-branch label
+combined inside one bracket). Real Mermaid renders the kind name
+as a separate small tag in the top-left corner with the condition
+label floating inside the box:
+```
+Real Mermaid:        Ours:
+┌ alt ┬─────────┐    ╔═[alt: cache hit]═══════╗
+│ ··· [cache hit] │   ║   …                    ║
+│ ········  ····· │   ╠┄[cache miss]┄┄┄┄┄┄┄┄┄┄┄╣
+│ ········· ····· │   ║   …                    ║
+│       [cache miss] │ ╚═══════════════════════╝
+│ ········  ····· │
+│ ········  ····· │
+└─────────────────┘
+```
+
+**Fix scope:** restructure `draw_block_frame` to render the kind
+name as a small inset tag in the top-left corner only, and place
+the first-branch label as a free-floating tag below the top
+border (similar to how continuation labels already work). Keeps
+all existing data-model and parse logic; pure renderer change.
+
+**Why ★★:** matches user expectation from real Mermaid, sequence
+diagrams are heavily used.
+
+#### 5. Missing bottom participant boxes in sequence diagrams (~3-4h) ★★
+
+**Symptom:** real Mermaid renders the participant boxes at BOTH
+top AND bottom of the lifelines. We only render the top boxes.
+Visually subtle but missing — and it's where the eye looks to
+"close" a sequence diagram.
+
+**Fix scope:** extend `render` to draw a mirror set of
+participant boxes at the bottom of the canvas, after the last
+message row. Affects canvas height calculation
+(`+ BOX_HEIGHT`), block-frame row range (mustn't extend into the
+bottom-box area), and lifeline drawing (must terminate one row
+above the bottom box). Bounded change, but touches several height
+budgets.
+
+**Why ★★:** matches Mermaid convention; visually completes
+sequence diagrams.
+
+#### 6. Edge crossings not minimised in dense graphs (deep rework, multi-day) ★
+
+**Symptom (Dependency graph):** App→PostgreSQL, App→RabbitMQ,
+RabbitMQ→Worker, Worker→PostgreSQL all cross each other in
+visually busy ways. GitHub's Mermaid uses smarter layout (curved
+edges, crossing minimisation, long-edge dummy nodes) and the same
+graph reads cleanly there.
+
+**Root cause:** our layered-layout pipeline:
+- Doesn't run a crossing-minimisation pass during node ordering
+  within layers.
+- Doesn't insert dummy nodes for edges spanning multiple layers
+  (so `App → PostgreSQL` skipping past `Worker`'s layer takes a
+  long detour rather than threading cleanly).
+- A* edge router is greedy per-edge rather than globally
+  optimising.
+
+**Fix scope (the big rework):**
+1. Add long-edge dummy node insertion (standard sugiyama step
+   between layer assignment and crossing minimisation).
+2. Add a barycenter or median-based crossing-minimisation pass
+   over node-orderings within each layer.
+3. Optional: smarter edge router that uses the dummy-node grid
+   to thread parallel edges along reserved channels.
+
+**Why ★ (not higher):** "hard, mostly-invisible-when-it-works"
+applies here. Big effort with subtle wins on simple diagrams; the
+payoff shows up on the gallery's complex examples but those
+already half-work. Already on roadmap as "Edge-routing
+improvements" (see below) — this section is the detailed
+diagnosis.
+
+#### 7. Back-edge perimeter routing fragments forward edges (medium, ~half day) ★
+
+**Symptom (state machine):** the back-edge `Failed → Idle` (going
+UP in TD direction) routes via the right perimeter, inserting a
+vertical `│` column that threads between Done and Failed. The
+forward edges `Running → Done` and `Running → Failed` then have
+to share narrow channels in the middle, and labels like
+`done`/`error` get crammed into tight rows that read as
+disconnected.
+
+**Root cause:** perimeter routing for back-edges (shipped in
+0.6.0) inserts columns/rows greedily without considering the
+visual impact on forward edges through the same area.
+
+**Fix scope:** during perimeter routing, prefer perimeter slots
+that are FURTHER from the dense-forward-edge area; if no slot is
+clean, route the back-edge through a fresh added column at the
+canvas edge rather than through the active diagram body.
+
+**Why ★:** mostly affects the visual quality of mixed-direction
+diagrams. Diagnosis should prove out before committing to the
+fix.
+
+---
+
+### Edge-routing improvements (legacy entry — see #6 above for detailed diagnosis)
 
 Dense graphs (e.g. the circuit-breaker FSM with 5 states + 3
 back-edges) still produce visually busy outputs because A* is
