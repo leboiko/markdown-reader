@@ -5,6 +5,16 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.13.5] - 2026-04-22
+
+### Fixed
+
+- **TD/BT state diagrams with cycles render their back-edge entry
+  cleanly** (via `mermaid-text` 0.12.2). The garbled `├┤` glyph
+  pair at the back-edge source is now a proper L-corner (`├┘`
+  for TD, `├┐` for BT). Visible on the canonical README state
+  machine. Free upgrade.
+
 ## [1.13.4] - 2026-04-22
 
 ### Fixed

@@ -3,6 +3,30 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.12.2 — 2026-04-22
+
+### Fixed
+
+- **TD/BT back-edge source connector renders as a clean L-corner
+  instead of garbled `├┤`**. When a back-edge exits a node's right
+  side and turns to climb (TD) or descend (BT) the perimeter, the
+  source border was stamped `├` (correct) followed by the first
+  path cell stamped `┤` (wrong — `┤` is a tee, not a corner, and
+  the two glyphs glued together looked like a chrome glitch).
+  The `┤` choice was left over from a uniform `┬`/`┴`-vs-`├`/`┤`
+  glyph table inherited from the LR/RL case, where the LR pair
+  works because they sit on separate rows.
+
+  Now the path-cell glyph is direction-aware:
+  - LR/RL: keeps `┴` (vertical adjacency reads fine on its row)
+  - TD: `┘` — the path arrives from the left and turns up
+  - BT: `┐` — the path arrives from the left and turns down
+
+  Visible on the canonical TD state machine (`Idle → Running →
+  Done/Failed → Idle`): the `Idle` cell at the back-edge entry
+  now reads `│ Idle ├┘` instead of `│ Idle ├┤`. One snapshot
+  updated (`back_edge_avoids_diagram_interior_in_td_cycle`).
+
 ## 0.12.1 — 2026-04-22
 
 ### Fixed

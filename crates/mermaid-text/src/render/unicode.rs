@@ -864,11 +864,25 @@ fn render_inner(
     // source border so the perimeter path connects visibly out of the
     // source node. Destination joins already carry the arrow tip glyph
     // (`▴`/`◂`) written by `draw_routed_path` and protected — stamping
-    // a `┬`/`├` over those would erase the arrowhead.
-    let (border_junction, path_junction) = match graph.direction {
-        Direction::LeftToRight | Direction::RightToLeft => ('┬', '┴'),
-        Direction::TopToBottom | Direction::BottomToTop => ('├', '┤'),
+    // over those would erase the arrowhead.
+    //
+    // Glyph table:
+    // - LR/RL: source border `─` becomes `┬` (T pointing down at the
+    //   bottom-centre cell of the box's bottom border); first path cell
+    //   below becomes `┴` (T pointing up). Vertical adjacency — reads
+    //   cleanly because the chars sit on separate rows.
+    // - TD/BT: source border `│` becomes `├` (right-tee at the right-
+    //   centre cell of the box's right border); first path cell to the
+    //   right becomes a corner — `┘` for TD (path turns up to reach
+    //   target above) or `┐` for BT (path turns down to reach target
+    //   below). Using a corner here fixes the old bug where `├┤` glued
+    //   together and read as garbage — the corner connects the `├`
+    //   stub to the vertical perimeter column above/below.
+    let border_junction = match graph.direction {
+        Direction::LeftToRight | Direction::RightToLeft => '┬',
+        Direction::TopToBottom | Direction::BottomToTop => '├',
     };
+    let path_junction_lr = '┴'; // LR/RL: vertical adjacency, T-up reads fine
     for (col, row, is_dest) in &back_edge_border_joins {
         if *is_dest {
             continue;
@@ -880,9 +894,15 @@ fn render_inner(
         // from the router — corners and other junctions are left alone so we
         // don't mangle complex routed paths.
         let current = grid.get(*col, *row);
-        if current == '─' || current == '│' {
-            grid.set(*col, *row, path_junction);
+        if current != '─' && current != '│' {
+            continue;
         }
+        let glyph = match graph.direction {
+            Direction::LeftToRight | Direction::RightToLeft => path_junction_lr,
+            Direction::TopToBottom => '┘', // path turns from left to up
+            Direction::BottomToTop => '┐', // path turns from left to down
+        };
+        grid.set(*col, *row, glyph);
     }
 
     // Pass 2b: Write all edge labels after node boxes so that node box
