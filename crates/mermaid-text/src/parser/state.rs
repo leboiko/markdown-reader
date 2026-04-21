@@ -29,6 +29,11 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     Error,
+    parser::common::{
+        apply_pending_classes, extract_class_modifier, matches_keyword,
+        parse_class_def_directive, parse_class_directive, parse_link_style_directive,
+        parse_style_directive, strip_inline_comment,
+    },
     types::{BarOrientation, Direction, Edge, Graph, Node, NodeShape, Subgraph},
 };
 
@@ -124,25 +129,6 @@ fn tokenise(input: &str) -> Result<Vec<(usize, String)>, Error> {
     Ok(out)
 }
 
-/// Strip a trailing `%% comment` if present, but only if the `%%` is
-/// outside a `"…"` quoted string (state diagrams put quoted display names
-/// inside `state "…" as Id`).
-fn strip_inline_comment(line: &str) -> &str {
-    let bytes = line.as_bytes();
-    let mut in_quote = false;
-    let mut i = 0;
-    while i + 1 < bytes.len() {
-        let c = bytes[i];
-        if c == b'"' {
-            in_quote = !in_quote;
-        } else if !in_quote && c == b'%' && bytes[i + 1] == b'%' {
-            return &line[..i];
-        }
-        i += 1;
-    }
-    line
-}
-
 // ---------------------------------------------------------------------------
 // Walker
 // ---------------------------------------------------------------------------
@@ -172,6 +158,19 @@ struct Walker {
     /// same `NodeShape::Bar` — they're visually identical and only the
     /// semantic role differs.
     pending_bar_kinds: HashSet<String>,
+    /// `(target_id, class_name)` pairs from `class …` directives and
+    /// inline `:::className` shorthands. Resolved at end-of-parse via
+    /// the shared [`apply_pending_classes`] helper so a `class A foo`
+    /// before `classDef foo …` works.
+    pending_classes: Vec<(String, String)>,
+    /// Scratch [`Graph`] populated incrementally by the shared style /
+    /// classDef / linkStyle directive helpers (which need `&mut Graph`
+    /// to write into the style registries). At [`materialise`] we
+    /// consume its `node_styles` / `edge_styles` / `class_defs` /
+    /// `subgraph_styles` into the final graph. Direction is set
+    /// here too once it's known so the helpers don't need separate
+    /// state.
+    style_scratch: Graph,
 }
 
 impl Default for Walker {
@@ -199,6 +198,10 @@ impl Default for Walker {
             composite_children: HashMap::new(),
             composite_directions: HashMap::new(),
             pending_bar_kinds: HashSet::new(),
+            pending_classes: Vec::new(),
+            // Direction will be overwritten in materialise; the
+            // helpers don't read it, so any value works as the seed.
+            style_scratch: Graph::new(Direction::LeftToRight),
         }
     }
 }
@@ -247,11 +250,32 @@ impl Walker {
                 continue;
             }
 
-            // Silent-skip directives.
-            if matches_keyword(stmt, "classDef")
-                || matches_keyword(stmt, "class")
-                || matches_keyword(stmt, "style")
-                || matches_keyword(stmt, "click")
+            // Style / class directives — recognised. (style + linkStyle
+            // were silently skipped before 0.8.0; they now apply to
+            // state diagrams the same way they do for flowcharts.)
+            if matches_keyword(stmt, "classDef") {
+                parse_class_def_directive(stmt, &mut self.style_scratch);
+                i += 1;
+                continue;
+            }
+            if matches_keyword(stmt, "class") {
+                parse_class_directive(stmt, &mut self.pending_classes);
+                i += 1;
+                continue;
+            }
+            if matches_keyword(stmt, "style") {
+                parse_style_directive(stmt, &mut self.style_scratch);
+                i += 1;
+                continue;
+            }
+            if matches_keyword(stmt, "linkStyle") {
+                parse_link_style_directive(stmt, &mut self.style_scratch);
+                i += 1;
+                continue;
+            }
+
+            // Other directives still silently skipped — orthogonal to color.
+            if matches_keyword(stmt, "click")
                 || matches_keyword(stmt, "accTitle")
                 || matches_keyword(stmt, "accDescr")
                 || matches_keyword(stmt, "scale")
@@ -287,16 +311,28 @@ impl Walker {
                 continue;
             }
 
-            // Transition.
+            // Transition. Peel `:::cls1:::cls2` shorthand off each
+            // endpoint BEFORE resolving (so `[*]:::started` → resolve
+            // `[*]` then attach `started` to the mangled marker id).
             if let Some((from, to, label)) = split_transition(stmt) {
-                let from_id = self.resolve_endpoint(&from, EndpointSide::Source, path);
-                let to_id = self.resolve_endpoint(&to, EndpointSide::Destination, path);
+                let (from_clean, from_classes) = extract_class_modifier(&from);
+                let (to_clean, to_classes) = extract_class_modifier(&to);
+                let from_id = self.resolve_endpoint(&from_clean, EndpointSide::Source, path);
+                let to_id = self.resolve_endpoint(&to_clean, EndpointSide::Destination, path);
+                for c in from_classes {
+                    self.pending_classes.push((from_id.clone(), c));
+                }
+                for c in to_classes {
+                    self.pending_classes.push((to_id.clone(), c));
+                }
                 self.edges.push(Edge::new(from_id, to_id, label));
                 i += 1;
                 continue;
             }
 
-            // `STATE : description`.
+            // `STATE : description`. The description form doesn't take
+            // a class modifier on the id (Mermaid syntax doesn't allow
+            // `A:::cls : desc`), so no extraction needed here.
             if let Some((id, desc)) = split_description(stmt) {
                 self.register_node(&id, path);
                 self.descriptions.entry(id).or_default().push(desc);
@@ -393,15 +429,18 @@ impl Walker {
             }
         }
 
-        // Plain `Id [modifier]` — extract the id, then look at the
-        // remainder for a `<<choice>>` / `<<fork>>` / `<<join>>` (or
-        // `[[…]]`) shape modifier.
+        // Plain `Id[:::cls] [modifier]` — split id and rest, then peel
+        // any trailing `:::cls1:::cls2` shorthand off the id token.
         let mut parts = body.splitn(2, char::is_whitespace);
-        let id = parts.next().unwrap_or("").trim().to_string();
-        if id.is_empty() {
+        let raw_id = parts.next().unwrap_or("").trim().to_string();
+        if raw_id.is_empty() {
             return;
         }
+        let (id, classes) = extract_class_modifier(&raw_id);
         self.register_node(&id, path);
+        for c in classes {
+            self.pending_classes.push((id.clone(), c));
+        }
         let rest = parts.next().unwrap_or("");
         if let Some(kind) = parse_shape_modifier(rest) {
             match kind {
@@ -602,6 +641,16 @@ impl Walker {
             graph.subgraphs.push(sg);
         }
         graph.edges = self.edges;
+
+        // Move the style registries collected during the walk by the
+        // shared directive helpers into the final graph, then resolve
+        // pending class applications now that subgraphs exist.
+        graph.node_styles = self.style_scratch.node_styles;
+        graph.edge_styles = self.style_scratch.edge_styles;
+        graph.class_defs = self.style_scratch.class_defs;
+        graph.subgraph_styles = self.style_scratch.subgraph_styles;
+        apply_pending_classes(&mut graph, &self.pending_classes);
+
         Ok(graph)
     }
 
@@ -666,19 +715,17 @@ fn mangle_marker(prefix: &str, path: &[String]) -> String {
     }
 }
 
-fn matches_keyword(stmt: &str, keyword: &str) -> bool {
-    if let Some(rest) = stmt.strip_prefix(keyword) {
-        rest.is_empty() || rest.starts_with(char::is_whitespace) || rest.starts_with(':')
-    } else {
-        false
-    }
-}
-
 fn split_transition(stmt: &str) -> Option<(String, String, Option<String>)> {
     let arrow_pos = stmt.find("-->")?;
     let from = stmt[..arrow_pos].trim().to_string();
     let after = &stmt[arrow_pos + 3..];
-    let (dest_raw, label) = if let Some(colon_pos) = after.find(':') {
+    // Find the label-separator colon — the FIRST `:` that is NOT part of
+    // a `:::className` shorthand. Walk past `:::` triples (3 consecutive
+    // colons) and only stop on a lone `:` (which marks the start of the
+    // edge label per Mermaid's `A --> B : label` syntax). Without this
+    // the destination `B:::cls` would be split into `dest=B`, `label=:cls`.
+    let label_colon = find_label_colon(after);
+    let (dest_raw, label) = if let Some(colon_pos) = label_colon {
         (
             after[..colon_pos].trim().to_string(),
             Some(after[colon_pos + 1..].trim().to_string()),
@@ -690,6 +737,26 @@ fn split_transition(stmt: &str) -> Option<(String, String, Option<String>)> {
         return None;
     }
     Some((from, dest_raw, label.filter(|s| !s.is_empty())))
+}
+
+/// Find the byte index of the first `:` in `s` that is not part of a
+/// `:::` triple (i.e. the label-separator colon). Returns `None` if no
+/// such standalone colon exists.
+fn find_label_colon(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b':' {
+            // Triple-colon `:::`? Skip the whole triple.
+            if i + 2 < bytes.len() && bytes[i + 1] == b':' && bytes[i + 2] == b':' {
+                i += 3;
+                continue;
+            }
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
 }
 
 fn split_description(stmt: &str) -> Option<(String, String)> {
@@ -972,6 +1039,100 @@ mod tests {
         let g = parse("stateDiagram-v2\n[*] --> CLOSED\nCLOSED --> OPEN").unwrap();
         let ids: Vec<&str> = g.nodes.iter().map(|n| n.id.as_str()).collect();
         assert_eq!(ids, vec!["__start__", "CLOSED", "OPEN"]);
+    }
+
+    // ---- classDef / class / ::: ---------------------------------------
+    // These mirror the flowchart-side tests but verify the same shared
+    // helpers work for the state-diagram parser too.
+
+    #[test]
+    fn state_diagram_classdef_records_palette() {
+        let src = "stateDiagram-v2
+A --> B
+classDef cache fill:#234,stroke:#9cf";
+        let g = parse(src).unwrap();
+        let style = g.class_defs.get("cache").copied().unwrap();
+        assert_eq!(style.fill, Some(crate::types::Rgb(0x22, 0x33, 0x44)));
+        assert_eq!(style.stroke, Some(crate::types::Rgb(0x99, 0xcc, 0xff)));
+    }
+
+    #[test]
+    fn state_diagram_class_directive_applies_to_states() {
+        let src = "stateDiagram-v2
+A --> B
+classDef hot fill:#f00
+class A,B hot";
+        let g = parse(src).unwrap();
+        assert_eq!(
+            g.node_styles.get("A").and_then(|s| s.fill),
+            Some(crate::types::Rgb(0xff, 0, 0))
+        );
+        assert_eq!(
+            g.node_styles.get("B").and_then(|s| s.fill),
+            Some(crate::types::Rgb(0xff, 0, 0))
+        );
+    }
+
+    #[test]
+    fn state_diagram_triple_colon_inline_on_transition_endpoint() {
+        let src = "stateDiagram-v2
+A:::warm --> B:::cold
+classDef warm fill:#f00
+classDef cold fill:#00f";
+        let g = parse(src).unwrap();
+        assert_eq!(
+            g.node_styles.get("A").and_then(|s| s.fill),
+            Some(crate::types::Rgb(0xff, 0, 0))
+        );
+        assert_eq!(
+            g.node_styles.get("B").and_then(|s| s.fill),
+            Some(crate::types::Rgb(0, 0, 0xff))
+        );
+    }
+
+    #[test]
+    fn state_diagram_class_on_composite_lands_in_subgraph_styles() {
+        let src = "stateDiagram-v2
+state Active {
+  Inner --> Inner
+}
+classDef accent stroke:#abc
+class Active accent";
+        let g = parse(src).unwrap();
+        // Composite ID gets routed to subgraph_styles, not node_styles.
+        assert_eq!(
+            g.subgraph_styles.get("Active").and_then(|s| s.stroke),
+            Some(crate::types::Rgb(0xaa, 0xbb, 0xcc))
+        );
+        assert!(g.node_styles.get("Active").is_none());
+    }
+
+    #[test]
+    fn state_diagram_triple_colon_on_star_marker_attaches_to_mangled_id() {
+        // `[*]:::started` — the marker is mangled to `__start__` so the
+        // class application targets `__start__`, not `[*]`.
+        let src = "stateDiagram-v2
+[*]:::started --> A
+classDef started fill:#0f0";
+        let g = parse(src).unwrap();
+        assert_eq!(
+            g.node_styles.get("__start__").and_then(|s| s.fill),
+            Some(crate::types::Rgb(0, 0xff, 0))
+        );
+    }
+
+    #[test]
+    fn state_diagram_style_directive_no_longer_silently_skipped() {
+        // Pre-0.8.0 the state parser silently swallowed `style …`.
+        // It now applies the same way it does in flowcharts.
+        let src = "stateDiagram-v2
+[*] --> A
+style A fill:#abc";
+        let g = parse(src).unwrap();
+        assert_eq!(
+            g.node_styles.get("A").and_then(|s| s.fill),
+            Some(crate::types::Rgb(0xaa, 0xbb, 0xcc))
+        );
     }
 
     // ---- Composite states (v1.1) ---------------------------------------

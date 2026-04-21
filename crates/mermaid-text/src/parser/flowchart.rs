@@ -15,10 +15,11 @@
 
 use crate::{
     Error,
-    types::{
-        Direction, Edge, EdgeEndpoint, EdgeStyle, EdgeStyleColors, Graph, Node, NodeShape, Rgb,
-        Subgraph,
+    parser::common::{
+        apply_pending_classes, extract_class_modifier, parse_class_def_directive,
+        parse_class_directive, parse_link_style_directive, parse_style_directive,
     },
+    types::{Direction, Edge, EdgeEndpoint, EdgeStyle, Graph, Node, NodeShape, Subgraph},
 };
 
 // ---------------------------------------------------------------------------
@@ -77,11 +78,19 @@ pub fn parse(input: &str) -> Result<Graph, Error> {
     // ---- Parse each remaining statement ---------------------------------
     // We collect remaining statements into a Vec so we can do a stateful
     // multi-statement parse (subgraph blocks span multiple statements).
+    //
+    // `pending_classes` collects `(target_id, class_name)` from `class …`
+    // directives and from inline `:::className` shorthands. Resolution
+    // happens at end-of-parse so a `class A foo` statement can appear
+    // before its `classDef foo …` definition (a real Mermaid pattern).
     let remaining: Vec<&str> = iter.collect();
-    parse_statements(&remaining, &mut graph, &mut None);
+    let mut pending_classes: Vec<(String, String)> = Vec::new();
+    parse_statements(&remaining, &mut graph, &mut None, &mut pending_classes);
+    apply_pending_classes(&mut graph, &pending_classes);
 
     Ok(graph)
 }
+
 
 // ---------------------------------------------------------------------------
 // Header parsing
@@ -136,6 +145,7 @@ fn parse_statements(
     stmts: &[&str],
     graph: &mut Graph,
     current_subgraph_id: &mut Option<String>,
+    pending_classes: &mut Vec<(String, String)>,
 ) -> usize {
     let mut i = 0;
     while i < stmts.len() {
@@ -161,7 +171,7 @@ fn parse_statements(
                 // index of the statement after `end`.
                 let mut inner_sg = Some(sg_id);
                 i += 1;
-                let consumed = parse_statements(&stmts[i..], graph, &mut inner_sg);
+                let consumed = parse_statements(&stmts[i..], graph, &mut inner_sg, pending_classes);
                 i += consumed;
             }
             "end" => {
@@ -189,13 +199,21 @@ fn parse_statements(
                 parse_link_style_directive(stmt, graph);
                 i += 1;
             }
-            // Other style / class directives — silently skip.
-            "classDef" | "class" | "click" | "accTitle" | "accDescr" => {
+            "classDef" => {
+                parse_class_def_directive(stmt, graph);
+                i += 1;
+            }
+            "class" => {
+                parse_class_directive(stmt, pending_classes);
+                i += 1;
+            }
+            // Remaining style-adjacent directives — silently skip for now.
+            "click" | "accTitle" | "accDescr" => {
                 i += 1;
             }
             _ => {
                 // Regular node definition or edge chain.
-                parse_statement(stmt, graph, current_subgraph_id);
+                parse_statement(stmt, graph, current_subgraph_id, pending_classes);
                 i += 1;
             }
         }
@@ -212,14 +230,26 @@ fn parse_statements(
 /// Any nodes referenced in edges are auto-created if they have not been
 /// explicitly defined yet. If `current_subgraph_id` is `Some`, newly seen
 /// node IDs are recorded as members of that subgraph.
-fn parse_statement(stmt: &str, graph: &mut Graph, current_subgraph_id: &mut Option<String>) {
+fn parse_statement(
+    stmt: &str,
+    graph: &mut Graph,
+    current_subgraph_id: &mut Option<String>,
+    pending_classes: &mut Vec<(String, String)>,
+) {
     // Try to parse as an edge chain first (contains an arrow token).
     if looks_like_edge_chain(stmt) {
-        parse_edge_chain(stmt, graph, current_subgraph_id);
+        parse_edge_chain(stmt, graph, current_subgraph_id, pending_classes);
     } else {
-        // Pure node definition: A[label], A{label}, A((label)), A(label), A
-        if let Some(node) = parse_node_definition(stmt) {
+        // Pure node definition: A[label]:::cls, A{label}, A((label)), A(label), A
+        // Strip the optional `:::cls1:::cls2` shorthand BEFORE the shape
+        // parser sees the token — shape parsing doesn't know about
+        // class modifiers.
+        let (clean_stmt, classes) = extract_class_modifier(stmt);
+        if let Some(node) = parse_node_definition(&clean_stmt) {
             let node_id = node.id.clone();
+            for class_name in classes {
+                pending_classes.push((node_id.clone(), class_name));
+            }
             graph.upsert_node(node);
             register_node_in_subgraph(graph, &node_id, current_subgraph_id);
         }
@@ -299,7 +329,12 @@ fn looks_like_edge_chain(s: &str) -> bool {
 ///
 /// The chain is tokenised by splitting on edge markers while preserving
 /// edge-label content between `|...|` delimiters.
-fn parse_edge_chain(stmt: &str, graph: &mut Graph, current_subgraph_id: &mut Option<String>) {
+fn parse_edge_chain(
+    stmt: &str,
+    graph: &mut Graph,
+    current_subgraph_id: &mut Option<String>,
+    pending_classes: &mut Vec<(String, String)>,
+) {
     // We build a list of (node_token, edge_label_or_none) pairs.
     // Strategy: walk char-by-char, extracting alternating node/edge segments.
 
@@ -333,11 +368,17 @@ fn parse_edge_chain(stmt: &str, graph: &mut Graph, current_subgraph_id: &mut Opt
                 i += 1;
                 continue;
             }
-            let node = parse_node_definition(tok).unwrap_or_else(|| {
-                // Treat as bare ID
-                Node::new(tok, tok, NodeShape::Rectangle)
+            // Strip optional `:::cls1:::cls2` shorthand BEFORE the
+            // shape parser sees the token.
+            let (clean_tok, classes) = extract_class_modifier(tok);
+            let node = parse_node_definition(&clean_tok).unwrap_or_else(|| {
+                // Treat as bare ID (after class stripping).
+                Node::new(clean_tok.clone(), clean_tok.clone(), NodeShape::Rectangle)
             });
             let node_id = node.id.clone();
+            for class_name in classes {
+                pending_classes.push((node_id.clone(), class_name));
+            }
             graph.upsert_node(node);
             register_node_in_subgraph(graph, &node_id, current_subgraph_id);
 
@@ -828,86 +869,6 @@ fn soft_wrap_into(line: &str, out: &mut String) {
 // Style directive parsing
 // ---------------------------------------------------------------------------
 
-/// Parse a `style <id> key:value,key:value,...` directive and merge the
-/// recognised color attributes (`fill`, `stroke`, `color`) into
-/// `graph.node_styles`. Unknown keys and unparseable values are silently
-/// ignored so the directive cannot break otherwise-valid input.
-fn parse_style_directive(stmt: &str, graph: &mut Graph) {
-    // Split off the leading "style" keyword and the target id.
-    let mut parts = stmt.splitn(3, char::is_whitespace);
-    let _ = parts.next(); // "style"
-    let Some(id) = parts.next().map(str::trim).filter(|s| !s.is_empty()) else {
-        return;
-    };
-    let rest = parts.next().unwrap_or("");
-
-    let mut style = graph.node_styles.get(id).copied().unwrap_or_default();
-    apply_color_pairs(rest, |key, value| match key {
-        "fill" => style.fill = Rgb::parse_hex(value),
-        "stroke" => style.stroke = Rgb::parse_hex(value),
-        "color" => style.color = Rgb::parse_hex(value),
-        _ => {}
-    });
-    graph.node_styles.insert(id.to_string(), style);
-}
-
-/// Parse a `linkStyle <indexes> key:value,...` directive and merge the
-/// recognised colors into `graph.edge_styles` for each listed index.
-///
-/// The index list may be a comma-separated list of integers (e.g.
-/// `linkStyle 0,1,2 stroke:#f00`) or `default` (which we currently
-/// interpret as "apply to all known edges so far").
-fn parse_link_style_directive(stmt: &str, graph: &mut Graph) {
-    let mut parts = stmt.splitn(3, char::is_whitespace);
-    let _ = parts.next(); // "linkStyle"
-    let Some(indexes) = parts.next().map(str::trim).filter(|s| !s.is_empty()) else {
-        return;
-    };
-    let rest = parts.next().unwrap_or("");
-
-    let target_indexes: Vec<usize> = if indexes == "default" {
-        (0..graph.edges.len()).collect()
-    } else {
-        indexes
-            .split(',')
-            .filter_map(|s| s.trim().parse::<usize>().ok())
-            .collect()
-    };
-    if target_indexes.is_empty() {
-        return;
-    }
-
-    let mut delta = EdgeStyleColors::default();
-    apply_color_pairs(rest, |key, value| match key {
-        "stroke" => delta.stroke = Rgb::parse_hex(value),
-        "color" => delta.color = Rgb::parse_hex(value),
-        _ => {}
-    });
-
-    for idx in target_indexes {
-        let entry = graph.edge_styles.entry(idx).or_default();
-        if delta.stroke.is_some() {
-            entry.stroke = delta.stroke;
-        }
-        if delta.color.is_some() {
-            entry.color = delta.color;
-        }
-    }
-}
-
-/// Walk a `key:value,key:value,...` payload and call `f` for each pair.
-///
-/// Whitespace around keys, values, and separators is ignored. Pairs without
-/// a `:` are silently skipped.
-fn apply_color_pairs(payload: &str, mut f: impl FnMut(&str, &str)) {
-    for pair in payload.split(',') {
-        let pair = pair.trim();
-        let Some((key, value)) = pair.split_once(':') else {
-            continue;
-        };
-        f(key.trim(), value.trim());
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -916,7 +877,7 @@ fn apply_color_pairs(payload: &str, mut f: impl FnMut(&str, &str)) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{EdgeEndpoint, EdgeStyle, NodeShape};
+    use crate::types::{EdgeEndpoint, EdgeStyle, NodeShape, Rgb};
 
     #[test]
     fn parse_simple_lr() {
@@ -1209,5 +1170,98 @@ mod tests {
             g.edge_styles.get(&1).and_then(|e| e.stroke),
             Some(Rgb(0xaa, 0xbb, 0xcc))
         );
+    }
+
+    // ---- classDef / class / ::: ---------------------------------------
+
+    #[test]
+    fn class_def_directive_records_palette() {
+        let src = "graph LR\nA-->B\nclassDef cache fill:#234,stroke:#9cf,color:#fff";
+        let g = parse(src).unwrap();
+        let style = g.class_defs.get("cache").copied().unwrap();
+        assert_eq!(style.fill, Some(Rgb(0x22, 0x33, 0x44)));
+        assert_eq!(style.stroke, Some(Rgb(0x99, 0xcc, 0xff)));
+        assert_eq!(style.color, Some(Rgb(0xff, 0xff, 0xff)));
+    }
+
+    #[test]
+    fn class_directive_applies_palette_to_each_id() {
+        let src = "graph LR\nA-->B-->C\nclassDef cache fill:#234\nclass A,B cache";
+        let g = parse(src).unwrap();
+        assert_eq!(
+            g.node_styles.get("A").and_then(|s| s.fill),
+            Some(Rgb(0x22, 0x33, 0x44))
+        );
+        assert_eq!(
+            g.node_styles.get("B").and_then(|s| s.fill),
+            Some(Rgb(0x22, 0x33, 0x44))
+        );
+        assert!(g.node_styles.get("C").is_none(), "C wasn't in `class` list");
+    }
+
+    #[test]
+    fn triple_colon_shorthand_inline_on_node() {
+        let src = "graph LR\nA[Start]:::cache --> B[End]\nclassDef cache fill:#234";
+        let g = parse(src).unwrap();
+        assert_eq!(
+            g.node_styles.get("A").and_then(|s| s.fill),
+            Some(Rgb(0x22, 0x33, 0x44))
+        );
+        // Label and shape parsing unaffected by the modifier suffix.
+        assert_eq!(g.node("A").unwrap().label, "Start");
+    }
+
+    #[test]
+    fn triple_colon_chained_classes_stack() {
+        let src = "graph LR\nA:::base:::overlay --> B
+classDef base fill:#111,stroke:#222
+classDef overlay stroke:#999,color:#fff";
+        let g = parse(src).unwrap();
+        let s = g.node_styles.get("A").copied().unwrap();
+        assert_eq!(s.fill, Some(Rgb(0x11, 0x11, 0x11))); // from base
+        // overlay applied later (right of base in source) wins on stroke
+        assert_eq!(s.stroke, Some(Rgb(0x99, 0x99, 0x99)));
+        assert_eq!(s.color, Some(Rgb(0xff, 0xff, 0xff))); // from overlay
+    }
+
+    #[test]
+    fn forward_reference_to_class_def_resolves_at_end_of_parse() {
+        // `class A foo` appears BEFORE `classDef foo …` — must still
+        // resolve.
+        let src = "graph LR\nA-->B\nclass A foo\nclassDef foo fill:#abc";
+        let g = parse(src).unwrap();
+        assert_eq!(
+            g.node_styles.get("A").and_then(|s| s.fill),
+            Some(Rgb(0xaa, 0xbb, 0xcc))
+        );
+    }
+
+    #[test]
+    fn unknown_class_name_silently_dropped() {
+        // Reference to an undefined class — match Mermaid's
+        // best-effort semantics: no error, no application.
+        let src = "graph LR\nA-->B\nclass A undefined";
+        let g = parse(src).unwrap();
+        assert!(g.node_styles.get("A").is_none());
+    }
+
+    #[test]
+    fn style_directive_overrides_class_for_same_id() {
+        // Per-id `style` lands AFTER class application (style is
+        // processed inline; class is resolved at end-of-parse — but
+        // the resolver merges class as overlay over base, so the
+        // earlier `style` survives unless the class also sets that
+        // attribute).
+        let src = "graph LR
+A-->B
+style A fill:#aaa
+classDef cls fill:#bbb,stroke:#ccc
+class A cls";
+        let g = parse(src).unwrap();
+        let s = g.node_styles.get("A").copied().unwrap();
+        // class fill overlays the style fill (overlay wins per merge_node_style).
+        assert_eq!(s.fill, Some(Rgb(0xbb, 0xbb, 0xbb)));
+        // class also supplies stroke that wasn't in the style — stacks.
+        assert_eq!(s.stroke, Some(Rgb(0xcc, 0xcc, 0xcc)));
     }
 }

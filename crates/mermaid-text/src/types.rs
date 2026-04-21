@@ -488,6 +488,19 @@ pub struct Graph {
     /// Keyed by the edge's positional index (0-based, in declaration order).
     /// Empty by default.
     pub edge_styles: HashMap<usize, EdgeStyleColors>,
+    /// Named style classes from `classDef name fill:#…,stroke:#…,color:#…`
+    /// directives. Acts as the palette that `class A foo` and `A:::foo`
+    /// look up at end-of-parse to populate `node_styles` /
+    /// `subgraph_styles`. Multiple `classDef` entries with the same name
+    /// are last-wins (matches Mermaid).
+    pub class_defs: HashMap<String, NodeStyle>,
+    /// Per-subgraph color overrides — populated when `class CompositeId
+    /// styleName` is applied to a known composite/subgraph id. The
+    /// renderer paints the rounded border with `stroke`. `fill` and
+    /// `color` are accepted in the schema for consistency with
+    /// `node_styles` but only `stroke` is honoured today (filling a
+    /// composite's interior would conflict with inner node fills).
+    pub subgraph_styles: HashMap<String, NodeStyle>,
 }
 
 impl Graph {
@@ -515,6 +528,8 @@ impl Graph {
             subgraphs: Vec::new(),
             node_styles: HashMap::new(),
             edge_styles: HashMap::new(),
+            class_defs: HashMap::new(),
+            subgraph_styles: HashMap::new(),
         }
     }
 

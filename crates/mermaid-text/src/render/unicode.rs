@@ -14,7 +14,9 @@ use crate::{
         grid::{EdgeLineStyle, arrow, endpoint},
         layered::GridPos,
     },
-    types::{BarOrientation, Direction, EdgeEndpoint, EdgeStyle, Graph, Node, NodeShape, NodeStyle},
+    types::{
+        BarOrientation, Direction, EdgeEndpoint, EdgeStyle, Graph, Node, NodeShape, NodeStyle, Rgb,
+    },
 };
 
 // ---------------------------------------------------------------------------
@@ -478,7 +480,15 @@ fn render_inner(
     // outermost-first, so we iterate in reverse to get innermost-first draw
     // order.
     for bounds in sg_bounds.iter().rev() {
-        draw_subgraph_border(&mut grid, bounds);
+        // Subgraph border colour comes from `class CompositeId styleName`
+        // applications resolved at parse time. Only emitted when the
+        // caller opted into colour rendering (`with_color`).
+        let style = if with_color {
+            graph.subgraph_styles.get(&bounds.id)
+        } else {
+            None
+        };
+        draw_subgraph_border(&mut grid, bounds, style);
     }
 
     // Pass 0b: Register all node bounding boxes as hard routing obstacles so
@@ -762,17 +772,8 @@ fn paint_node_colors(grid: &mut Grid, pos: GridPos, geom: NodeGeom, style: NodeS
         return;
     }
 
-    // Border (top + bottom rows, plus left + right cols, excluding corners
-    // already covered by the rows).
     if let Some(stroke) = style.stroke {
-        for x in col..(col + w) {
-            grid.set_fg(x, row, stroke);
-            grid.set_fg(x, row + h - 1, stroke);
-        }
-        for y in (row + 1)..(row + h - 1) {
-            grid.set_fg(col, y, stroke);
-            grid.set_fg(col + w - 1, y, stroke);
-        }
+        paint_box_border_fg(grid, col, row, w, h, stroke);
     }
 
     // Interior cells.
@@ -785,6 +786,26 @@ fn paint_node_colors(grid: &mut Grid, pos: GridPos, geom: NodeGeom, style: NodeS
     }
     if let Some(text_color) = style.color {
         grid.paint_fg_rect(inner_col, inner_row, inner_w, inner_h, text_color);
+    }
+}
+
+/// Paint a foreground color over the border ring of a box at
+/// `(col, row)` with size `w × h`. Top and bottom rows get the full
+/// width; left and right cols cover only the rows between (corners are
+/// already covered by the row sweeps). Used by both `paint_node_colors`
+/// and the subgraph border coloring path so the two callers share one
+/// implementation.
+fn paint_box_border_fg(grid: &mut Grid, col: usize, row: usize, w: usize, h: usize, color: Rgb) {
+    if w < 2 || h < 2 {
+        return;
+    }
+    for x in col..(col + w) {
+        grid.set_fg(x, row, color);
+        grid.set_fg(x, row + h - 1, color);
+    }
+    for y in (row + 1)..(row + h - 1) {
+        grid.set_fg(col, y, color);
+        grid.set_fg(col + w - 1, y, color);
     }
 }
 
@@ -1117,7 +1138,7 @@ fn draw_node_box(grid: &mut Grid, node: &Node, pos: GridPos, geom: NodeGeom) {
 /// The border cells are marked as obstacles so that A\* routing avoids them
 /// during edge routing. They are also protected so subsequent node drawing
 /// does not overwrite them.
-fn draw_subgraph_border(grid: &mut Grid, bounds: &SubgraphBounds) {
+fn draw_subgraph_border(grid: &mut Grid, bounds: &SubgraphBounds, style: Option<&NodeStyle>) {
     let (col, row, w, h) = (bounds.col, bounds.row, bounds.width, bounds.height);
 
     if w < 2 || h < 2 {
@@ -1126,6 +1147,17 @@ fn draw_subgraph_border(grid: &mut Grid, bounds: &SubgraphBounds) {
 
     // Draw rounded rectangle outline.
     grid.draw_rounded_box(col, row, w, h);
+
+    // Apply subgraph stroke color (from `class CompositeId styleName`)
+    // BEFORE protection so the colour layer is set on every border cell.
+    // `fill` and `color` for subgraphs are intentionally not honoured —
+    // filling a composite's interior would conflict with inner node
+    // backgrounds. Document in the README's classDef section.
+    if let Some(style) = style
+        && let Some(stroke) = style.stroke
+    {
+        paint_box_border_fg(grid, col, row, w, h, stroke);
+    }
 
     // Protect all border cells so edge routing and later node drawing leave
     // them alone.  We only protect the outline (border ring), not interior.

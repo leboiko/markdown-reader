@@ -19,14 +19,6 @@ _Nothing actively in progress._
 
 ## Next up (ordered roughly by ROI)
 
-### `classDef` + `:::className` shorthand — `mermaid-text`
-
-Completes the color story from 0.4.0. Define a palette once
-(`classDef cache fill:#234`), reuse across many states/edges
-(`A:::cache, B:::cache`). Free upgrade for both flowcharts and state
-diagrams. Wire into the existing `Graph::node_styles` /
-`edge_styles` registries. ~1 day.
-
 ### Notes anchored to states — `mermaid-text`
 
 `note left of X : text`, `note right of X : text`, `note over X : text`,
@@ -125,8 +117,35 @@ and skip the label, or accept an explicit empty-label hint.
 
 ---
 
+### `classDef DEFAULT` special semantics — `mermaid-text`
+
+Mermaid treats `classDef DEFAULT …` as a base class merged into every
+other class. We currently treat it as a normal classDef named
+"DEFAULT" with no special semantics. Implement the merge if someone
+asks. ~half day.
+
+### Subgraph interior fill — `mermaid-text`
+
+Today only `stroke` is honoured for subgraph styles (border colour);
+`fill` and `color` are accepted in the schema but not rendered. A
+real "fill the composite interior with a tint" pass would conflict
+with inner node backgrounds — needs a layered-paint design (paint
+subgraph fill first, then node fills overlay). Defer.
+
+### `click` / hyperlink directives — `mermaid-text`
+
+Mermaid `click NodeId "https://…"` makes the node clickable. In a
+text terminal we'd render a footnote-style link reference, or use
+OSC 8 hyperlinks where supported. Separate ticket.
+
 ## Done since 1.7.1 (recent history — see CHANGELOGs for detail)
 
+- **0.8.0**: `classDef` + `class` + `:::className` shorthand for
+  flowcharts and state diagrams. New `Graph::class_defs` /
+  `subgraph_styles` registries. Subgraph border colouring. State
+  diagrams pick up `style` / `linkStyle` (no longer silently
+  skipped). Shared `parser/common.rs` module eliminates the prior
+  parser-helper duplication.
 - **0.7.2**: `<<choice>>` / `<<fork>>` / `<<join>>` shape modifiers
   for state diagrams (Diamond / direction-perpendicular Bar).
 - **0.7.1**: edge-label collision avoidance (labels stop overwriting

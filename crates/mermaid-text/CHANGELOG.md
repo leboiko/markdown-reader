@@ -3,6 +3,62 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.8.0 — 2026-04-20
+
+### Added
+
+- **`classDef` + `class` directives and `:::className` inline
+  shorthand** — both flowcharts and state diagrams. Define a named
+  style class once (`classDef cache fill:#234,stroke:#9cf,color:#fff`),
+  then apply it across many ids in one statement (`class A,B,C cache`)
+  or inline (`A:::cache --> B:::warn`). Inline modifiers stack:
+  `A:::base:::overlay` applies both. Forward references work —
+  `class A foo` may appear before its `classDef foo …` definition.
+- **`Graph::class_defs` and `Graph::subgraph_styles`** — two new
+  public registries on `Graph`. `class_defs` holds the parsed named
+  palette; `subgraph_styles` holds per-subgraph border colors when
+  `class CompositeId styleName` targets a subgraph id.
+- **Subgraph border colouring** — the renderer now paints subgraph
+  borders with the matched class's `stroke` colour. `fill` and
+  `color` for subgraphs are accepted in the schema for consistency
+  but only `stroke` is honoured today (filling a composite's
+  interior would conflict with inner node fills).
+- **`style` and `linkStyle` directives now work for state diagrams**
+  too (previously silently skipped — see CHANGELOG 0.4.0 for the
+  flowchart story).
+- **New `parser/common.rs` module** holding helpers shared by both
+  parsers (`strip_inline_comment`, `matches_keyword`,
+  `apply_color_pairs`, `parse_node_style_payload`,
+  `parse_edge_color_payload`, `extract_class_modifier`,
+  `merge_node_style`, `parse_style_directive`,
+  `parse_link_style_directive`, `parse_class_def_directive`,
+  `parse_class_directive`, `apply_pending_classes`). Eliminates
+  prior copy-paste duplication between `parser/flowchart.rs` and
+  `parser/state.rs`.
+
+### Changed
+
+- **`NodeShape` and `Graph` gain new public fields.** Adding
+  fields to `pub` types is mildly source-breaking for external
+  consumers that construct `Graph` via struct-literal syntax. The
+  only known consumer (`markdown-tui-explorer`) goes through
+  `Graph::new` and is unaffected. If you see a "missing field"
+  compile error after upgrading, switch to `Graph::new(direction)`
+  and mutate the fields you need.
+
+### Notes
+
+- Class names are matched case-sensitively. Multiple `classDef`
+  with the same name are last-wins (matches Mermaid).
+- Class application order: `style id …` → all classes from `class`
+  / `:::` (in source order) layered on top via `merge_node_style`.
+  Per-id `style` provides the base, classes overlay attributes
+  they explicitly set; attributes the class doesn't set are
+  preserved.
+- Out of scope (intentional follow-ups): `classDef DEFAULT`
+  special semantics, `click`, sequence-diagram colours,
+  subgraph interior fill.
+
 ## 0.7.2 — 2026-04-20
 
 ### Added

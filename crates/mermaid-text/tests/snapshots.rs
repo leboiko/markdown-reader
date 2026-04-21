@@ -296,6 +296,72 @@ fn node_fill_stroke_and_color() {
 }
 
 // ---------------------------------------------------------------------------
+// classDef + class — palette reuse via named style classes.
+// ---------------------------------------------------------------------------
+#[test]
+fn classdef_and_class_directives() {
+    let src = r#"graph LR
+        A[Cache] --> B[DB] --> C[Done]
+        classDef datastore fill:#234,stroke:#9cf,color:#fff
+        class A,B datastore"#;
+    let opts = mermaid_text::RenderOptions {
+        color: true,
+        ..Default::default()
+    };
+    let out = mermaid_text::render_with_options(src, &opts).unwrap();
+    // Both A and B should pick up the class fill colour.
+    assert!(out.contains("\x1b[48;2;34;51;68m"), "datastore fill SGR present");
+    assert!(out.contains("\x1b[38;2;153;204;255m"), "datastore stroke SGR present");
+    assert_snapshot!("classdef_and_class_directives", out);
+}
+
+// ---------------------------------------------------------------------------
+// `:::` shorthand inline on node references in transitions.
+// ---------------------------------------------------------------------------
+#[test]
+fn triple_colon_shorthand() {
+    let src = r#"graph LR
+        A[Start]:::warm --> B[End]:::cool
+        classDef warm fill:#f00,color:#fff
+        classDef cool fill:#00f,color:#fff"#;
+    let opts = mermaid_text::RenderOptions {
+        color: true,
+        ..Default::default()
+    };
+    let out = mermaid_text::render_with_options(src, &opts).unwrap();
+    assert!(out.contains("\x1b[48;2;255;0;0m"), "warm fill present");
+    assert!(out.contains("\x1b[48;2;0;0;255m"), "cool fill present");
+    assert_snapshot!("triple_colon_shorthand", out);
+}
+
+// ---------------------------------------------------------------------------
+// State-diagram classDef + class on both states and a composite (the
+// composite border picks up the class stroke color).
+// ---------------------------------------------------------------------------
+#[test]
+fn state_diagram_classdef() {
+    let src = "stateDiagram-v2
+[*] --> Active
+state Active {
+  [*] --> Idle
+  Idle --> Working : start
+  Working --> Idle : done
+}
+classDef accent stroke:#9cf,color:#fff
+classDef warn fill:#f00,color:#fff
+class Active accent
+class Working warn";
+    let opts = mermaid_text::RenderOptions {
+        color: true,
+        ..Default::default()
+    };
+    let out = mermaid_text::render_with_options(src, &opts).unwrap();
+    assert!(out.contains("\x1b[38;2;153;204;255m"), "accent stroke present");
+    assert!(out.contains("\x1b[48;2;255;0;0m"), "warn fill present");
+    assert_snapshot!("state_diagram_classdef", out);
+}
+
+// ---------------------------------------------------------------------------
 // 20. Edge color via `linkStyle` directive.
 // ---------------------------------------------------------------------------
 #[test]

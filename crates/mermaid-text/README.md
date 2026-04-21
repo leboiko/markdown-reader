@@ -116,7 +116,9 @@ mermaid-text --width 80 my_diagram.mmd
 | Per-subgraph `direction` override | partial |
 | `style <id> fill:#…,stroke:#…,color:#…` (color output) | yes (opt-in) |
 | `linkStyle <i> stroke:#…[,color:#…]` (color output) | yes (opt-in) |
-| `classDef`, `class`, `:::className` shorthand | silently ignored |
+| `classDef name fill:#…,stroke:#…,color:#…` (color output) | yes (opt-in) |
+| `class id1,id2 className` | yes (opt-in) |
+| `id:::className` shorthand (stackable: `A:::a:::b`) | yes (opt-in) |
 | `stateDiagram` / `stateDiagram-v2` | yes (transformed to flowchart) |
 | `sequenceDiagram` | yes (separate pipeline) |
 | `pie`, `gantt`, `journey`, `erDiagram`, etc. | not supported |
@@ -168,8 +170,30 @@ otherwise-valid diagram. 24-bit truecolor (`xterm-direct` / `truecolor`)
 is required — most modern terminals (iTerm2, Kitty, Ghostty, WezTerm,
 Alacritty, Terminal.app, GNOME Terminal, Windows Terminal) qualify.
 
-Out of scope for now: `classDef` / `:::className` shorthand, subgraph
-border colors, and 256-color / 16-color fallbacks.
+**Reusable palettes via `classDef` + `class` / `:::`:**
+
+```rust
+let opts = RenderOptions { color: true, ..Default::default() };
+let out = render_with_options(
+    "graph LR\n\
+     A[Cache] --> B[DB] --> C[Done]\n\
+     classDef datastore fill:#234,stroke:#9cf,color:#fff\n\
+     class A,B datastore",
+    &opts,
+)?;
+```
+
+`classDef` defines a named style; `class id1,id2 …` and the inline
+`A:::className` shorthand (stackable as `A:::base:::overlay`) apply
+it. Forward references work — `class A foo` may appear before
+`classDef foo …` in the source. Subgraphs (composite states /
+flowchart subgraphs) coloured via `class CompositeId styleName`
+get a coloured border.
+
+Out of scope for now: `classDef DEFAULT` special semantics
+(merge into every class), `click` directives, sequence-diagram
+colors (separate pipeline), subgraph interior fill, and
+256-color / 16-color fallbacks.
 
 ### State diagrams
 
@@ -245,7 +269,9 @@ to Active's start/end, distinct from the top-level. Per-composite
 | `<<choice>>` shape modifier | yes (renders as decision Diamond) |
 | `<<fork>>` / `<<join>>` shape modifiers | yes (renders as Bar perpendicular to flow) |
 | Notes | silently ignored |
-| `classDef` / `class` / `style` / `click` | silently ignored |
+| `classDef` / `class` / `:::className` / `style` / `linkStyle` | yes (opt-in via `--color`) |
+| `class CompositeId styleName` (subgraph border colour) | yes (opt-in) |
+| `click` | silently ignored |
 
 ### ASCII fallback
 
