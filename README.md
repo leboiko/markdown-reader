@@ -169,9 +169,17 @@ markdown-reader
 # Browse a specific directory
 markdown-reader ~/projects/my-docs
 
+# Pipe markdown directly via stdin (path argument is ignored)
+cat README.md | markdown-reader
+curl -s https://example.com/spec.md | markdown-reader
+
 # Show help
 markdown-reader --help
 ```
+
+When stdin is piped, the markdown is read into a temporary file and
+opened automatically — no path argument required. The temp file is
+cleaned up on exit.
 
 Once inside the TUI, press `?` at any time for the keyboard help overlay.
 Press `c` to open the settings modal (themes, line numbers, tree

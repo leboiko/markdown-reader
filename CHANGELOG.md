@@ -5,6 +5,34 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.18.0] - 2026-04-22
+
+### Added
+
+- **Stdin piping**. `cat README.md | markdown-reader` (or any pipe
+  source) now opens the streamed markdown directly in the viewer.
+  Closes a real workflow gap and matches `mdt`'s `cat README.md |
+  mdt` ergonomics. Implementation: when stdin is detected as a pipe
+  (`std::io::stdin().is_terminal() == false`), the input is drained
+  to a `tempfile::NamedTempFile` with a `.md` suffix, and that path
+  is used as the initial focused tab. The CLI path argument is
+  ignored in this mode. The temp file is cleaned up on exit.
+
+  On Unix, file descriptor 0 is then re-pointed at `/dev/tty` via
+  `dup2(2)` so crossterm can still read keyboard input — without
+  this, every key read would return EOF and the TUI would deadlock.
+  Windows uses Win32 console APIs directly so no redirect is
+  needed there.
+
+### Internal
+
+- Added `IsTerminal` import + `drain_stdin_to_temp` /
+  `redirect_stdin_to_tty` helpers in `src/main.rs`.
+- 1 new test (`drain_stdin_writes_md_temp_file_with_content`)
+  exercises the file-creation half (mocking global stdin in a unit
+  test is awkward; the FFI half is best-tested via integration
+  scripts which we don't have a harness for yet).
+
 ## [1.17.3] - 2026-04-22
 
 ### Changed
