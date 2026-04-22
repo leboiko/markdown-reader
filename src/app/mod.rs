@@ -31,6 +31,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 mod file_ops;
 mod key_handlers;
+mod mermaid_modal;
 mod search;
 mod table_modal;
 mod yank;
@@ -188,6 +189,8 @@ pub enum Focus {
     TabPicker,
     /// Full-screen table modal (opened with Enter on a table block).
     TableModal,
+    /// Full-screen mermaid modal (opened with Enter on a mermaid block).
+    MermaidModal,
     /// Copy path/filename menu popup.
     CopyMenu,
     /// Internal-link anchor picker (opened with `f`).
@@ -217,6 +220,25 @@ pub struct TableModalState {
     pub rows: Vec<Vec<crate::markdown::CellSpans>>,
     pub alignments: Vec<pulldown_cmark::Alignment>,
     pub natural_widths: Vec<usize>,
+}
+
+/// State for the full-screen mermaid modal opened with Enter on a mermaid block.
+///
+/// Unlike the table modal we do NOT clone the rendered output into the state —
+/// the renderer reads directly from `MermaidCache` at draw time so background
+/// re-renders stay live (e.g. when the user toggles `mermaid_mode` while the
+/// modal is open). We only need enough info here to look the entry back up and
+/// to track scroll position.
+#[derive(Debug, Clone)]
+pub struct MermaidModalState {
+    pub tab_id: crate::ui::tabs::TabId,
+    /// Stable id of the mermaid block, looked up in `MermaidCache`.
+    pub block_id: crate::markdown::MermaidBlockId,
+    /// Raw mermaid source — used for the source-only fallback path and for
+    /// re-queueing a render at the modal's larger size in a future phase.
+    pub source: String,
+    pub h_scroll: u16,
+    pub v_scroll: u16,
 }
 
 /// Transient state for the settings popup.
@@ -352,11 +374,17 @@ pub struct App {
     pub picker: Option<Picker>,
     /// State for the full-screen table modal; `None` when the modal is closed.
     pub table_modal: Option<TableModalState>,
+    /// Active mermaid modal, if any. Mirrors `table_modal`'s lifecycle.
+    pub mermaid_modal: Option<MermaidModalState>,
     /// Cached outer rect of the table modal popup, populated each draw frame.
     ///
     /// Used by the mouse handler to hit-test clicks and scroll events against the
     /// modal boundary. Cleared in `close_table_modal`.
     pub table_modal_rect: Option<ratatui::layout::Rect>,
+    /// Cached outer rect of the mermaid modal popup, populated each draw frame.
+    /// Used for click-outside-to-close hit-testing. Cleared in
+    /// `close_mermaid_modal`.
+    pub mermaid_modal_rect: Option<ratatui::layout::Rect>,
     /// Monotonically increasing counter incremented on every new content search.
     ///
     /// Background tasks capture the counter at spawn time and discard their
@@ -444,6 +472,8 @@ impl App {
             picker,
             table_modal: None,
             table_modal_rect: None,
+            mermaid_modal: None,
+            mermaid_modal_rect: None,
             search_generation: Arc::new(AtomicU64::new(0)),
             last_file_save_at: None,
             status_message: None,
@@ -866,10 +896,14 @@ impl App {
     /// Top-level mouse-event dispatcher.
     #[allow(clippy::too_many_lines)]
     fn handle_mouse(&mut self, m: crossterm::event::MouseEvent) {
-        // The table modal captures all mouse input while it is open.
-        // Nothing beneath the modal should react to pointer events.
+        // Modals capture all mouse input while open. Nothing beneath
+        // them should react to pointer events.
         if self.table_modal.is_some() {
             self.handle_table_modal_mouse(m);
+            return;
+        }
+        if self.mermaid_modal.is_some() {
+            self.handle_mermaid_modal_mouse(m);
             return;
         }
 
@@ -1064,6 +1098,9 @@ impl App {
             }
             Focus::TableModal => {
                 self.handle_table_modal_key(code);
+            }
+            Focus::MermaidModal => {
+                self.handle_mermaid_modal_key(code);
             }
             Focus::CopyMenu => self.handle_copy_menu_key(code),
             // Editor focus: key events carry the full KeyEvent; reconstruct it

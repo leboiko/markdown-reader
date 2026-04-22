@@ -5,6 +5,58 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.17.0] - 2026-04-22
+
+### Added
+
+- **Full-screen Mermaid modal** — press `Enter` on a mermaid block to
+  open it in a 90% × 90% overlay with full-screen real estate. Solves
+  the "diagram too big to read" problem that plagued large flowcharts,
+  state machines, and dependency graphs.
+  - **Image mode**: ratatui-image's `Resize::Fit(None)` now has the
+    full terminal to work with (vs. the in-document slot's
+    `max_height` cap of ~30 cells). Most diagrams jump from "blob you
+    can't read" to "actually legible" without any new code path.
+  - **Text mode**: same `h_scroll` / `v_scroll` viewport pattern as
+    the existing table modal, so wide ASCII diagrams pan instead of
+    getting clipped to the right edge.
+  - **Source / Failed / Pending fallbacks**: each renders into the
+    same modal frame with mode-appropriate footer text (e.g. "render
+    failed: {msg}"), so the user sees something meaningful regardless
+    of cache state.
+  - **Live cache reads**: the renderer never caches the entry into
+    `MermaidModalState` — a background image render that finishes
+    while the modal is open lights up on the next frame.
+
+  Keybindings mirror the table modal exactly so muscle memory carries
+  over: `j/k/h/l` (1 step), `d/u`/`PageUp`/`PageDown` (½-page),
+  `g+g` (top), `G` (bottom), `0/$` (h-pan to edges), `H/L` (½-width
+  h-step), `q/Esc/Enter` to close. Mouse: scroll wheel pans, click
+  outside closes.
+
+  Block resolution mirrors the table modal: prefer the mermaid block
+  the cursor is inside; otherwise fall back to the first one
+  intersecting the viewport. The `Enter` viewer handler tries table
+  first then mermaid (mutually exclusive — only one modal opens).
+
+### Internal
+
+- New `Focus::MermaidModal` variant + `MermaidModalState` (5-field
+  struct: `tab_id`, `block_id`, `source`, `h_scroll`, `v_scroll`).
+- New `src/app/mermaid_modal.rs` (open + key + mouse handlers
+  mirroring `table_modal.rs`).
+- New `src/ui/mermaid_modal.rs` (renderer with image/text/source/
+  pending dispatch + `slice_str_at` helper for grapheme-aware
+  horizontal slicing).
+- Tab switches close the mermaid modal (consistent with the table
+  modal's tab-switch close behaviour).
+- File reload closes the mermaid modal when the reloaded tab is the
+  one the modal was opened on (stale `block_id`).
+- 9 new tests cover open-under-cursor, fall-back-to-viewport,
+  no-block no-op, close-on-q/Esc/Enter, scroll arithmetic with
+  saturation, and `gg` / `0` resets. Plus 3 unit tests for the
+  unicode-aware `slice_str_at` helper.
+
 ## [1.16.5] - 2026-04-22
 
 ### Internal

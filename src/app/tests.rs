@@ -1357,3 +1357,181 @@ fn pending_jump_not_cleared_on_different_path_failure() {
         "pending_jump must be preserved when a different file fails to load"
     );
 }
+
+// ── Mermaid-modal tests ──────────────────────────────────────────────
+
+/// Build a mermaid block helper, mirroring `make_table_block`.
+fn make_mermaid_block(id: u64, source: &str, height: u32) -> DocBlock {
+    DocBlock::Mermaid {
+        id: MermaidBlockId(id),
+        source: source.to_string(),
+        cell_height: Cell::new(height),
+        source_line: 0,
+    }
+}
+
+/// Cursor inside a mermaid block: Enter must open THAT block.
+#[test]
+fn try_open_mermaid_modal_picks_block_under_cursor() {
+    let mut app = App::new(PathBuf::from("."), None);
+    app.tabs
+        .open_or_focus(&PathBuf::from("/fake/diagrams.md"), true);
+    app.tabs.view_height = 30;
+    app.focus = Focus::Viewer;
+
+    // Layout: [text(3)] [mermaid A id=1 height(5)] [text(3)] [mermaid B id=2 height(5)]
+    //          0..3      3..8                       8..11     11..16
+    let blocks = vec![
+        make_text_block(&["intro", "text", "here"]),
+        make_mermaid_block(1, "graph LR\n A --> B", 5),
+        make_text_block(&["middle", "text", "here"]),
+        make_mermaid_block(2, "sequenceDiagram\n  A->>B: hi", 5),
+    ];
+    if let Some(tab) = app.tabs.active_tab_mut() {
+        tab.view.total_lines = blocks.iter().map(DocBlock::height).sum();
+        tab.view.rendered = blocks;
+        tab.view.scroll_offset = 0;
+        tab.view.cursor_line = 13; // inside block B (11..16)
+    }
+
+    app.try_open_mermaid_modal();
+    let modal = app.mermaid_modal.as_ref().expect("modal must open");
+    assert_eq!(modal.block_id, MermaidBlockId(2));
+    assert_eq!(modal.source, "sequenceDiagram\n  A->>B: hi");
+    assert_eq!(app.focus, Focus::MermaidModal);
+}
+
+/// Cursor on prose: fall back to the first mermaid block in viewport.
+#[test]
+fn try_open_mermaid_modal_falls_back_to_first_visible_block() {
+    let mut app = App::new(PathBuf::from("."), None);
+    app.tabs
+        .open_or_focus(&PathBuf::from("/fake/diagrams.md"), true);
+    app.tabs.view_height = 30;
+    app.focus = Focus::Viewer;
+
+    let blocks = vec![
+        make_text_block(&["intro"]),
+        make_mermaid_block(1, "graph LR\n A --> B", 5),
+        make_mermaid_block(2, "sequenceDiagram\n  A->>B: hi", 5),
+    ];
+    if let Some(tab) = app.tabs.active_tab_mut() {
+        tab.view.total_lines = blocks.iter().map(DocBlock::height).sum();
+        tab.view.rendered = blocks;
+        tab.view.scroll_offset = 0;
+        tab.view.cursor_line = 0; // on prose
+    }
+
+    app.try_open_mermaid_modal();
+    let modal = app.mermaid_modal.as_ref().expect("modal must open");
+    assert_eq!(
+        modal.block_id,
+        MermaidBlockId(1),
+        "should fall back to first visible mermaid",
+    );
+}
+
+/// No mermaid blocks → modal stays closed and focus unchanged.
+#[test]
+fn try_open_mermaid_modal_noop_when_no_blocks() {
+    let mut app = App::new(PathBuf::from("."), None);
+    app.tabs
+        .open_or_focus(&PathBuf::from("/fake/no_diagrams.md"), true);
+    app.tabs.view_height = 30;
+    app.focus = Focus::Viewer;
+
+    if let Some(tab) = app.tabs.active_tab_mut() {
+        tab.view.rendered = vec![make_text_block(&["just prose"])];
+        tab.view.total_lines = 1;
+        tab.view.cursor_line = 0;
+    }
+
+    app.try_open_mermaid_modal();
+    assert!(app.mermaid_modal.is_none());
+    assert_eq!(app.focus, Focus::Viewer);
+}
+
+/// `q` / Esc / Enter close the modal and restore Viewer focus.
+#[test]
+fn handle_mermaid_modal_key_close() {
+    for code in [
+        crossterm::event::KeyCode::Char('q'),
+        crossterm::event::KeyCode::Esc,
+        crossterm::event::KeyCode::Enter,
+    ] {
+        let mut app = App::new(PathBuf::from("."), None);
+        app.mermaid_modal = Some(MermaidModalState {
+            tab_id: crate::ui::tabs::TabId(0),
+            block_id: MermaidBlockId(1),
+            source: "graph LR\nA --> B".to_string(),
+            h_scroll: 0,
+            v_scroll: 0,
+        });
+        app.focus = Focus::MermaidModal;
+        app.handle_mermaid_modal_key(code);
+        assert!(app.mermaid_modal.is_none(), "key {code:?} must close modal");
+        assert_eq!(app.focus, Focus::Viewer);
+    }
+}
+
+/// `j` / `k` adjust v_scroll; `h` / `l` adjust h_scroll. Saturating
+/// arithmetic protects the lower bound; the renderer clamps the upper.
+#[test]
+fn handle_mermaid_modal_key_scroll() {
+    use crossterm::event::KeyCode;
+    let mut app = App::new(PathBuf::from("."), None);
+    app.mermaid_modal = Some(MermaidModalState {
+        tab_id: crate::ui::tabs::TabId(0),
+        block_id: MermaidBlockId(1),
+        source: "graph LR\nA --> B".to_string(),
+        h_scroll: 5,
+        v_scroll: 5,
+    });
+    app.focus = Focus::MermaidModal;
+
+    app.handle_mermaid_modal_key(KeyCode::Char('j'));
+    app.handle_mermaid_modal_key(KeyCode::Char('l'));
+    let s = app.mermaid_modal.as_ref().unwrap();
+    assert_eq!(s.v_scroll, 6);
+    assert_eq!(s.h_scroll, 6);
+
+    app.handle_mermaid_modal_key(KeyCode::Char('k'));
+    app.handle_mermaid_modal_key(KeyCode::Char('h'));
+    let s = app.mermaid_modal.as_ref().unwrap();
+    assert_eq!(s.v_scroll, 5);
+    assert_eq!(s.h_scroll, 5);
+
+    // `0` resets h_scroll to 0; `gg` resets both.
+    app.handle_mermaid_modal_key(KeyCode::Char('0'));
+    assert_eq!(app.mermaid_modal.as_ref().unwrap().h_scroll, 0);
+
+    app.handle_mermaid_modal_key(KeyCode::Char('g'));
+    app.handle_mermaid_modal_key(KeyCode::Char('g'));
+    let s = app.mermaid_modal.as_ref().unwrap();
+    assert_eq!(s.v_scroll, 0);
+    assert_eq!(s.h_scroll, 0);
+}
+
+/// Saturating-sub on h_scroll/v_scroll prevents underflow when at 0.
+#[test]
+fn handle_mermaid_modal_key_scroll_saturating() {
+    use crossterm::event::KeyCode;
+    let mut app = App::new(PathBuf::from("."), None);
+    app.mermaid_modal = Some(MermaidModalState {
+        tab_id: crate::ui::tabs::TabId(0),
+        block_id: MermaidBlockId(1),
+        source: "x".to_string(),
+        h_scroll: 0,
+        v_scroll: 0,
+    });
+    app.focus = Focus::MermaidModal;
+
+    // Three k presses at v_scroll=0 must remain 0 (no underflow).
+    for _ in 0..3 {
+        app.handle_mermaid_modal_key(KeyCode::Char('k'));
+        app.handle_mermaid_modal_key(KeyCode::Char('h'));
+    }
+    let s = app.mermaid_modal.as_ref().unwrap();
+    assert_eq!(s.v_scroll, 0);
+    assert_eq!(s.h_scroll, 0);
+}

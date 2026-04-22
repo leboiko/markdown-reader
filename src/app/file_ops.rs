@@ -46,10 +46,20 @@ impl App {
         }
     }
 
+    /// Close the mermaid modal if open, restoring focus to Viewer.
+    pub fn close_mermaid_modal(&mut self) {
+        if self.mermaid_modal.is_some() {
+            self.mermaid_modal = None;
+            self.mermaid_modal_rect = None;
+            self.focus = Focus::Viewer;
+        }
+    }
+
     /// Switch to the next tab, committing any active doc-search first.
     pub(super) fn switch_to_next_tab(&mut self) {
         self.commit_doc_search_if_active();
         self.close_table_modal();
+        self.close_mermaid_modal();
         self.tabs.next();
     }
 
@@ -57,6 +67,7 @@ impl App {
     pub(super) fn switch_to_prev_tab(&mut self) {
         self.commit_doc_search_if_active();
         self.close_table_modal();
+        self.close_mermaid_modal();
         self.tabs.prev();
     }
 
@@ -308,7 +319,9 @@ impl App {
             .collect();
         self.mermaid_cache.retain(&alive);
 
-        // Close the table modal if it was open on the reloaded tab.
+        // Close any open block-level modal if it was on the reloaded tab —
+        // its cached state (table rows, mermaid block_id) is stale once the
+        // file content changed.
         if let Some(modal) = &self.table_modal {
             let tab_id = modal.tab_id;
             let is_reloaded = self
@@ -318,6 +331,17 @@ impl App {
                 .any(|t| t.id == tab_id && t.view.current_path.as_deref() == Some(&*path));
             if is_reloaded {
                 self.close_table_modal();
+            }
+        }
+        if let Some(modal) = &self.mermaid_modal {
+            let tab_id = modal.tab_id;
+            let is_reloaded = self
+                .tabs
+                .tabs
+                .iter()
+                .any(|t| t.id == tab_id && t.view.current_path.as_deref() == Some(&*path));
+            if is_reloaded {
+                self.close_mermaid_modal();
             }
         }
     }

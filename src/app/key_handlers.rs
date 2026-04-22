@@ -230,7 +230,13 @@ impl App {
 
         match code {
             KeyCode::Enter => {
+                // Cursor on a table → open table modal; on a mermaid block →
+                // open mermaid modal. Both modal-openers are no-ops when the
+                // cursor is on prose, so the cascade is safe.
                 self.try_open_table_modal();
+                if self.focus != Focus::TableModal {
+                    self.try_open_mermaid_modal();
+                }
             }
             KeyCode::Esc => {
                 // In visual mode Esc exits visual selection first.

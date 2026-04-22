@@ -20,6 +20,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         Focus::GotoLine => "GOTO",
         Focus::TabPicker => "TABS",
         Focus::TableModal => "TABLE",
+        Focus::MermaidModal => "MERMAID",
         Focus::CopyMenu => "COPY",
         Focus::LinkPicker => "LINKS",
         Focus::Editor => "EDIT",

@@ -7,6 +7,7 @@ pub mod goto_line_bar;
 pub mod help;
 pub mod link_picker;
 pub mod markdown_view;
+pub mod mermaid_modal;
 pub mod search_modal;
 pub mod status_bar;
 pub mod tab_bar;
@@ -150,6 +151,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         table_modal::draw(f, app);
     }
 
+    if app.mermaid_modal.is_some() {
+        mermaid_modal::draw(f, app);
+    }
+
     if let Some(popup_state) = &app.config_popup {
         let params = config_popup::ConfigPopupParams {
             state: popup_state,
@@ -184,6 +189,7 @@ fn is_viewer_focused(focus: Focus) -> bool {
             | Focus::GotoLine
             | Focus::TabPicker
             | Focus::TableModal
+            | Focus::MermaidModal
             | Focus::CopyMenu
             | Focus::LinkPicker
             | Focus::Editor
