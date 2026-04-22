@@ -249,7 +249,21 @@ pub struct MermaidModalState {
     pub source: String,
     pub h_scroll: u16,
     pub v_scroll: u16,
+    /// Text-mode zoom level (`+` / `-` keys). Each step shifts the
+    /// effective `max_width` budget passed to
+    /// `mermaid_text::render_with_width` by [`TEXT_ZOOM_STEP`] columns.
+    /// Negative values request a more compact layout (gaps shrink);
+    /// positive values request a more spacious layout. `=` resets to 0.
+    /// Image-mode entries ignore this — the protocol auto-fits the bitmap
+    /// to the modal rect.
+    pub text_zoom: i32,
 }
+
+/// How many columns one zoom step shifts the text-mode `max_width` budget.
+/// Picked to be large enough to cross most of the discrete compaction
+/// thresholds in `mermaid-text` (whose `LayoutConfig` levels step by
+/// ~3–5 gap units, each affecting ~10–15 cols of total width).
+pub const TEXT_ZOOM_STEP: i32 = 20;
 
 /// Transient state for the settings popup.
 ///

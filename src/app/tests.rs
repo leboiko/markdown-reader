@@ -1749,6 +1749,7 @@ fn handle_mermaid_modal_key_close() {
             source: "graph LR\nA --> B".to_string(),
             h_scroll: 0,
             v_scroll: 0,
+            text_zoom: 0,
         });
         app.focus = Focus::MermaidModal;
         app.handle_mermaid_modal_key(code);
@@ -1769,6 +1770,7 @@ fn handle_mermaid_modal_key_scroll() {
         source: "graph LR\nA --> B".to_string(),
         h_scroll: 5,
         v_scroll: 5,
+        text_zoom: 0,
     });
     app.focus = Focus::MermaidModal;
 
@@ -1806,6 +1808,7 @@ fn handle_mermaid_modal_key_scroll_saturating() {
         source: "x".to_string(),
         h_scroll: 0,
         v_scroll: 0,
+        text_zoom: 0,
     });
     app.focus = Focus::MermaidModal;
 
@@ -1817,4 +1820,39 @@ fn handle_mermaid_modal_key_scroll_saturating() {
     let s = app.mermaid_modal.as_ref().unwrap();
     assert_eq!(s.v_scroll, 0);
     assert_eq!(s.h_scroll, 0);
+}
+
+/// `+` / `-` adjust `text_zoom` and reset scroll offsets so the user lands
+/// at the top-left of the re-rendered diagram (where the layout is most
+/// likely to differ between zoom levels). `=` resets both zoom and scroll.
+#[test]
+fn handle_mermaid_modal_key_zoom_adjusts_text_zoom() {
+    use crossterm::event::KeyCode;
+    let mut app = App::new(PathBuf::from("."), None);
+    app.mermaid_modal = Some(MermaidModalState {
+        tab_id: crate::ui::tabs::TabId(0),
+        block_id: MermaidBlockId(1),
+        source: "graph LR\nA --> B".to_string(),
+        h_scroll: 7,
+        v_scroll: 3,
+        text_zoom: 0,
+    });
+    app.focus = Focus::MermaidModal;
+
+    app.handle_mermaid_modal_key(KeyCode::Char('+'));
+    app.handle_mermaid_modal_key(KeyCode::Char('+'));
+    let s = app.mermaid_modal.as_ref().unwrap();
+    assert_eq!(s.text_zoom, 2, "two `+` presses bump zoom to +2");
+    assert_eq!(s.h_scroll, 0, "zoom should reset h_scroll");
+    assert_eq!(s.v_scroll, 0, "zoom should reset v_scroll");
+
+    app.handle_mermaid_modal_key(KeyCode::Char('-'));
+    app.handle_mermaid_modal_key(KeyCode::Char('-'));
+    app.handle_mermaid_modal_key(KeyCode::Char('-'));
+    let s = app.mermaid_modal.as_ref().unwrap();
+    assert_eq!(s.text_zoom, -1, "three `-` presses leave zoom at -1");
+
+    app.handle_mermaid_modal_key(KeyCode::Char('='));
+    let s = app.mermaid_modal.as_ref().unwrap();
+    assert_eq!(s.text_zoom, 0, "= resets zoom to 0");
 }

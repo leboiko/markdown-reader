@@ -5,6 +5,28 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.19.0] - 2026-04-22
+
+### Added
+
+- **Zoom keys for the text-mode mermaid modal.** When the chart is too
+  big for the modal, press `+` to request a more spacious layout, `-`
+  for a more compact one, and `=` to reset. Each press re-runs
+  `mermaid-text` synchronously at an adjusted `max_width` budget
+  (modal_width + zoom × 20 cols), so the new layout shows up
+  immediately. Scroll position resets on each zoom step so you land at
+  the top-left of the re-rendered diagram.
+
+  Caveat: `mermaid-text` compacts in discrete steps (its
+  `LayoutConfig` levels), so a single press may or may not visibly
+  change the diagram depending on whether it crosses a threshold.
+  Sequence/pie/erDiagram have a fixed minimum spacing and won't
+  compact past it. The footer shows the current zoom level when
+  non-zero.
+
+  Image-mode entries ignore the zoom keys — the protocol already
+  auto-fits bitmaps to the modal rect.
+
 ## [1.18.5] - 2026-04-22
 
 ### Fixed

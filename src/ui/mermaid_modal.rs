@@ -39,10 +39,16 @@ use unicode_width::UnicodeWidthStr;
 pub fn draw(f: &mut Frame, app: &mut App) {
     // Copy the small state we need OUT of `app` so we don't hold an
     // immutable borrow while later we need `&mut app.mermaid_cache`.
-    let Some((block_id, source, h_scroll, v_scroll)) = app
-        .mermaid_modal
-        .as_ref()
-        .map(|s| (s.block_id, s.source.clone(), s.h_scroll, s.v_scroll))
+    let Some((block_id, source, h_scroll, v_scroll, text_zoom)) =
+        app.mermaid_modal.as_ref().map(|s| {
+            (
+                s.block_id,
+                s.source.clone(),
+                s.h_scroll,
+                s.v_scroll,
+                s.text_zoom,
+            )
+        })
     else {
         return;
     };
@@ -59,7 +65,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     app.mermaid_modal_rect = Some(popup);
     f.render_widget(Clear, popup);
 
-    let title = " Mermaid  j/k scroll  d/u \u{00bd}pg  g/G top/bot  h/l pan  q/Esc close ";
+    let title =
+        " Mermaid  j/k scroll  h/l pan  +/- zoom (text)  = reset  g/G top/bot  q/Esc close ";
 
     let block = Block::default()
         .title(title)
@@ -99,9 +106,25 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Some(MermaidEntry::AsciiDiagram { diagram, .. }) => {
             // Capture the diagram out of the borrow so we can call
             // `draw_text` (which takes `&mut Frame`).
-            let diagram = diagram.clone();
+            let cached = diagram.clone();
+            // When text_zoom != 0, re-render the source at an adjusted
+            // max_width budget. The base budget is the modal's content
+            // width (the cached diagram was sized for the source pane,
+            // typically narrower). `+` widens the budget, `-` narrows it
+            // — narrowing triggers more aggressive compaction in
+            // `mermaid-text`. Falls back to the cached diagram if the
+            // re-render fails (unsupported diagram type, etc).
+            let diagram = if text_zoom == 0 {
+                cached
+            } else {
+                let base_width = usize::from(content_rect.width);
+                let delta = text_zoom * crate::app::TEXT_ZOOM_STEP;
+                let target_width = (base_width as i64 + i64::from(delta)).max(20) as usize;
+                crate::mermaid::try_text_render_public(&source, Some(target_width))
+                    .unwrap_or(cached)
+            };
             draw_text(f, content_rect, &diagram, h_scroll, v_scroll, foreground);
-            text_footer(&diagram, h_scroll, v_scroll)
+            text_footer(&diagram, h_scroll, v_scroll, text_zoom)
         }
         Some(MermaidEntry::SourceOnly(reason)) => {
             let reason = reason.clone();
@@ -188,19 +211,25 @@ fn slice_str_at(s: &str, start: usize, width: usize) -> String {
 }
 
 /// Build the text-mode footer: row/col counts + key hints.
-fn text_footer(diagram: &str, h_scroll: u16, v_scroll: u16) -> String {
+fn text_footer(diagram: &str, h_scroll: u16, v_scroll: u16, text_zoom: i32) -> String {
     let total_lines = diagram.lines().count();
     let max_width = diagram
         .lines()
         .map(UnicodeWidthStr::width)
         .max()
         .unwrap_or(0);
+    let zoom = if text_zoom == 0 {
+        String::new()
+    } else {
+        format!(" \u{2502} zoom {text_zoom:+}")
+    };
     format!(
-        " row {}/{} \u{2502} col {}/{} \u{2502} j/k row  d/u \u{00bd}pg  g/G top/bot  h/l pan ",
+        " row {}/{} \u{2502} col {}/{} \u{2502} j/k row  h/l pan  +/- zoom  = reset{} ",
         (v_scroll as usize).saturating_add(1).min(total_lines),
         total_lines,
         h_scroll as usize,
         max_width,
+        zoom,
     )
 }
 

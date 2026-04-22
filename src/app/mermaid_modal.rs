@@ -59,6 +59,7 @@ impl App {
             source: source.to_string(),
             h_scroll: 0,
             v_scroll: 0,
+            text_zoom: 0,
         });
         self.focus = Focus::MermaidModal;
     }
@@ -153,6 +154,38 @@ impl App {
             }
             KeyCode::Char('g') => {
                 self.pending_chord = Some('g');
+            }
+            // Text-mode zoom — `+` requests a more spacious layout, `-`
+            // a more compact one, `=` resets. The renderer re-runs
+            // `mermaid_text::render_with_width` synchronously next frame
+            // (sub-millisecond for typical diagrams), so each press is
+            // visible immediately. Image-mode entries ignore zoom.
+            // We accept both `+` and `=` (US/UK keyboards put `+` on
+            // shift-`=`, but some users land on `=` directly), and both
+            // `-` and `_`. We reset on `0` chord-style? No — `0` is
+            // already taken for "scroll to leftmost", so we use the bare
+            // `=` for reset and require `Shift+=` (which crossterm sends
+            // as `+`) for zoom-in. `-` zooms out (more compact).
+            KeyCode::Char('+') => {
+                if let Some(s) = self.mermaid_modal.as_mut() {
+                    s.text_zoom = s.text_zoom.saturating_add(1);
+                    s.h_scroll = 0;
+                    s.v_scroll = 0;
+                }
+            }
+            KeyCode::Char('-') => {
+                if let Some(s) = self.mermaid_modal.as_mut() {
+                    s.text_zoom = s.text_zoom.saturating_sub(1);
+                    s.h_scroll = 0;
+                    s.v_scroll = 0;
+                }
+            }
+            KeyCode::Char('=') => {
+                if let Some(s) = self.mermaid_modal.as_mut() {
+                    s.text_zoom = 0;
+                    s.h_scroll = 0;
+                    s.v_scroll = 0;
+                }
             }
             _ => {}
         }
