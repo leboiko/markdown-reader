@@ -248,10 +248,15 @@ jobs:
           VERSION=${GITHUB_REF_NAME#v}
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if git diff --quiet; then
+          # Stage first, then check the index. Plain `git diff --quiet`
+          # misses brand-new files (Formula/markdown-reader.rb on a
+          # first-ever release wouldn't exist in the tap yet — the file
+          # would be untracked, so unstaged-diff returns clean and the
+          # workflow would exit thinking it was a no-op).
+          git add Formula/markdown-reader.rb
+          if git diff --cached --quiet; then
             echo "Formula already up to date for v${VERSION}"
             exit 0
           fi
-          git add Formula/markdown-reader.rb
           git commit -m "markdown-reader ${VERSION}"
           git push
