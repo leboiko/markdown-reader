@@ -5,6 +5,42 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.18.2] - 2026-04-22
+
+### Added
+
+- **Nix flake**. `flake.nix` at the repo root makes
+  `nix run github:leboiko/markdown-reader` work out of the box,
+  same for `nix profile install` and embedding as a flake input
+  in another configuration. Closes the Nix distribution gap from
+  the md-tui competitive analysis.
+
+  Build is via `pkgs.rustPlatform.buildRustPackage` with the
+  workspace `Cargo.lock` for reproducibility — Nix prefetches
+  every crate before the sandboxed build, no network in
+  `cargo build`. `cargoBuildFlags = [ "--package"
+  "markdown-tui-explorer" ]` skips the workspace-sibling
+  `mermaid-text` bin so the output cleanly carries
+  `bin/markdown-reader`.
+
+  The dev shell (`nix develop`) brings in `rustc`, `cargo`,
+  `rustfmt`, `clippy`, `cargo-deny`, `cargo-audit` — same tools
+  CI uses, so contributors don't have to set them up locally.
+
+- **`.github/workflows/nix.yml`** — runs `nix flake check` plus
+  `nix build .#markdown-reader` on `ubuntu-latest` AND
+  `macos-latest` for every push/PR that touches a flake-relevant
+  file (flake itself, Cargo files, source). macOS coverage matters
+  because half our user base is on Darwin and Nix-on-Darwin
+  surfaces different sandbox bugs than Nix-on-Linux. Cached via
+  `magic-nix-cache-action` so repeat builds are fast. Smoke-tests
+  the resulting binary with `--help`.
+
+- README updated with the Nix install path next to Homebrew + AUR
+  + cargo. New `docs/RELEASING-NIX.md` explains the rolling-update
+  model (Nix users get whatever's on master, version-pin via their
+  own `flake.lock`) so we don't have to do anything per-release.
+
 ## [1.18.1] - 2026-04-22
 
 ### Added

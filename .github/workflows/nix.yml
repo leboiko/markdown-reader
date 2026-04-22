@@ -1,0 +1,68 @@
+name: Nix flake
+
+on:
+  push:
+    branches: [master]
+    paths:
+      # Only run when something that could affect the flake changes.
+      # Doc-only PRs and test-only PRs skip this job, which keeps CI
+      # fast for the common case.
+      - "flake.nix"
+      - "flake.lock"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "**/Cargo.toml"
+      - "src/**"
+      - "crates/**"
+      - ".github/workflows/nix.yml"
+  pull_request:
+    branches: [master]
+    paths:
+      - "flake.nix"
+      - "flake.lock"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "**/Cargo.toml"
+      - "src/**"
+      - "crates/**"
+      - ".github/workflows/nix.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: nix build .#markdown-reader (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # macOS coverage matters because half our user base is on it
+        # and Nix-on-Darwin trips up on different things than Nix-on-Linux
+        # (sandbox semantics, BSD vs GNU userspace).
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v23
+
+      - name: Cache Nix store
+        uses: DeterminateSystems/magic-nix-cache-action@v17
+
+      - name: nix flake check
+        # `flake check` validates the flake's structure + evaluates all
+        # outputs. Cheap — pure evaluation, no builds.
+        run: nix flake check --no-build
+
+      - name: nix build .#markdown-reader
+        run: nix build .#markdown-reader --print-build-logs
+
+      - name: Smoke-test the built binary
+        # Just `--help` — the TUI itself needs a tty so we can't run
+        # it in CI, but `--help` exercises the binary's startup path.
+        run: ./result/bin/markdown-reader --help

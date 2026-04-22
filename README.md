@@ -156,6 +156,25 @@ The `-bin` package pulls the same prebuilt binary as the Homebrew tap
 and the GitHub Release tarballs. A source-built variant is planned but
 not yet published.
 
+### Nix (with flakes)
+
+```sh
+# One-off run without installing
+nix run github:leboiko/markdown-reader
+
+# Permanent install
+nix profile install github:leboiko/markdown-reader
+
+# Use as a flake input in your own configuration
+{
+  inputs.markdown-reader.url = "github:leboiko/markdown-reader";
+}
+```
+
+`nix develop github:leboiko/markdown-reader` opens a dev shell with
+`rustc`/`cargo`/`rustfmt`/`clippy`/`cargo-deny`/`cargo-audit` ready —
+useful for contributors.
+
 ### From crates.io
 
 ```sh
