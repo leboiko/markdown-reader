@@ -5,6 +5,58 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.17.2] - 2026-04-22
+
+### Fixed
+
+- **Link picker (`f`) now lists every link in source order, including
+  ones pointing at headings with inline code or special characters.**
+  The user-reported "wrong order" was actually two underlying bugs in
+  the heading-anchor slugifier that caused TOC links to silently drop
+  out of the picker:
+
+  1. **Inline code in headings produced empty anchors.** The
+     `Event::Code(text)` handler in the markdown renderer pushed a
+     styled span but didn't append `text` to `heading_text` while
+     inside a heading. So `### \`kg.nodes\`` slugged to `""` instead
+     of `kgnodes`, and the TOC link `[\`kg.nodes\`](#kgnodes)` failed
+     `has_target`. Fixed: `Event::Code` now appends to `heading_text`
+     when `in_heading` is true.
+
+  2. **Underscores were stripped from slugs.** `char::is_alphanumeric()`
+     returns false for `_`, so `### \`foo_bar\`` slugged to `foobar`
+     instead of `foo_bar`. TOC links of the form
+     `[\`foo_bar\`](#foo_bar)` (a common pattern) failed `has_target`.
+     Fixed: `_` is now in the keep-set alongside `-` and ` `.
+
+  3. **Consecutive hyphens were collapsed.** GitHub's slugifier
+     preserves them — `# A / B` slugs to `a--b` (each space becomes
+     its own hyphen, slash drops). Our slugifier collapsed them to
+     `a-b`, breaking links to multi-segment headings like
+     `### \`x\` / \`y\` / \`z\``. Fixed: removed the collapse loop.
+
+  Concrete impact on the user's `personal_notes.md` (1605 lines, 70
+  internal links, heavy use of `### \`kg.foo\`` headings): the picker
+  was silently dropping every `kg.*` and `search.*` TOC entry.
+  After the fix, all 7 inline-code anchors at TOC positions [11]-[17]
+  appear in correct source order between "Table shapes" and "Who
+  writes."
+
+### Added
+
+- 5 new tests for the slugifier:
+  `heading_with_inline_code_produces_correct_anchor`,
+  `heading_mixing_text_and_inline_code_includes_both_in_anchor`,
+  `heading_with_underscores_preserves_underscores_in_anchor`,
+  `heading_with_multi_code_and_slash_produces_correct_anchor`,
+  `anchor_consecutive_spaces_preserve_hyphens` (replaces the old
+  collapse test).
+
+### Internal
+
+- Defensive sort + dedup-after-target-check from 1.17.1 still in
+  place — they cover unrelated potential failure modes.
+
 ## [1.17.1] - 2026-04-22
 
 ### Fixed

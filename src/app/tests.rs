@@ -1358,6 +1358,80 @@ fn pending_jump_not_cleared_on_different_path_failure() {
     );
 }
 
+/// Reproducer using a real-world doc the user reports as broken.
+#[test]
+#[ignore] // file path is local; run manually via --include-ignored
+fn open_link_picker_real_doc_repro() {
+    use crate::markdown::renderer::render_markdown;
+    use crate::theme::{Palette, Theme};
+    let path = "/Users/leboiko/Documents/temp/temp2/temp3/intuition-v2/.claude/worktrees/agent-a177c0d2/.planning/backlog/recommendation-engine-v1/personal_notes.md";
+    let Ok(src) = std::fs::read_to_string(path) else {
+        eprintln!("file not found, skip");
+        return;
+    };
+    let palette = Palette::from_theme(Theme::Default);
+    let blocks = render_markdown(&src, &palette, Theme::Default);
+
+    let mut app = App::new(PathBuf::from("."), None);
+    app.tabs
+        .open_or_focus(&PathBuf::from("/fake/personal_notes.md"), true);
+    if let Some(tab) = app.tabs.active_tab_mut() {
+        tab.view.total_lines = blocks.iter().map(DocBlock::height).sum();
+        tab.view.rendered = blocks;
+        tab.view.recompute_positions();
+    }
+    app.focus = Focus::Viewer;
+
+    let mut expected: Vec<(String, String)> = Vec::new();
+    let mut chars = src.char_indices().peekable();
+    while let Some((_, c)) = chars.next() {
+        if c != '[' {
+            continue;
+        }
+        let mut text = String::new();
+        for (_, c) in chars.by_ref() {
+            if c == ']' {
+                break;
+            }
+            text.push(c);
+        }
+        if let Some(&(_, '(')) = chars.peek() {
+            chars.next();
+            if let Some(&(_, '#')) = chars.peek() {
+                chars.next();
+                let mut anchor = String::new();
+                for (_, c) in chars.by_ref() {
+                    if c == ')' {
+                        break;
+                    }
+                    anchor.push(c);
+                }
+                expected.push((text, anchor));
+            }
+        }
+    }
+
+    app.open_link_picker();
+    let picker = app.link_picker.expect("picker must open");
+
+    eprintln!("\n=== PICKER (first 30) ===");
+    for (i, item) in picker.items.iter().take(30).enumerate() {
+        eprintln!("  [{i:2}] {} -> #{}", item.text, item.anchor);
+    }
+    eprintln!("\n=== SOURCE LINKS (first 30, deduped first-occurrence) ===");
+    let mut seen = std::collections::HashSet::new();
+    let mut shown = 0;
+    for (text, anchor) in &expected {
+        if seen.insert(anchor.clone()) {
+            eprintln!("  [{shown:2}] {text} -> #{anchor}");
+            shown += 1;
+            if shown >= 30 {
+                break;
+            }
+        }
+    }
+}
+
 /// Heading-anchor lookup must NOT lose a usable link just because an
 /// EARLIER same-anchor link had no target. Regression fix for a
 /// dedup-then-filter ordering bug: previously we added the anchor to

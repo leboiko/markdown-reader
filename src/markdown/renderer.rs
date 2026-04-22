@@ -329,6 +329,14 @@ impl MdRenderer {
                         .add_modifier(Modifier::BOLD);
                     self.current_spans
                         .push(Span::styled(format!("`{code}`"), style));
+                    // Inline code inside a heading must contribute to
+                    // `heading_text` so the slug includes its content.
+                    // Without this, `### \`kg.nodes\`` slugs to "" instead
+                    // of "kgnodes" and TOC links like `[\`kg.nodes\`](#kgnodes)`
+                    // silently drop out of the link picker.
+                    if self.in_heading {
+                        self.heading_text.push_str(&code);
+                    }
                 }
                 Event::SoftBreak => {
                     self.current_spans

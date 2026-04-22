@@ -383,26 +383,21 @@ pub fn logical_line_at_source(blocks: &[DocBlock], target_source: u32) -> Option
 /// ```
 pub fn heading_to_anchor(text: &str) -> String {
     let lower = text.to_lowercase();
-    // Keep alphanumeric (any script), hyphens, and spaces; drop everything else.
+    // Keep alphanumeric (any script), hyphens, underscores, and spaces;
+    // drop everything else. GitHub's slugifier preserves `_` (it's not
+    // alphanumeric per Unicode), so headings like `### \`foo_bar\`` slug
+    // to `foo_bar` not `foobar`. TOC links of the form
+    // `[\`foo_bar\`](#foo_bar)` rely on this.
+    //
+    // Consecutive hyphens are PRESERVED, not collapsed: GitHub's slug
+    // for `# A / B` is `a--b` (the `/` drops, leaving the surrounding
+    // spaces to each become `-`). TOC links with double-hyphens rely on
+    // this.
     let filtered: String = lower
         .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '-' || *c == ' ')
+        .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_' || *c == ' ')
         .collect();
-    // Spaces → hyphens, then collapse runs of consecutive hyphens.
-    let hyphenated = filtered.replace(' ', "-");
-    let mut slug = String::with_capacity(hyphenated.len());
-    let mut prev_hyphen = false;
-    for ch in hyphenated.chars() {
-        if ch == '-' {
-            if !prev_hyphen {
-                slug.push(ch);
-            }
-            prev_hyphen = true;
-        } else {
-            slug.push(ch);
-            prev_hyphen = false;
-        }
-    }
+    let slug = filtered.replace(' ', "-");
     // Strip leading/trailing hyphens that may appear after filtering.
     slug.trim_matches('-').to_string()
 }
@@ -459,9 +454,14 @@ mod tests {
         assert_eq!(heading_to_anchor("hello world"), "hello-world");
     }
 
+    /// GitHub's slugifier preserves consecutive hyphens (each space
+    /// becomes its own hyphen, runs are NOT collapsed). TOC links of
+    /// the form `[A / B](#a--b)` rely on this — the slash drops while
+    /// each surrounding space contributes one hyphen.
     #[test]
-    fn anchor_consecutive_spaces_collapse() {
-        assert_eq!(heading_to_anchor("A  B"), "a-b");
+    fn anchor_consecutive_spaces_preserve_hyphens() {
+        assert_eq!(heading_to_anchor("A  B"), "a--b");
+        assert_eq!(heading_to_anchor("A / B"), "a--b");
     }
 
     #[test]
@@ -510,6 +510,71 @@ mod tests {
         };
         assert_eq!(anchor.anchor, "installation-guide");
         assert_eq!(anchor.line, 0);
+    }
+
+    /// Inline code (`` `text` ``) inside a heading must contribute to the
+    /// slug. Without this the anchor is empty and TOC links of the form
+    /// `[`kg.nodes`](#kgnodes)` silently fail to resolve, dropping out of
+    /// the link picker.
+    #[test]
+    fn heading_with_inline_code_produces_correct_anchor() {
+        let md = "# `kg.nodes`\n\nsome text\n";
+        let blocks = render_markdown(md, &palette(), theme());
+        let anchor = match &blocks[0] {
+            DocBlock::Text {
+                heading_anchors, ..
+            } => heading_anchors.first().expect("anchor expected"),
+            _ => panic!("expected Text block"),
+        };
+        // The dot is stripped by the slugifier, mirroring GitHub's anchor
+        // for a heading like `### \`kg.nodes\``.
+        assert_eq!(anchor.anchor, "kgnodes");
+    }
+
+    #[test]
+    fn heading_mixing_text_and_inline_code_includes_both_in_anchor() {
+        let md = "# Use the `Foo` API\n\nsome text\n";
+        let blocks = render_markdown(md, &palette(), theme());
+        let anchor = match &blocks[0] {
+            DocBlock::Text {
+                heading_anchors, ..
+            } => heading_anchors.first().expect("anchor expected"),
+            _ => panic!("expected Text block"),
+        };
+        assert_eq!(anchor.anchor, "use-the-foo-api");
+    }
+
+    /// Underscores must survive slugification — GitHub-style anchors
+    /// preserve them (`[\`foo_bar\`](#foo_bar)` is a common pattern in
+    /// docs that link to inline-code headings).
+    #[test]
+    fn heading_with_underscores_preserves_underscores_in_anchor() {
+        let md = "# `kg.node_stats`\n\nsome text\n";
+        let blocks = render_markdown(md, &palette(), theme());
+        let anchor = match &blocks[0] {
+            DocBlock::Text {
+                heading_anchors, ..
+            } => heading_anchors.first().expect("anchor expected"),
+            _ => panic!("expected Text block"),
+        };
+        assert_eq!(anchor.anchor, "kgnode_stats");
+    }
+
+    /// Multi-code heading separated by `/` should produce the GitHub
+    /// slug with double hyphens around the slash + underscores
+    /// preserved inside each code chunk.
+    #[test]
+    fn heading_with_multi_code_and_slash_produces_correct_anchor() {
+        let md = "# `kg.node_stats` / `kg.predicate_stats`\n\nsome text\n";
+        let blocks = render_markdown(md, &palette(), theme());
+        let anchor = match &blocks[0] {
+            DocBlock::Text {
+                heading_anchors, ..
+            } => heading_anchors.first().expect("anchor expected"),
+            _ => panic!("expected Text block"),
+        };
+        // GitHub: spaces stay as `-`, slash drops, so `a / b` slug is `a--b`.
+        assert_eq!(anchor.anchor, "kgnode_stats--kgpredicate_stats");
     }
 
     /// Compute absolute anchor positions using the same logic as
