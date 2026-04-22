@@ -266,6 +266,39 @@ mod unit {
         assert_eq!(v.cursor_col, 2, "cursor_col must clamp to width-1=2");
     }
 
+    /// `current_line_width` must convert the visual-row `cursor_line` into a
+    /// logical line index before looking it up in `text.lines`. Otherwise
+    /// the cursor sitting on a wrapped paragraph indexes past the end of
+    /// `text.lines`, returns 0, and `clamp_cursor_col` resets `cursor_col`
+    /// to 0 — breaking horizontal arrow movement (regression caught right
+    /// after 1.18.4 shipped).
+    #[test]
+    fn current_line_width_handles_wrapped_lines() {
+        let long: String = "a".repeat(50);
+        let block = DocBlock::Text {
+            text: Text::from(vec![
+                Line::from(Span::raw("short")),      // logical 0, 1 visual row
+                Line::from(Span::raw(long.clone())), // logical 1, wraps to 3 rows at width 20
+                Line::from(Span::raw("end")),        // logical 2, 1 visual row
+            ]),
+            links: vec![],
+            heading_anchors: vec![],
+            source_lines: vec![0, 1, 2],
+            // Width 20 -> long line wraps to ceil(50/20) = 3 visual rows.
+            visual_height: std::cell::Cell::new(5),
+        };
+        let v = MarkdownViewState {
+            total_lines: 5,
+            cursor_line: 2, // inside the wrapped range (visual row 2 of long)
+            cursor_col: 0,
+            rendered: vec![block],
+            layout_width: 20,
+            ..Default::default()
+        };
+        // Logical line under visual row 2 is line 1 (the long line, 50 chars).
+        assert_eq!(v.current_line_width(), 50);
+    }
+
     /// Helper: build a `MarkdownViewState` with a given `total_lines` and
     /// default scroll/cursor at 0.
     fn view_with_lines(total: u32) -> MarkdownViewState {

@@ -5,6 +5,25 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.18.5] - 2026-04-22
+
+### Fixed
+
+- **Horizontal cursor arrows stopped working after scrolling into a
+  wrapped paragraph.** Regression introduced by 1.18.4's switch to
+  visual-row coordinates. `current_line_width()` still indexed
+  `text.lines` by the visual-row offset; on a wrapped line that
+  offset pointed past the end of `text.lines`, so width returned 0.
+  Two downstream effects:
+  1. `clamp_cursor_col()` (called after every `j`/`k`) then reset
+     `cursor_col` to 0.
+  2. The Right-arrow handler's upper bound became `max = 0`, so
+     pressing `l` / Right was a no-op.
+
+  Fix: convert the visual-row offset to a logical line index via
+  `visual_row_to_logical_in_block` before looking up `text.lines`.
+  Covered by a new `current_line_width_handles_wrapped_lines` test.
+
 ## [1.18.4] - 2026-04-22
 
 ### Fixed

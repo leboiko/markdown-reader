@@ -358,14 +358,29 @@ impl MarkdownViewState {
         for block in &self.rendered {
             let h = block.height();
             if self.cursor_line < offset + h {
-                let local = (self.cursor_line - offset) as usize;
+                let local_visual = self.cursor_line - offset;
                 let width = match block {
-                    DocBlock::Text { text, .. } => text.lines.get(local).map_or(0, |l| {
-                        l.spans
-                            .iter()
-                            .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
-                            .sum::<usize>()
-                    }),
+                    DocBlock::Text { text, .. } => {
+                        // `cursor_line` is in visual rows now (1.18.4) but
+                        // `text.lines` is still indexed by logical line —
+                        // walk the lines to convert. Without this, a cursor
+                        // sitting on a wrapped paragraph mapped past the
+                        // end of `text.lines`, returning width 0, which
+                        // forced `clamp_cursor_col` to reset `cursor_col`
+                        // to 0 on every `j`/`k` and clamped the Right arrow
+                        // to a no-op.
+                        let logical_idx = super::visual_rows::visual_row_to_logical_in_block(
+                            text,
+                            self.layout_width,
+                            local_visual,
+                        ) as usize;
+                        text.lines.get(logical_idx).map_or(0, |l| {
+                            l.spans
+                                .iter()
+                                .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+                                .sum::<usize>()
+                        })
+                    }
                     // Mermaid and Table blocks have opaque content — treat them
                     // as having no horizontal extent for cursor purposes.
                     DocBlock::Mermaid { .. } | DocBlock::Table(_) => 0,
