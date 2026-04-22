@@ -521,59 +521,70 @@ impl App {
     /// Build the link picker from the active tab's internal `#anchor` links,
     /// deduplicated by anchor, and open it.
     ///
-    /// Source order matters — the picker lists links top-to-bottom as they
-    /// appear in the document. Two pieces matter:
+    /// Sort order is **by TARGET heading line**, not by where the link
+    /// text appears in the source. Rationale: the picker's purpose is
+    /// "jump somewhere in the document" — the natural mental model is
+    /// "things I can jump to, in document order." When an intro paragraph
+    /// links to a section at the END of the doc (e.g., "see also: [last
+    /// section]"), that link should sit near the BOTTOM of the picker
+    /// (where its target lives), not near the top (where its text was
+    /// written). Otherwise users press `j/k` expecting to walk the doc
+    /// top-to-bottom and end up jumping randomly across sections.
     ///
-    /// 1. **Sort defensively** by `(line, col_start)` before iterating.
-    ///    `tab.view.links` is built from `recompute_positions` which IS
-    ///    source-ordered today, but a future refactor (parallel block
-    ///    rendering, async re-layout, etc.) could break that invariant
-    ///    silently. This sort is a no-op when the input is already ordered
-    ///    and is a guard otherwise.
-    ///
-    /// 2. **Dedup AFTER the `has_target` check**, not before. The old order
-    ///    let a missing-target link claim the anchor in the dedup set,
-    ///    silently hiding a later same-anchor link that DID have a target.
+    /// Within a target line, ties are broken by source position so
+    /// multiple links to the same heading retain a deterministic order.
     pub(super) fn open_link_picker(&mut self) {
         let Some(tab) = self.tabs.active_tab() else {
             return;
         };
 
-        // Defensive: sort by source position. Cheap (Vec is already small,
-        // typically a few dozen items) and protects against any future
-        // path that pushes links out of order.
-        let mut links_sorted: Vec<&crate::ui::markdown_view::AbsoluteLink> =
-            tab.view.links.iter().collect();
-        links_sorted.sort_by_key(|l| (l.line, l.col_start));
+        // Pre-build an `anchor → target_line` lookup so we can both filter
+        // (`has_target`) and sort (by line) without rescanning
+        // `heading_anchors` per link.
+        let mut anchor_line: std::collections::HashMap<&str, u32> =
+            std::collections::HashMap::with_capacity(tab.view.heading_anchors.len());
+        for a in &tab.view.heading_anchors {
+            // First-occurrence wins on duplicate slugs (matches the
+            // jump behaviour in `link_picker::handle_key`).
+            anchor_line.entry(a.anchor.as_str()).or_insert(a.line);
+        }
 
-        // Collect unique anchors preserving first-occurrence order.
+        // Walk source-ordered links, dedup by anchor, keep only those
+        // resolving to a known heading. Filter BEFORE dedup so a stray
+        // missing-target link can't shadow a later same-anchor link
+        // that DOES resolve.
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let mut items: Vec<crate::ui::link_picker::LinkPickerItem> = Vec::new();
+        let mut items: Vec<(u32, u16, crate::ui::link_picker::LinkPickerItem)> = Vec::new();
 
-        for link in links_sorted {
+        for link in &tab.view.links {
             if !link.url.starts_with('#') {
                 continue;
             }
             let anchor = &link.url[1..];
-            // Only consider links that resolve to a known heading anchor.
-            // Filter BEFORE dedup so an early non-resolving link never
-            // shadows a later resolving link with the same URL fragment.
-            let has_target = tab.view.heading_anchors.iter().any(|a| a.anchor == anchor);
-            if !has_target {
+            let Some(&target_line) = anchor_line.get(anchor) else {
                 continue;
-            }
+            };
             if !seen.insert(anchor.to_string()) {
                 continue;
             }
-            items.push(crate::ui::link_picker::LinkPickerItem {
-                text: link.text.clone(),
-                anchor: anchor.to_string(),
-            });
+            items.push((
+                target_line,
+                link.col_start,
+                crate::ui::link_picker::LinkPickerItem {
+                    text: link.text.clone(),
+                    anchor: anchor.to_string(),
+                },
+            ));
         }
 
         if items.is_empty() {
             return;
         }
+
+        // Primary key: target heading line (ascending = doc top to bottom).
+        // Tie-break: link's source col_start, so deterministic.
+        items.sort_by_key(|(line, col, _)| (*line, *col));
+        let items: Vec<_> = items.into_iter().map(|(_, _, it)| it).collect();
 
         self.link_picker = Some(crate::ui::link_picker::LinkPickerState { cursor: 0, items });
         self.focus = Focus::LinkPicker;

@@ -1531,10 +1531,63 @@ Final prose link: [Fig](#fig).
     );
 }
 
-/// Reproducer: pressing `f` on a doc with multiple internal links must
-/// list them in source order, not in some other order.
+/// Regression for the exact user-reported scenario: an intro paragraph
+/// at the TOP of the doc has links pointing at sections at the BOTTOM
+/// of the doc. Source-order put those bottom-section entries near the
+/// top of the picker (positions [1] and [2] in the user's
+/// `personal_notes.md`), confusing j/k navigation. Target-order puts
+/// them where they belong — at the bottom.
 #[test]
-fn open_link_picker_lists_links_in_source_order() {
+fn open_link_picker_intro_links_to_end_sort_to_bottom() {
+    use crate::markdown::renderer::render_markdown;
+    use crate::theme::{Palette, Theme};
+    let src = r"# Top
+
+Skim [System overview](#system-overview) first. End-of-doc has [appendix](#appendix) and [last section](#last-section).
+
+## System overview
+.
+## Middle section
+.
+## Appendix
+.
+## Last section
+.
+";
+    let palette = Palette::from_theme(Theme::Default);
+    let blocks = render_markdown(src, &palette, Theme::Default);
+
+    let mut app = App::new(PathBuf::from("."), None);
+    app.tabs
+        .open_or_focus(&PathBuf::from("/fake/intro_links.md"), true);
+    if let Some(tab) = app.tabs.active_tab_mut() {
+        tab.view.total_lines = blocks.iter().map(DocBlock::height).sum();
+        tab.view.rendered = blocks;
+        tab.view.recompute_positions();
+    }
+    app.focus = Focus::Viewer;
+
+    app.open_link_picker();
+    let picker = app.link_picker.expect("picker must open");
+    let labels: Vec<&str> = picker.items.iter().map(|i| i.text.as_str()).collect();
+    // Source-order of LINKS: System overview, appendix, last section
+    // Target-order: System overview (top), Appendix, Last section
+    // Picker uses target-order so the appendix link sits NEAR THE
+    // BOTTOM where its target lives.
+    assert_eq!(
+        labels,
+        vec!["System overview", "appendix", "last section"],
+        "picker must put appendix/last-section links AFTER section-2 entries, got: {labels:?}",
+    );
+}
+
+/// Pressing `f` on a doc with multiple internal links must list them
+/// in TARGET-heading order — i.e. the order users walking the doc
+/// top-to-bottom would encounter the destinations. A link whose text
+/// appears in the intro paragraph but whose target is at the END of
+/// the doc should sort to the bottom of the picker, not the top.
+#[test]
+fn open_link_picker_lists_links_by_target_position() {
     use crate::markdown::renderer::render_markdown;
     use crate::theme::{Palette, Theme};
     let src = r"# Top
@@ -1576,10 +1629,13 @@ Finally [Cherry](#cherry).
     app.open_link_picker();
     let picker = app.link_picker.expect("picker must open");
     let labels: Vec<&str> = picker.items.iter().map(|i| i.text.as_str()).collect();
+    // Source-order of LINKS: Apple, Zebra, Banana, Yellow, Cherry
+    // Source-order of HEADINGS (== target order): Apple, Banana, Cherry, Yellow, Zebra
+    // Picker uses TARGET order so j/k walks the doc top-to-bottom.
     assert_eq!(
         labels,
-        vec!["Apple", "Zebra", "Banana", "Yellow", "Cherry"],
-        "picker must list links in source order, got: {labels:?}",
+        vec!["Apple", "Banana", "Cherry", "Yellow", "Zebra"],
+        "picker must list links in TARGET-heading order, got: {labels:?}",
     );
 }
 

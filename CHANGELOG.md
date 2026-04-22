@@ -5,6 +5,37 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.17.3] - 2026-04-22
+
+### Changed
+
+- **Link picker (`f`) now sorts by TARGET heading position, not by
+  where the link text was written.** The user-reported "wrong order"
+  was a sort-key mismatch: the picker was strictly source-ordered,
+  which meant an intro paragraph's "see also: [last section]" link
+  landed at picker position [1] even though its target was at the
+  END of the document. Pressing `j/k` then jumped wildly across
+  sections instead of walking the doc top-to-bottom.
+
+  After the fix, the picker reads like a navigation index — the
+  order matches the order users would encounter the destinations
+  if they scrolled through the document. Concrete impact on the
+  user's `personal_notes.md`: the picker's first 10 entries now
+  match the visible TOC structure (System overview →
+  One-sentence description → Big picture diagram → ...) instead of
+  starting with three intro-paragraph links pointing at
+  end-of-document sections.
+
+  Tie-breaker: when two links resolve to the same heading, source
+  position breaks the tie deterministically.
+
+### Added
+
+- `open_link_picker_intro_links_to_end_sort_to_bottom` — direct
+  regression test for the user-reported scenario.
+- Updated `open_link_picker_lists_links_by_target_position` (was
+  `..._in_source_order`) to assert the new target-order behaviour.
+
 ## [1.17.2] - 2026-04-22
 
 ### Fixed
