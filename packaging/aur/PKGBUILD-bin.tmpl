@@ -1,0 +1,33 @@
+# Maintainer: Luis Boiko <luiseduardo.boiko@gmail.com>
+# Generated from packaging/aur/PKGBUILD-bin.tmpl by scripts/render-aur-pkgbuild.sh
+# Do not edit the generated file directly.
+
+pkgname=markdown-reader-bin
+pkgver={{VERSION}}
+pkgrel=1
+pkgdesc="Terminal markdown viewer with mermaid rendering, tabs, vim-mode editor, and live reload"
+arch=('x86_64' 'aarch64')
+url="https://github.com/leboiko/markdown-reader"
+license=('MIT')
+provides=('markdown-reader')
+conflicts=('markdown-reader')
+options=('!strip')
+
+source_x86_64=(
+  "{{URL_X86_64_LINUX_GNU}}"
+)
+sha256sums_x86_64=('{{SHA256_X86_64_LINUX_GNU}}')
+
+source_aarch64=(
+  "{{URL_AARCH64_LINUX_GNU}}"
+)
+sha256sums_aarch64=('{{SHA256_AARCH64_LINUX_GNU}}')
+
+package() {
+  install -Dm755 markdown-reader "$pkgdir/usr/bin/markdown-reader"
+
+  # Install the MIT license for Arch packaging convention.
+  if [ -f LICENSE ]; then
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  fi
+}

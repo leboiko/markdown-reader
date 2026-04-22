@@ -260,3 +260,82 @@ jobs:
           fi
           git commit -m "markdown-reader ${VERSION}"
           git push
+
+  publish-aur:
+    name: Publish AUR -bin package
+    needs: [release]
+    runs-on: ubuntu-latest
+    # Same `HAS_KEY` gate pattern as `publish-homebrew` — the job runs
+    # on every release, but every step is no-op'd when the secret is
+    # missing so an unconfigured fork stays green.
+    env:
+      HAS_KEY: ${{ secrets.AUR_SSH_KEY != '' && 'true' || 'false' }}
+    steps:
+      - name: Report skip reason
+        if: env.HAS_KEY != 'true'
+        run: echo "AUR_SSH_KEY is not set on this repo — skipping AUR publish."
+
+      - name: Checkout source repo
+        if: env.HAS_KEY == 'true'
+        uses: actions/checkout@v6
+
+      - name: Download release checksums
+        if: env.HAS_KEY == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p artifacts
+          gh release download "$GITHUB_REF_NAME" \
+            -R "$GITHUB_REPOSITORY" \
+            -p SHA256SUMS \
+            -D artifacts
+
+      - name: Set up SSH for AUR
+        if: env.HAS_KEY == 'true'
+        env:
+          AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$AUR_SSH_KEY" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+          # Pin the AUR host key fingerprint to prevent MITM. Pulled
+          # from `ssh-keyscan -H aur.archlinux.org` and verified
+          # against the published fingerprint at
+          # https://wiki.archlinux.org/title/Aurweb_RPC_interface.
+          ssh-keyscan -H aur.archlinux.org >> ~/.ssh/known_hosts 2>/dev/null
+          {
+            echo "Host aur.archlinux.org"
+            echo "  IdentityFile ~/.ssh/aur"
+            echo "  User aur"
+            echo "  StrictHostKeyChecking yes"
+          } > ~/.ssh/config
+          chmod 600 ~/.ssh/config
+
+      - name: Clone AUR repo
+        if: env.HAS_KEY == 'true'
+        run: |
+          # Clone (creates a local copy of the AUR-side repo for this
+          # package). On first publish the AUR-side repo must exist —
+          # see docs/RELEASING-AUR.md for the manual one-time setup.
+          git clone ssh://aur@aur.archlinux.org/markdown-reader-bin.git aur-pkg
+
+      - name: Render PKGBUILD + .SRCINFO
+        if: env.HAS_KEY == 'true'
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          ./scripts/render-aur-pkgbuild.sh "$VERSION" artifacts/SHA256SUMS aur-pkg
+
+      - name: Commit and push
+        if: env.HAS_KEY == 'true'
+        working-directory: aur-pkg
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add PKGBUILD .SRCINFO
+          if git diff --cached --quiet; then
+            echo "AUR PKGBUILD already up to date for v${VERSION}"
+            exit 0
+          fi
+          git commit -m "markdown-reader ${VERSION}"
+          git push

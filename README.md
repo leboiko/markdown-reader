@@ -138,6 +138,24 @@ drawn on the left of the viewer content when enabled.
 
 - [Rust toolchain](https://rustup.rs/) (1.85+ recommended, edition 2024)
 
+### Homebrew (macOS, Linux)
+
+```sh
+brew tap leboiko/tap
+brew install markdown-reader
+```
+
+### Arch Linux (AUR)
+
+```sh
+yay -S markdown-reader-bin
+# or any AUR helper: paru, pikaur, etc.
+```
+
+The `-bin` package pulls the same prebuilt binary as the Homebrew tap
+and the GitHub Release tarballs. A source-built variant is planned but
+not yet published.
+
 ### From crates.io
 
 ```sh

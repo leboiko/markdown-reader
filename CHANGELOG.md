@@ -5,6 +5,39 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.18.1] - 2026-04-22
+
+### Added
+
+- **AUR (Arch Linux User Repository) packaging**. Once the `-bin`
+  package is registered (one-time manual step — see
+  `docs/RELEASING-AUR.md`), Arch users can install with
+  `yay -S markdown-reader-bin` (or any AUR helper). Closes the
+  Arch distribution gap relative to `mdt` (which ships in pacman).
+  - Templates: `packaging/aur/PKGBUILD-bin.tmpl` and
+    `packaging/aur/SRCINFO-bin.tmpl` — both rendered together by
+    `scripts/render-aur-pkgbuild.sh`. We hand-template `.SRCINFO`
+    rather than relying on `makepkg --printsrcinfo` so non-Arch
+    maintainers can publish without a container or local Arch
+    install.
+  - New release-workflow job `publish-aur` runs on every `v*` tag.
+    Same `HAS_KEY`-guarded no-op-when-missing pattern as
+    `publish-homebrew`, so an unconfigured fork stays green. When
+    `AUR_SSH_KEY` is set, the job clones `markdown-reader-bin.git`
+    from `aur.archlinux.org`, renders both files, and pushes a
+    `markdown-reader X.Y.Z` commit.
+  - Architectures: `x86_64-unknown-linux-gnu` and
+    `aarch64-unknown-linux-gnu` (the same release tarballs the
+    Homebrew formula consumes).
+  - README updated with the AUR install path next to the existing
+    Homebrew + cargo paths.
+
+### Internal
+
+- New `docs/RELEASING-AUR.md` with the one-time AUR account / SSH
+  key / first-publish setup, plus the steps for setting up the CI
+  secret to enable auto-publish on every release.
+
 ## [1.18.0] - 2026-04-22
 
 ### Added
