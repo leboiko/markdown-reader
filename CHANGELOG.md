@@ -5,6 +5,17 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.16.3] - 2026-04-22
+
+### Fixed
+
+- **Edge labels for parallel and multi-outgoing edges stack
+  cleanly off the arrow row** (via `mermaid-text` 0.14.2).
+  Visible on the README CI/CD pipeline (`pass` above the arrow,
+  `skip` below) and the canonical TD state machine
+  (`done`/`error` share a single row instead of stacking).
+  Free upgrade.
+
 ## [1.16.2] - 2026-04-22
 
 ### Fixed

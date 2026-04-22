@@ -4,7 +4,7 @@
 //! allocates a [`Grid`] large enough to fit all nodes and edges, draws
 //! everything, and returns the final string.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use unicode_width::UnicodeWidthStr;
 
@@ -643,6 +643,28 @@ fn render_inner(
     let mut pending_labels: Vec<(usize, usize, String, Option<crate::types::Rgb>)> = Vec::new();
     // Collision registry: `(col, row, display_width, height)` of committed labels.
     let mut placed_labels: Vec<(usize, usize, usize, usize)> = Vec::new();
+    let mut forward_outgoing_counts: HashMap<&str, usize> = HashMap::new();
+    for edge in &graph.edges {
+        let from_pos = positions.get(&edge.from).copied();
+        let to_pos = positions.get(&edge.to).copied();
+        let edge_is_back = match (from_pos, to_pos) {
+            (Some(fp), Some(tp)) => is_back_edge(fp, tp, graph.direction),
+            _ => false,
+        };
+        if !edge_is_back {
+            *forward_outgoing_counts
+                .entry(edge.from.as_str())
+                .or_default() += 1;
+        }
+    }
+    let mut directed_pair_counts: HashMap<(&str, &str), usize> = HashMap::new();
+    for edge in &graph.edges {
+        *directed_pair_counts
+            .entry((edge.from.as_str(), edge.to.as_str()))
+            .or_default() += 1;
+    }
+    let mut prior_path_cells_by_pair: HashMap<(&str, &str), HashSet<(usize, usize)>> =
+        HashMap::new();
     // Back-edge connector points: where to stamp `┬` / `┴` (LR) or `├` / `┤`
     // (TD) after node boxes are drawn, so the perimeter back-edge path
     // connects visibly to its source and destination borders.
@@ -656,6 +678,9 @@ fn render_inner(
             continue;
         };
         let (src, dst) = (*src, *dst);
+        let edge_pair = (edge.from.as_str(), edge.to.as_str());
+        let has_parallel_same_direction =
+            directed_pair_counts.get(&edge_pair).copied().unwrap_or(0) > 1;
 
         // Determine whether this edge is a back-edge so we can select the
         // correct tip character. Back-edges enter their target from a
@@ -817,14 +842,25 @@ fn render_inner(
 
         // Compute edge label position using the actual routed path.
         if let (Some(lbl), Some(path)) = (&edge.label, &path)
-            && let Some((lbl_col, lbl_row)) = label_position(
-                path,
-                lbl,
-                graph.direction,
-                &mut placed_labels,
-                &node_rects,
-                sg_bounds,
-            )
+            && let Some((lbl_col, lbl_row)) = {
+                let has_sibling_outgoing = forward_outgoing_counts
+                    .get(edge.from.as_str())
+                    .copied()
+                    .unwrap_or(0)
+                    > 1;
+                let prior_path_cells = has_parallel_same_direction
+                    .then(|| prior_path_cells_by_pair.get(&edge_pair))
+                    .flatten();
+                let label_context = LabelPlacementContext {
+                    dir: graph.direction,
+                    node_rects: &node_rects,
+                    sg_bounds,
+                    edge_is_back,
+                    has_sibling_outgoing,
+                    prior_path_cells,
+                };
+                label_position(path, lbl, &mut placed_labels, &label_context)
+            }
         {
             // Pick edge label color (`linkStyle … color:#…`), falling back to
             // the edge stroke color when only `stroke:` is set, so labels
@@ -838,6 +874,13 @@ fn render_inner(
                 None
             };
             pending_labels.push((lbl_col, lbl_row, lbl.clone(), lbl_color));
+        }
+
+        if has_parallel_same_direction && let Some(path) = &path {
+            prior_path_cells_by_pair
+                .entry(edge_pair)
+                .or_default()
+                .extend(path.iter().copied());
         }
     }
 
@@ -1427,6 +1470,15 @@ fn draw_label_centred(grid: &mut Grid, node: &Node, pos: GridPos, geom: NodeGeom
 // Edge label placement
 // ---------------------------------------------------------------------------
 
+struct LabelPlacementContext<'a> {
+    dir: Direction,
+    node_rects: &'a [(usize, usize, usize, usize)],
+    sg_bounds: &'a [SubgraphBounds],
+    edge_is_back: bool,
+    has_sibling_outgoing: bool,
+    prior_path_cells: Option<&'a HashSet<(usize, usize)>>,
+}
+
 /// Compute the `(col, row)` position where an edge label should be written.
 ///
 /// Strategy (following termaid's `_find_last_turn` / `_try_place_on_segment`):
@@ -1447,10 +1499,8 @@ fn draw_label_centred(grid: &mut Grid, node: &Node, pos: GridPos, geom: NodeGeom
 fn label_position(
     path: &[(usize, usize)],
     label: &str,
-    dir: Direction,
     placed: &mut Vec<(usize, usize, usize, usize)>,
-    node_rects: &[(usize, usize, usize, usize)],
-    sg_bounds: &[SubgraphBounds],
+    context: &LabelPlacementContext<'_>,
 ) -> Option<(usize, usize)> {
     if path.len() < 2 {
         return None;
@@ -1460,7 +1510,13 @@ fn label_position(
         return None;
     }
 
-    let candidates = candidate_positions(path, dir);
+    let candidates = candidate_positions(
+        path,
+        context.dir,
+        lbl_w,
+        context.edge_is_back,
+        context.has_sibling_outgoing,
+    );
     if candidates.is_empty() {
         return None;
     }
@@ -1475,9 +1531,10 @@ fn label_position(
     // guard prevents.
     for &(c, r) in &candidates {
         if !collides(c, r, lbl_w, placed)
-            && !overlaps_node_interior(c, r, lbl_w, node_rects)
-            && !overlaps_node_border_row(c, r, lbl_w, node_rects)
-            && !overlaps_subgraph_border(c, r, lbl_w, sg_bounds)
+            && !overlaps_prior_path(c, r, lbl_w, context.prior_path_cells)
+            && !overlaps_node_interior(c, r, lbl_w, context.node_rects)
+            && !overlaps_node_border_row(c, r, lbl_w, context.node_rects)
+            && !overlaps_subgraph_border(c, r, lbl_w, context.sg_bounds)
         {
             placed.push((c, r, lbl_w, 1));
             return Some((c, r));
@@ -1496,6 +1553,18 @@ fn label_position(
     None
 }
 
+fn overlaps_prior_path(
+    col: usize,
+    row: usize,
+    w: usize,
+    prior_path_cells: Option<&HashSet<(usize, usize)>>,
+) -> bool {
+    let Some(prior_path_cells) = prior_path_cells else {
+        return false;
+    };
+    (col..col + w).any(|c| prior_path_cells.contains(&(c, row)))
+}
+
 /// Generate the ordered list of `(col, row)` candidates to try for an edge
 /// label, given the routed `path` and the graph direction. Earlier
 /// candidates are preferred — the first non-colliding one wins.
@@ -1505,19 +1574,53 @@ fn label_position(
 ///
 /// TD/BT: 5 row offsets (0, ±1, ±2) × 3 column anchors (right of, left
 /// of, +2 right of the last vertical run).
-fn candidate_positions(path: &[(usize, usize)], dir: Direction) -> Vec<(usize, usize)> {
+fn candidate_positions(
+    path: &[(usize, usize)],
+    dir: Direction,
+    lbl_w: usize,
+    edge_is_back: bool,
+    has_sibling_outgoing: bool,
+) -> Vec<(usize, usize)> {
+    const MIN_DOGLEG_SIDE_LABEL_WIDTH: usize = 8;
+
     match dir {
         Direction::LeftToRight | Direction::RightToLeft => {
+            let mut out = Vec::new();
+
+            // Dogleg edges in LR/RL graphs often route horizontally out of the
+            // source and then vertically to a lower/upper target. Labeling the
+            // source-side horizontal run can make the label look attached to a
+            // neighboring parallel edge. For wider labels, prefer the long
+            // vertical leg when one exists; it is the part that visually
+            // distinguishes the target. Short labels stay on the horizontal
+            // run because they fit there without spanning adjacent lanes.
+            if lbl_w >= MIN_DOGLEG_SIDE_LABEL_WIDTH
+                && has_sibling_outgoing
+                && !edge_is_back
+                && let Some((seg_col, seg_row, len)) = last_vertical_segment_with_len(path)
+                && len >= 4
+            {
+                let left_col = seg_col.saturating_sub(lbl_w + 1);
+                let right_col = seg_col + 1;
+                let row_offsets: [isize; 5] = [0, -1, 1, -2, 2];
+                out.reserve(row_offsets.len() * 2);
+                for &dr in &row_offsets {
+                    let r = (seg_row as isize + dr).max(0) as usize;
+                    out.push((left_col, r));
+                    out.push((right_col, r));
+                }
+            }
+
             let Some((mid_col, seg_row, lo_col, hi_col)) = last_horizontal_segment_with_range(path)
             else {
-                return Vec::new();
+                return out;
             };
             // Three column anchors along the segment.
             let third = (hi_col - lo_col) / 3;
             let col_anchors = [mid_col, lo_col + third, lo_col + 2 * third];
             // Row offsets: alternate above/below, growing in distance.
             let row_offsets: [isize; 8] = [-1, 1, -2, 2, -3, 3, -4, 4];
-            let mut out = Vec::with_capacity(col_anchors.len() * row_offsets.len());
+            out.reserve(col_anchors.len() * row_offsets.len());
             for &c in &col_anchors {
                 for &dr in &row_offsets {
                     let r = (seg_row as isize + dr).max(0) as usize;
@@ -1531,12 +1634,35 @@ fn candidate_positions(path: &[(usize, usize)], dir: Direction) -> Vec<(usize, u
                 Some(v) => v,
                 None => return Vec::new(),
             };
+            let mut out = Vec::new();
+
+            // Multiple TD/BT edges leaving the same source often share
+            // adjacent vertical trunks before branching horizontally. Placing
+            // every label on the same side of its trunk can make labels read
+            // swapped. Prefer the side that matches the branch direction.
+            if has_sibling_outgoing
+                && !edge_is_back
+                && let Some(branch_dir) = last_horizontal_segment_direction(path)
+            {
+                let preferred_col = if branch_dir < 0 {
+                    seg_col.saturating_sub(lbl_w + 1)
+                } else {
+                    seg_col + 1
+                };
+                let row_offsets: [isize; 5] = [0, -1, 1, -2, 2];
+                out.reserve(row_offsets.len());
+                for &dr in &row_offsets {
+                    let r = (seg_row as isize + dr).max(0) as usize;
+                    out.push((preferred_col, r));
+                }
+            }
+
             let col_anchors = [seg_col + 1, seg_col.saturating_sub(1), seg_col + 2];
             // Match LR/RL's 8-offset range so labels in tight TD/BT
             // diagrams (e.g. nested subgraphs) have more breathing room
             // when corner / subgraph-border guards filter near positions.
             let row_offsets: [isize; 8] = [0, -1, 1, -2, 2, -3, 3, -4];
-            let mut out = Vec::with_capacity(col_anchors.len() * row_offsets.len());
+            out.reserve(col_anchors.len() * row_offsets.len());
             for &c in &col_anchors {
                 for &dr in &row_offsets {
                     let r = (seg_row as isize + dr).max(0) as usize;
@@ -1555,6 +1681,10 @@ fn candidate_positions(path: &[(usize, usize)], dir: Direction) -> Vec<(usize, u
 fn last_horizontal_segment_with_range(
     path: &[(usize, usize)],
 ) -> Option<(usize, usize, usize, usize)> {
+    if path.len() < 2 {
+        return None;
+    }
+
     let n = path.len();
     let mut i = n.saturating_sub(2);
     loop {
@@ -1581,11 +1711,39 @@ fn last_horizontal_segment_with_range(
     None
 }
 
+/// Return the direction of the last horizontal run in `path`, preserving path
+/// traversal order: `-1` for leftward, `1` for rightward.
+fn last_horizontal_segment_direction(path: &[(usize, usize)]) -> Option<isize> {
+    for pair in path.windows(2).rev() {
+        let ((from_col, from_row), (to_col, to_row)) = (pair[0], pair[1]);
+        if from_row == to_row {
+            return match to_col.cmp(&from_col) {
+                std::cmp::Ordering::Less => Some(-1),
+                std::cmp::Ordering::Greater => Some(1),
+                std::cmp::Ordering::Equal => continue,
+            };
+        }
+    }
+    None
+}
+
 /// Find the midpoint `(col, row)` of the **last** vertical run in `path`
 /// that is at least 2 cells long. "Last" = closest to the tip.
 ///
 /// Returns `None` if no such segment exists.
 fn last_vertical_segment(path: &[(usize, usize)]) -> Option<(usize, usize)> {
+    last_vertical_segment_with_len(path).map(|(col, row, _len)| (col, row))
+}
+
+/// Find the midpoint `(col, row)` and length of the **last** vertical run in
+/// `path` that is at least 2 cells long. "Last" = closest to the tip.
+///
+/// Returns `None` if no such segment exists.
+fn last_vertical_segment_with_len(path: &[(usize, usize)]) -> Option<(usize, usize, usize)> {
+    if path.len() < 2 {
+        return None;
+    }
+
     let n = path.len();
     let mut i = n.saturating_sub(2);
     loop {
@@ -1597,7 +1755,7 @@ fn last_vertical_segment(path: &[(usize, usize)]) -> Option<(usize, usize)> {
         let run_len = i - start + 1;
         if run_len >= 2 {
             let mid_row = (path[start].1 + path[i].1) / 2;
-            return Some((col, mid_row));
+            return Some((col, mid_row, run_len));
         }
         if i == 0 {
             break;

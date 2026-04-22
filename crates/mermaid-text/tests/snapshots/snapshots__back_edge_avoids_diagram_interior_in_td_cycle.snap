@@ -1,6 +1,6 @@
 ---
 source: crates/mermaid-text/tests/snapshots.rs
-assertion_line: 946
+assertion_line: 969
 expression: out
 ---
 ┌─────────┐
@@ -8,8 +8,8 @@ expression: out
 └─────────┘         │
      │ │            │
      │ │            │
-     │ │error       │
-     │done          │
+     │ │            │
+done │ │error       │
      │ │            │
      │ │            │
     ┌┘ └───────┐    │

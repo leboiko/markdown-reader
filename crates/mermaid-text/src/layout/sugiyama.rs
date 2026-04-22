@@ -331,7 +331,7 @@ mod tests {
             .find(|w| w.edge_idx == app_db_idx)
             .expect("App→DB has waypoints");
         assert!(
-            app_db_wp.waypoints.len() >= 1,
+            !app_db_wp.waypoints.is_empty(),
             "App→DB long edge gets at least one dummy waypoint: {:?}",
             app_db_wp.waypoints,
         );

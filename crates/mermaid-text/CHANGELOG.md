@@ -3,6 +3,34 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.14.2 — 2026-04-22
+
+### Fixed
+
+- **Edge labels for parallel-edge groups and multi-outgoing nodes
+  place much more cleanly.** When two edges run between the same
+  node pair (CI/CD `pass`/`skip`) the labels used to crowd the
+  arrow row, with one label often clipping the arrow itself. They
+  now stack on opposite sides of the channel — one label above the
+  arrow, one below — using a `LabelPlacementContext` that tracks
+  prior path cells per source-target pair.
+
+  When a single node fans out to multiple successors (the canonical
+  TD state machine's `Running` → `Done` / `Failed`), labels for
+  sibling outgoing edges now share a row instead of stacking
+  vertically along the arrow corridor (`done │ │ error` instead of
+  the old `│done` / `│ │error` two-row layout).
+
+  Three snapshots updated (all clear improvements):
+  - `cicd_parallel_styles_to_same_target`
+  - `state_circuit_breaker`
+  - `back_edge_avoids_diagram_interior_in_td_cycle`
+
+### Internal
+
+- Tiny clippy cleanup in `sugiyama.rs` test
+  (`!waypoints.is_empty()` instead of `len() >= 1`).
+
 ## 0.14.1 — 2026-04-22
 
 ### Fixed
