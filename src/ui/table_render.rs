@@ -137,10 +137,12 @@ fn fair_share_widths(natural_widths: &[usize], num_cols: usize, target: usize) -
         .sum();
 
     let mut widths = mins.clone();
-    if total_excess > 0 {
-        for (i, (&natural, &min)) in naturals.iter().zip(&mins).enumerate() {
-            let excess = natural.saturating_sub(min);
-            let extra = (excess * remaining) / total_excess;
+    for (i, (&natural, &min)) in naturals.iter().zip(&mins).enumerate() {
+        let excess = natural.saturating_sub(min);
+        // checked_div returns None when total_excess == 0, in which
+        // case the column gets only its minimum width — equivalent
+        // to the prior `if total_excess > 0` guard.
+        if let Some(extra) = (excess * remaining).checked_div(total_excess) {
             widths[i] = (min + extra).min(natural);
         }
     }

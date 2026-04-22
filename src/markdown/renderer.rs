@@ -655,14 +655,12 @@ impl MdRenderer {
                     .push(self.current_table_row_source_line);
                 self.table_header = false;
             }
-            TagEnd::TableRow => {
-                if !self.table_header {
-                    self.table_rows.push(self.table_row.clone());
-                    // Record the body row's source line (header is already recorded
-                    // in TagEnd::TableHead above).
-                    self.table_row_source_lines
-                        .push(self.current_table_row_source_line);
-                }
+            TagEnd::TableRow if !self.table_header => {
+                self.table_rows.push(self.table_row.clone());
+                // Record the body row's source line (header is already recorded
+                // in TagEnd::TableHead above).
+                self.table_row_source_lines
+                    .push(self.current_table_row_source_line);
             }
             TagEnd::TableCell => {
                 let cell_spans: CellSpans = self.current_spans.drain(..).collect();
@@ -1215,8 +1213,10 @@ mod tests {
   - Nested two-B
 ";
         let blocks = render_markdown(md, &default_palette(), Theme::Default);
-        let DocBlock::Text { text, .. } =
-            blocks.iter().find(|b| matches!(b, DocBlock::Text { .. })).unwrap()
+        let DocBlock::Text { text, .. } = blocks
+            .iter()
+            .find(|b| matches!(b, DocBlock::Text { .. }))
+            .unwrap()
         else {
             panic!("expected a Text block");
         };
@@ -1225,7 +1225,12 @@ mod tests {
         let line_strs: Vec<String> = text
             .lines
             .iter()
-            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
             .collect();
         // Each of the 7 list items should appear on a SEPARATE line.
         // (There may be a trailing blank line after the list — that's
@@ -1239,10 +1244,8 @@ mod tests {
             "Nested two-A",
             "Nested two-B",
         ] {
-            let containing_lines: Vec<&String> = line_strs
-                .iter()
-                .filter(|l| l.contains(label))
-                .collect();
+            let containing_lines: Vec<&String> =
+                line_strs.iter().filter(|l| l.contains(label)).collect();
             assert_eq!(
                 containing_lines.len(),
                 1,

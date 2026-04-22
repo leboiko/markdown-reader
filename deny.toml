@@ -18,6 +18,20 @@ version = 2
 yanked = "deny"
 # Scope of the unmaintained check: audit all transitive deps.
 unmaintained = "all"
+# Targeted ignores. Each entry MUST cite the upstream blocker so we
+# revisit when it moves. Re-audit quarterly: drop anything whose
+# upstream has shipped a fix.
+ignore = [
+    # syntect's transitive deps. Both are flagged unmaintained but
+    # there's no safe upgrade — syntect 5.x still depends on the
+    # old majors. Replacing syntect would be a multi-day refactor
+    # of the markdown code-block highlighter; not justified for an
+    # unmaintained-but-functional advisory. Revisit when syntect
+    # ships a release that drops these:
+    #   https://github.com/trishume/syntect/issues
+    "RUSTSEC-2025-0141", # bincode 1.3.3 unmaintained (via syntect) — dev ceased upstream
+    "RUSTSEC-2024-0320", # yaml-rust 0.4.5 unmaintained (via syntect)
+]
 
 # ---- Licenses -----------------------------------------------------------------
 

@@ -5,6 +5,31 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.16.5] - 2026-04-22
+
+### Internal
+
+- **CI green again on stable 1.95.** Three classes of breakage,
+  all build-tooling rather than user-visible:
+  - **Clippy** (6 errors): `collapsible_match` × 4 in
+    `key_handlers.rs` and `renderer.rs` (lifted nested `if`s into
+    match guards), `explicit_counter_loop` × 2 (`(N..).zip(iter)`
+    pattern), `manual_checked_division` × 1 in `table_render.rs`
+    (`checked_div` instead of guarded division).
+  - **Rustfmt**: drift from incremental edits picked up by the new
+    `cargo fmt --all -- --check` gate. Re-formatted, no semantic
+    changes.
+  - **cargo-deny**: two transitive `unmaintained` advisories from
+    `syntect`'s deps (`bincode 1.3.3` /
+    [`RUSTSEC-2025-0141`](https://rustsec.org/advisories/RUSTSEC-2025-0141)
+    and `yaml-rust 0.4.5` /
+    [`RUSTSEC-2024-0320`](https://rustsec.org/advisories/RUSTSEC-2024-0320))
+    started failing the build. Both lack a safe upgrade
+    upstream — added narrow ignores in `deny.toml` with reason
+    comments + a quarterly re-audit reminder. The advisories
+    surface in `cargo audit` regardless; that job is
+    `continue-on-error: true`.
+
 ## [1.16.4] - 2026-04-22
 
 ### Fixed

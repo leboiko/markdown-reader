@@ -125,9 +125,9 @@ pub fn collect_match_lines(
                 } else {
                     // No cached layout yet — fall back to raw cell text so search
                     // is functional before the first draw populates the cache.
-                    let mut row_offset = 1u32; // skip top border line
+                    // `row_offset` starts at 1 to skip the top border line.
                     let all_rows = std::iter::once(&table.headers).chain(table.rows.iter());
-                    for row in all_rows {
+                    for (row_offset, row) in (1u32..).zip(all_rows) {
                         let row_text: String = row
                             .iter()
                             .map(|cell| crate::markdown::cell_to_string(cell))
@@ -136,7 +136,6 @@ pub fn collect_match_lines(
                         if row_text.to_lowercase().contains(query_lower) {
                             matches.push(offset + row_offset);
                         }
-                        row_offset += 1;
                     }
                 }
                 offset += table.rendered_height;

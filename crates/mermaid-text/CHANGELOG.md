@@ -3,6 +3,14 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.14.3 — 2026-04-22
+
+### Internal
+
+- `put_str` in `render/er.rs` now uses `(col..).zip(s.chars())`
+  instead of a manual counter — silences clippy 1.95's
+  `explicit_counter_loop` lint that fired in CI.
+
 ## 0.14.2 — 2026-04-22
 
 ### Fixed

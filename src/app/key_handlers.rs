@@ -330,12 +330,10 @@ impl App {
                 self.tabs.activate_by_index((c as u8 - b'0') as usize);
             }
             // `T` opens the tab picker overlay.
-            KeyCode::Char('T') => {
-                if !self.tabs.is_empty() {
-                    let cursor = self.tabs.active_index().unwrap_or(0);
-                    self.tab_picker = Some(crate::ui::tab_picker::TabPickerState { cursor });
-                    self.focus = Focus::TabPicker;
-                }
+            KeyCode::Char('T') if !self.tabs.is_empty() => {
+                let cursor = self.tabs.active_index().unwrap_or(0);
+                self.tab_picker = Some(crate::ui::tab_picker::TabPickerState { cursor });
+                self.focus = Focus::TabPicker;
             }
             KeyCode::Char('/') => {
                 self.search.activate();
@@ -472,10 +470,8 @@ impl App {
             KeyCode::Backspace => {
                 self.goto_line.input.pop();
             }
-            KeyCode::Char(c) if c.is_ascii_digit() => {
-                if self.goto_line.input.len() < 9 {
-                    self.goto_line.input.push(c);
-                }
+            KeyCode::Char(c) if c.is_ascii_digit() && self.goto_line.input.len() < 9 => {
+                self.goto_line.input.push(c);
             }
             _ => {}
         }
@@ -799,11 +795,9 @@ impl App {
         let view_height = crate::cast::u16_from_u32(self.tabs.view_height);
 
         match m.kind {
-            MouseEventKind::Down(MouseButton::Left) => {
-                if !inside {
-                    self.close_table_modal();
-                }
-                // Click inside the modal is a no-op for now.
+            // Click inside the modal is a no-op; click outside closes it.
+            MouseEventKind::Down(MouseButton::Left) if !inside => {
+                self.close_table_modal();
             }
             MouseEventKind::ScrollDown => {
                 if !inside {

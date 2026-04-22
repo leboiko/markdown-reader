@@ -453,10 +453,8 @@ fn put(grid: &mut [Vec<char>], row: usize, col: usize, ch: char) {
 }
 
 fn put_str(grid: &mut [Vec<char>], row: usize, col: usize, s: &str) {
-    let mut c = col;
-    for ch in s.chars() {
+    for (c, ch) in (col..).zip(s.chars()) {
         put(grid, row, c, ch);
-        c += 1;
     }
 }
 
