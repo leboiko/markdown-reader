@@ -1,9 +1,17 @@
 # markdown-reader
 
-A terminal-based markdown file browser and viewer built with Rust and
-[ratatui](https://github.com/ratatui/ratatui). Browse a repository, open
-multiple files as tabs, search across content, jump to lines, switch themes,
-and resume exactly where you left off.
+A terminal markdown repo browser and viewer built with Rust and
+[ratatui](https://github.com/ratatui/ratatui). Open docs-heavy repositories
+with a file tree and tabs, search across markdown content, render Mermaid,
+math, code, and tables inline, and jump straight into editing at the source
+line you were reading.
+
+- Built for large markdown repositories, not just single-file preview
+- Pure-Rust rendering stack, including Mermaid fallback paths and inline math
+- Tabs, global search, table expansion, themes, session restore, and edit mode
+
+`markdown-reader` is the binary name. The crates.io package is
+`markdown-tui-explorer`.
 
 ## Screenshots
 
@@ -22,6 +30,16 @@ Eight themes ship built-in, including light variants. Settings modal
 reached via `c`.
 
 ![GitHub Light theme with settings open](https://raw.githubusercontent.com/leboiko/markdown-reader/master/docs/screenshots/settings-github-light.png)
+
+## Why markdown-reader?
+
+- **Repository-first workflow** — browse a whole docs tree, not just one file
+- **Terminal-native reading** — tabs, vim-style movement, search, links, and
+  source-line jumps stay inside the terminal
+- **Rich markdown coverage** — syntax highlighting, Mermaid, LaTeX math,
+  tables, task lists, block quotes, and links render inline
+- **Editing without context switching** — jump from rendered view into a
+  vim-style editor at the exact source line under the cursor
 
 ## Layout
 
@@ -180,6 +198,8 @@ useful for contributors.
 ```sh
 cargo install markdown-tui-explorer
 ```
+
+This installs the `markdown-reader` binary.
 
 ### From GitHub
 
