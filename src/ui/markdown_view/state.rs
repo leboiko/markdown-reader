@@ -3,7 +3,6 @@ use crate::theme::Palette;
 use ratatui::text::Text;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use unicode_width::UnicodeWidthStr;
 
 /// Whether the visual selection is character-wise or line-wise.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -374,12 +373,9 @@ impl MarkdownViewState {
                             self.layout_width,
                             local_visual,
                         ) as usize;
-                        text.lines.get(logical_idx).map_or(0, |l| {
-                            l.spans
-                                .iter()
-                                .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
-                                .sum::<usize>()
-                        })
+                        text.lines
+                            .get(logical_idx)
+                            .map_or(0, |l| crate::text_layout::measure(&l.spans) as usize)
                     }
                     // Mermaid and Table blocks have opaque content — treat them
                     // as having no horizontal extent for cursor purposes.

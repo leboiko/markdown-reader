@@ -5,6 +5,43 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.20.4] - 2026-04-23
+
+### Internal — Phase 1 of the architecture cleanup
+
+Foundational refactor with no user-visible behaviour change. First step
+of the 5-phase plan in `docs/markdown-text-architecture-plan.md`.
+
+- New module `src/text_layout.rs` — single source of truth for
+  display-width calculation over ratatui span lists.
+  - `WrappedSpan { content: String, style, width: u16 }` — owned styled
+    chunk with cached display width.
+  - `WrappedLine { spans, width }` — one wrapped visual row.
+  - `wrap_spans(spans, max_width) -> Vec<WrappedLine>` — greedy
+    word-wrap; algorithm ported verbatim from
+    `table_modal::wrap_cell_spans` so a Phase 2 swap is mechanical.
+  - `measure(spans) -> u16` — total display width without allocation.
+- `visual_rows::line_visual_rows` is now a 4-line adapter over
+  `wrap_spans`. The old hand-written ceil-div on `UnicodeWidthStr`
+  is gone; layout-width math has one implementation.
+- `state::current_line_width` and `highlight::apply_block_highlight`
+  use `text_layout::measure` instead of inline span-width sums.
+
+Tests: +14 cases in `text_layout::tests`, including a width-sweep
+harness over `[20, 40, 60, 80, 120, 200]`, idempotence (soft-wrap
+inputs only — explicitly documented), hard-newline consumption,
+combining-mark glue, wide CJK, mixed styles across wrap boundaries,
+and `max_width == 0` short-circuit. 266 binary tests + 351 mermaid-text
+tests still pass; clippy + fmt clean.
+
+Quality gates audited (per `docs/markdown-text-architecture-plan.md`):
+no dead code, no `#[allow(dead_code)]`, no unused dependencies, no
+duplicated width-sum loops anywhere outside `text_layout::measure`,
+rustdoc on every `pub` item.
+
+Phases 2 + 3 (wrapped-cell tables, deletion of `visual_rows.rs` once
+prose owns its wrapping) build directly on this module.
+
 ## [1.20.3] - 2026-04-23
 
 ### Changed

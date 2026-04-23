@@ -43,15 +43,11 @@ pub fn apply_block_highlight(
                 block_start + crate::cast::u32_sat(clip_start) + crate::cast::u32_sat(lines.len());
             for abs in block_visible_start..block_visible_end {
                 let idx = (abs - block_visible_start) as usize;
-                // Compute the display width of this logical line from the current span content.
-                let line_width = lines.get(idx).map_or(0, |l| {
-                    crate::cast::u16_sat(
-                        l.spans
-                            .iter()
-                            .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
-                            .sum::<usize>(),
-                    )
-                });
+                // Compute the display width of this logical line via the single
+                // source of truth: `text_layout::measure`.
+                let line_width = lines
+                    .get(idx)
+                    .map_or(0, |l| crate::text_layout::measure(&l.spans));
                 if let Some((sc, ec)) = range.char_range_on_line(abs, line_width) {
                     if sc == 0 && ec >= line_width {
                         // Full-line highlight — covers line mode and char-mode middle lines.

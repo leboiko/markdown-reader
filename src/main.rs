@@ -7,6 +7,7 @@ mod fs;
 mod markdown;
 mod mermaid;
 mod state;
+mod text_layout;
 mod theme;
 mod ui;
 

@@ -1,28 +1,22 @@
 use crate::markdown::DocBlock;
+use crate::text_layout;
 use ratatui::text::{Line, Text};
-use unicode_width::UnicodeWidthStr;
 
 /// Compute the number of terminal rows a single rendered `Line` occupies when
 /// wrapped to `content_width` columns.
 ///
-/// ratatui's `Paragraph::wrap` word-wraps at `content_width`. A line that is
-/// shorter than or equal to `content_width` occupies exactly 1 row. Lines wider
-/// than `content_width` overflow into additional rows; we calculate the count
-/// with ceiling division. Empty lines (zero width) still occupy 1 row.
+/// This is a thin adapter over [`text_layout::wrap_spans`]: it delegates all
+/// width arithmetic and wrapping decisions to that single source of truth and
+/// returns the number of output rows produced. Deletion of this adapter is
+/// scheduled for Phase 3 when callers switch to `WrappedLine` directly.
+///
+/// Empty lines (zero width) and lines narrower than `content_width` each
+/// occupy exactly 1 row. `content_width == 0` always returns 1 (short-circuit
+/// matching the pre-wrap "1 row per logical line" assumption).
 pub fn line_visual_rows(line: &Line, content_width: u16) -> u32 {
-    if content_width == 0 {
-        return 1;
-    }
-    let width: usize = line
-        .spans
-        .iter()
-        .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
-        .sum();
-    if width == 0 {
-        return 1;
-    }
-    let cw = content_width as usize;
-    crate::cast::u32_sat(width.div_ceil(cw))
+    let rows = text_layout::wrap_spans(&line.spans, content_width);
+    // wrap_spans always returns at least one row; saturating cast is safe.
+    crate::cast::u32_sat(rows.len())
 }
 
 /// Translate a visual row within the viewport to the absolute logical document
