@@ -3,6 +3,34 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.14.5 — 2026-04-23
+
+### Layout
+
+- **Long edges now augment the layered ordering pass with dummy
+  nodes**, mirroring the pattern used by dagre (the layout engine
+  Mermaid itself runs on the web). Previously, an edge spanning
+  multiple ranks (e.g. `A → E` in a chain `A → B → C → D → E`) only
+  pulled its endpoints in the barycenter sweep — intermediate-layer
+  nodes (B/C/D) had no signal that the long edge wanted to travel
+  through their layer. Now we insert one dummy per intermediate
+  rank into the augmented edge list; the dummies act as stand-ins
+  during ordering, opening a clean channel for the long edge.
+
+  Dummies are stripped from the bucket list before geometry, so the
+  visible output keeps its "real nodes only" shape — the win is
+  purely that real-node ordering within each layer is influenced
+  by long edges that pass through.
+
+  Three new unit tests in `layout/layered.rs`:
+  - `augment_long_edges_inserts_one_dummy_per_intermediate_layer`
+  - `augment_long_edges_skips_back_edges`
+  - `long_edge_skip_ordering_keeps_real_nodes_in_a_clean_column`
+
+  No snapshot output changes detected on the existing test corpus —
+  the improvement surfaces on graphs with long forward edges that
+  share intermediate layers with other real nodes.
+
 ## 0.14.4 — 2026-04-22
 
 ### Added

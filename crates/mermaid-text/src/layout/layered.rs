@@ -194,20 +194,45 @@ pub fn layout(graph: &Graph, config: &LayoutConfig) -> LayoutResult {
     }
 
     // 1. Assign layers.
-    let layers = assign_layers(graph);
+    let mut layers = assign_layers(graph);
 
-    // 2. Build edge-tuple list once for ordering / crossing-min.
-    //    (No dummy augmentation — see Phase A.2 for the planned
-    //    barycenter-with-dummies upgrade once Brandes-Köpf coordinate
-    //    assignment is in place to keep the rendering compact.)
-    let edges: Vec<(String, String)> = graph
+    // 2. Build edge-tuple list and augment long edges with dummy nodes
+    //    (one per intermediate layer). Dagre and graph-easy both do this
+    //    so the within-layer ordering step sees a uniform graph: a long
+    //    edge's "stand-in" dummy in each intermediate layer pulls real
+    //    nodes in that layer away from where the long edge wants to
+    //    travel, opening a clean channel for it. Without dummies a
+    //    long edge weaves through whatever real nodes happen to share
+    //    its target's column-of-best-fit.
+    //
+    //    The dummies live only in `layers` (the rank map) and the
+    //    augmented edge list — they're filtered out of the buckets
+    //    returned by `order_within_layers` before `compute_positions`,
+    //    so the visible output keeps its "real nodes only" geometry.
+    //    The long-edge router (`compute_edge_waypoints`) still picks
+    //    waypoints from real-node positions; the win here is purely
+    //    that the real nodes themselves end up in better positions.
+    let real_edges: Vec<(String, String)> = graph
         .edges
         .iter()
         .map(|e| (e.from.clone(), e.to.clone()))
         .collect();
+    let (augmented_edges, dummy_ids) = augment_long_edges(&real_edges, &mut layers);
 
     // 3. Group nodes into per-layer lists and sort by barycenter.
-    let ordered = order_within_layers(graph, &layers, &edges);
+    let ordered_with_dummies =
+        order_within_layers_augmented(graph, &layers, &augmented_edges, &dummy_ids);
+    // Strip dummies from each layer's bucket before geometry — they were
+    // ranking-only, never meant to be drawn.
+    let ordered: Vec<Vec<String>> = ordered_with_dummies
+        .into_iter()
+        .map(|layer| {
+            layer
+                .into_iter()
+                .filter(|id| !dummy_ids.contains(id))
+                .collect()
+        })
+        .collect();
 
     // 4. Convert to grid coordinates.
     let positions = compute_positions(graph, &ordered, config);
@@ -581,33 +606,95 @@ fn assign_layers(graph: &Graph) -> HashMap<String, usize> {
 // Step 2: Within-layer ordering (barycenter heuristic)
 // ---------------------------------------------------------------------------
 
-/// Returns per-layer ordered lists of node IDs.
-/// Index 0 of the outer Vec is layer 0 (sources).
+/// Replace every edge that spans more than one layer with a chain of
+/// unit-length segments through dummy nodes, one per intermediate layer.
 ///
-/// Uses an iterative barycenter heuristic with best-seen retention:
-/// alternating forward/backward sweeps for up to `MAX_PASSES` iterations,
-/// keeping the ordering with the fewest edge crossings ever observed, and
-/// exiting early after `NO_IMPROVEMENT_CAP` consecutive non-improving passes.
-fn order_within_layers(
+/// Returns `(augmented_edges, dummy_ids)`. The dummy IDs are also inserted
+/// into `layers` (mutating it) so callers can bucket them by rank.
+///
+/// Dummy IDs use a sentinel prefix (`__mermaid_text_dummy__`) chosen to be
+/// unlikely to collide with any user-declared node ID.
+fn augment_long_edges(
+    edges: &[(String, String)],
+    layers: &mut HashMap<String, usize>,
+) -> (Vec<(String, String)>, std::collections::HashSet<String>) {
+    let mut augmented = Vec::with_capacity(edges.len());
+    let mut dummy_ids = std::collections::HashSet::new();
+    let mut next_dummy = 0usize;
+    for (from, to) in edges {
+        let from_layer = match layers.get(from) {
+            Some(&l) => l,
+            None => {
+                augmented.push((from.clone(), to.clone()));
+                continue;
+            }
+        };
+        let to_layer = match layers.get(to) {
+            Some(&l) => l,
+            None => {
+                augmented.push((from.clone(), to.clone()));
+                continue;
+            }
+        };
+        // Forward edges only — back-edges and self-edges keep their direct
+        // representation; the perimeter router handles them separately.
+        if to_layer <= from_layer || to_layer - from_layer <= 1 {
+            augmented.push((from.clone(), to.clone()));
+            continue;
+        }
+        let mut prev = from.clone();
+        for inter_layer in (from_layer + 1)..to_layer {
+            let dummy_id = format!("__mermaid_text_dummy__{}", next_dummy);
+            next_dummy += 1;
+            layers.insert(dummy_id.clone(), inter_layer);
+            augmented.push((prev.clone(), dummy_id.clone()));
+            dummy_ids.insert(dummy_id.clone());
+            prev = dummy_id;
+        }
+        augmented.push((prev, to.clone()));
+    }
+    (augmented, dummy_ids)
+}
+
+/// Augmented variant of [`order_within_layers`] that also buckets dummy
+/// nodes (created by [`augment_long_edges`]) into their layers, so the
+/// barycenter sweep treats them as first-class participants. The caller
+/// strips dummies out of the returned buckets before geometry.
+fn order_within_layers_augmented(
     graph: &Graph,
     layers: &HashMap<String, usize>,
     edges: &[(String, String)],
+    dummy_ids: &std::collections::HashSet<String>,
 ) -> Vec<Vec<String>> {
-    // Find max layer
     let max_layer = layers.values().copied().max().unwrap_or(0);
     let num_layers = max_layer + 1;
-
-    // Bucket nodes into layers (preserve declaration order as initial
-    // order). Edges are passed in via `edges` so the barycenter pass
-    // doesn't have to reach into `graph.edges` directly — keeps the
-    // signature open to future augmented-edge schemes.
     let mut buckets: Vec<Vec<String>> = vec![Vec::new(); num_layers];
+    // Real nodes first (preserves declaration-order tie breaking).
     for node in &graph.nodes {
         if let Some(&l) = layers.get(&node.id) {
             buckets[l].push(node.id.clone());
         }
     }
+    // Then dummies — append at the end of their layer; the barycenter
+    // sweeps will move them into position based on their adjacencies.
+    for id in dummy_ids {
+        if let Some(&l) = layers.get(id) {
+            buckets[l].push(id.clone());
+        }
+    }
+    order_buckets_inner(graph, layers, edges, buckets)
+}
 
+/// Run the iterative barycenter / median / transpose sweep on a
+/// pre-bucketed layer list. Returns the best-seen ordering. Used by
+/// `order_within_layers_augmented` (which buckets real + dummy nodes
+/// from `augment_long_edges`) so the sweep code lives in one place.
+fn order_buckets_inner(
+    graph: &Graph,
+    layers: &HashMap<String, usize>,
+    edges: &[(String, String)],
+    mut buckets: Vec<Vec<String>>,
+) -> Vec<Vec<String>> {
     // Build successor/predecessor maps for barycenter computation —
     // from the augmented edge list (long edges replaced by dummy
     // chains), so dummies receive barycenter "pull" from their owning
@@ -1450,6 +1537,80 @@ mod tests {
         g.edges.push(Edge::new("A", "B", None));
         g.edges.push(Edge::new("B", "C", None));
         g
+    }
+
+    #[test]
+    fn augment_long_edges_inserts_one_dummy_per_intermediate_layer() {
+        // Edge A→C spans layers 0→2, so one dummy at layer 1.
+        // Edge A→D spans layers 0→3, so two dummies at layers 1 and 2.
+        let mut layers = HashMap::new();
+        layers.insert("A".into(), 0);
+        layers.insert("B".into(), 1);
+        layers.insert("C".into(), 2);
+        layers.insert("D".into(), 3);
+        let edges = vec![
+            ("A".into(), "B".into()), // span 1 — no dummy
+            ("A".into(), "C".into()), // span 2 — 1 dummy
+            ("A".into(), "D".into()), // span 3 — 2 dummies
+        ];
+        let (augmented, dummies) = augment_long_edges(&edges, &mut layers);
+        assert_eq!(dummies.len(), 3, "1 + 2 = 3 dummies total");
+        // Augmented edge list grows by `(span-1) - 0` per long edge: A→C
+        // becomes A→d0→C (2 edges, was 1), A→D becomes A→d1→d2→D (3
+        // edges, was 1). Total: 1 (A→B unchanged) + 2 + 3 = 6.
+        assert_eq!(augmented.len(), 6);
+        // Every dummy ends up in `layers` at its correct rank.
+        for d in &dummies {
+            let l = layers[d];
+            assert!(l == 1 || l == 2, "dummy {d} landed at unexpected layer {l}");
+        }
+    }
+
+    #[test]
+    fn augment_long_edges_skips_back_edges() {
+        // Back-edge C→A (layer 2 → 0) keeps its direct representation; the
+        // perimeter router handles it separately.
+        let mut layers = HashMap::new();
+        layers.insert("A".into(), 0);
+        layers.insert("B".into(), 1);
+        layers.insert("C".into(), 2);
+        let edges = vec![("C".into(), "A".into())];
+        let (augmented, dummies) = augment_long_edges(&edges, &mut layers);
+        assert_eq!(dummies.len(), 0, "back-edges get no dummies");
+        assert_eq!(augmented, edges);
+    }
+
+    #[test]
+    fn long_edge_skip_ordering_keeps_real_nodes_in_a_clean_column() {
+        // graph LR
+        //   A → B → C → D → E       (chain)
+        //   A → E                    (long edge spanning 4 layers)
+        //
+        // Without dummy augmentation the barycenter sweep sees A→E as
+        // pulling A toward E's column and vice versa — but no
+        // intermediate-layer node is influenced. With augmentation the
+        // sweep places three dummies between A and E, which keeps the
+        // chain B/C/D anchored on a clean horizontal row.
+        let mut g = Graph::new(Direction::LeftToRight);
+        for id in ["A", "B", "C", "D", "E"] {
+            g.nodes.push(Node::new(id, id, NodeShape::Rectangle));
+        }
+        g.edges.push(Edge::new("A", "B", None));
+        g.edges.push(Edge::new("B", "C", None));
+        g.edges.push(Edge::new("C", "D", None));
+        g.edges.push(Edge::new("D", "E", None));
+        g.edges.push(Edge::new("A", "E", None));
+        let cfg = LayoutConfig::default();
+        let pos = layout(&g, &cfg).positions;
+        // The chain A→B→C→D→E should land on the same row — verifies
+        // dummies didn't push intermediate nodes off the main flow line.
+        let row_a = pos["A"].1;
+        for id in ["B", "C", "D", "E"] {
+            assert_eq!(
+                pos[id].1, row_a,
+                "node {id} should share row with A on a clean LR chain"
+            );
+        }
     }
 
     #[test]

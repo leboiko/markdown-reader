@@ -5,6 +5,24 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.20.3] - 2026-04-23
+
+### Changed
+
+- **mermaid-text 0.14.5**: layered backend's barycenter sweep now
+  augments the edge list with dummy nodes for long forward edges
+  (one per intermediate rank). Dagre / graph-easy both do this so
+  the within-layer ordering step sees a uniform graph; without it,
+  long edges only nudge their endpoints during sorting and
+  intermediate-layer real nodes stay where they happened to land.
+  Visible win on flowcharts where a "skip" edge spans multiple
+  layers occupied by other real nodes.
+
+  First step of a planned layout-quality pass — next candidates
+  (per a survey of dagre + graph-easy patterns): A* edge routing
+  with crossing/turn penalties (graph-easy `Scout.pm`) and
+  Brandes-Köpf x-coordinate assignment (dagre `position/bk.ts`).
+
 ## [1.20.2] - 2026-04-22
 
 ### Added
