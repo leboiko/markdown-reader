@@ -1,4 +1,17 @@
-# markdown-reader
+<p align="center">
+  <img src="docs/assets/logo.png" alt="markdown-reader logo" width="180">
+</p>
+
+<h1 align="center">markdown-reader</h1>
+
+<p align="center">
+  Terminal markdown repo browser with tabs, search, Mermaid, math, and tables.
+</p>
+
+<p align="center">
+  <code>markdown-reader</code> is the binary name. The crates.io package is
+  <code>markdown-tui-explorer</code>.
+</p>
 
 A terminal markdown repo browser and viewer built with Rust and
 [ratatui](https://github.com/ratatui/ratatui). Open docs-heavy repositories
@@ -9,9 +22,6 @@ line you were reading.
 - Built for large markdown repositories, not just single-file preview
 - Pure-Rust rendering stack, including Mermaid fallback paths and inline math
 - Tabs, global search, table expansion, themes, session restore, and edit mode
-
-`markdown-reader` is the binary name. The crates.io package is
-`markdown-tui-explorer`.
 
 ## Screenshots
 
