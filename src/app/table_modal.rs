@@ -100,18 +100,12 @@ impl App {
             col - inner_x
         };
 
-        // `layout_width` is the text content width (excluding the gutter).
-        // `Paragraph::wrap` wraps at this width, so logical lines that are
-        // wider than `layout_width` occupy multiple visual rows. We must
-        // account for this wrapping to convert the clicked visual row back to
-        // the correct logical document line.
-        let content_width = tab.view.layout_width;
-        let clicked_line = crate::ui::markdown_view::visual_row_to_logical_line(
-            &tab.view.rendered,
-            scroll_offset,
-            visual_row,
-            content_width,
-        );
+        // After Phase 3, text blocks are pre-wrapped: every physical row in the
+        // document corresponds 1:1 to a visual row in the same coordinate space
+        // as `cursor_line` / `scroll_offset`. The clicked document-level visual
+        // row is therefore `scroll_offset + visual_row` directly — no conversion
+        // through Paragraph's opaque wrapping is needed.
+        let clicked_line = scroll_offset + visual_row;
 
         let anchor = tab
             .view

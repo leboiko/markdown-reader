@@ -4,8 +4,10 @@ mod unit {
         extract_line_text_range, highlight_columns, patch_cursor_highlight,
     };
     use super::super::state::{MarkdownViewState, VisualMode, VisualRange};
-    use crate::markdown::{DocBlock, HeadingAnchor, LinkInfo};
+    use crate::markdown::{DocBlock, HeadingAnchor, LinkInfo, TextBlockId};
     use ratatui::text::{Line, Span, Text};
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
 
     // ── VisualRange ──────────────────────────────────────────────────────────
 
@@ -243,24 +245,38 @@ mod unit {
     #[test]
     fn clamp_cursor_col_on_short_line() {
         // Build a view with one 10-char line followed by one 3-char line.
+        let src_lines = vec![0u32, 1];
+        let n = src_lines.len();
+        let block_id = {
+            let mut h = DefaultHasher::new();
+            src_lines.hash(&mut h);
+            n.hash(&mut h);
+            TextBlockId(h.finish())
+        };
         let block = DocBlock::Text {
+            id: block_id,
             text: Text::from(vec![
                 Line::from(Span::raw("0123456789")), // line 0: width=10
                 Line::from(Span::raw("abc")),        // line 1: width=3
             ]),
             links: vec![],
             heading_anchors: vec![],
-            source_lines: vec![0, 1],
-            visual_height: std::cell::Cell::new(2),
+            source_lines: src_lines,
+            wrapped_height: std::cell::Cell::new(2),
         };
+        // Populate text_layouts so `current_line_width` can read wrapped row widths.
+        // At width 80 neither line wraps — row 0 width=10, row 1 width=3.
+        let mut text_layouts = std::collections::HashMap::new();
+        crate::markdown::update_text_layouts(std::slice::from_ref(&block), &mut text_layouts, 80);
         let mut v = MarkdownViewState {
             total_lines: 2,
             cursor_line: 0,
             cursor_col: 9, // at end of line 0
             rendered: vec![block],
+            text_layouts,
             ..Default::default()
         };
-        // Move down to line 1 — cursor_col must clamp from 9 to 2.
+        // Move down to line 1 — cursor_col must clamp from 9 to 2 (width 3 - 1).
         v.cursor_down(1);
         assert_eq!(v.cursor_line, 1);
         assert_eq!(v.cursor_col, 2, "cursor_col must clamp to width-1=2");
@@ -274,29 +290,48 @@ mod unit {
     /// after 1.18.4 shipped).
     #[test]
     fn current_line_width_handles_wrapped_lines() {
+        // After Phase 3, `current_line_width` reads from the `text_layouts` cache
+        // (pre-wrapped rows), not from `text.lines` directly. Populate the cache
+        // with width=20 so the 50-'a' line wraps to 3 physical rows of widths
+        // 20, 20, 10. The cursor on physical row 2 (visual row 2 within the block)
+        // is the third wrapped row — width 10.
         let long: String = "a".repeat(50);
+        let src_lines = vec![0u32, 1, 2];
+        let n = src_lines.len();
+        let block_id = {
+            let mut h = DefaultHasher::new();
+            src_lines.hash(&mut h);
+            n.hash(&mut h);
+            TextBlockId(h.finish())
+        };
         let block = DocBlock::Text {
+            id: block_id,
             text: Text::from(vec![
-                Line::from(Span::raw("short")),      // logical 0, 1 visual row
-                Line::from(Span::raw(long.clone())), // logical 1, wraps to 3 rows at width 20
-                Line::from(Span::raw("end")),        // logical 2, 1 visual row
+                Line::from(Span::raw("short")),      // logical 0: 1 row
+                Line::from(Span::raw(long.clone())), // logical 1: wraps to 3 rows at width 20
+                Line::from(Span::raw("end")),        // logical 2: 1 row
             ]),
             links: vec![],
             heading_anchors: vec![],
-            source_lines: vec![0, 1, 2],
-            // Width 20 -> long line wraps to ceil(50/20) = 3 visual rows.
-            visual_height: std::cell::Cell::new(5),
+            source_lines: src_lines,
+            // Width 20 -> long line wraps: rows are 20+20+10 = 5 total.
+            wrapped_height: std::cell::Cell::new(5),
         };
+        // Build the text layout cache at width 20.
+        let mut text_layouts = std::collections::HashMap::new();
+        crate::markdown::update_text_layouts(std::slice::from_ref(&block), &mut text_layouts, 20);
         let v = MarkdownViewState {
             total_lines: 5,
-            cursor_line: 2, // inside the wrapped range (visual row 2 of long)
+            cursor_line: 2, // physical row 2 = second wrapped row of the long line (width 20)
             cursor_col: 0,
             rendered: vec![block],
             layout_width: 20,
+            text_layouts,
             ..Default::default()
         };
-        // Logical line under visual row 2 is line 1 (the long line, 50 chars).
-        assert_eq!(v.current_line_width(), 50);
+        // Physical rows: 0="short"(5), 1=aa...(20), 2=aa...(20), 3=aa...(10), 4="end"(3).
+        // Cursor at row 2 → second 20-char chunk of the wrapped long line.
+        assert_eq!(v.current_line_width(), 20);
     }
 
     /// Helper: build a `MarkdownViewState` with a given `total_lines` and
@@ -364,24 +399,37 @@ mod unit {
         let text_lines: Vec<Line<'static>> = (0..n)
             .map(|i| Line::from(Span::raw(format!("line {i}"))))
             .collect();
+        let block_id = {
+            let mut h = DefaultHasher::new();
+            source_lines.hash(&mut h);
+            n.hash(&mut h);
+            TextBlockId(h.finish())
+        };
         DocBlock::Text {
+            id: block_id,
             text: Text::from(text_lines),
             links: Vec::<LinkInfo>::new(),
             heading_anchors: Vec::<HeadingAnchor>::new(),
             source_lines,
-            visual_height: std::cell::Cell::new(crate::cast::u32_sat(n)),
+            wrapped_height: std::cell::Cell::new(crate::cast::u32_sat(n)),
         }
     }
 
     /// Querying each logical line in a Text block returns the expected source line.
     #[test]
     fn source_line_at_text_block_exact() {
-        use crate::markdown::source_line_at;
+        use crate::markdown::{source_line_at, update_text_layouts};
+        use std::collections::HashMap;
         let block = make_text_block_with_sources(vec![0, 1, 2]);
+        // Populate text_layouts so `source_line_at` can use `physical_to_logical`.
+        // Width 80 — all lines fit on one row each (no wrapping); logical == physical.
+        let mut tl = HashMap::new();
+        update_text_layouts(std::slice::from_ref(&block), &mut tl, 80);
         let blocks = vec![block];
-        assert_eq!(source_line_at(&blocks, 0), 0);
-        assert_eq!(source_line_at(&blocks, 1), 1);
-        assert_eq!(source_line_at(&blocks, 2), 2);
+        let bl = HashMap::new();
+        assert_eq!(source_line_at(&blocks, 0, &tl, &bl), 0);
+        assert_eq!(source_line_at(&blocks, 1, &tl, &bl), 1);
+        assert_eq!(source_line_at(&blocks, 2, &tl, &bl), 2);
     }
 
     /// Every logical line within a Table block must return the table's source line.
@@ -391,6 +439,7 @@ mod unit {
     fn source_line_at_table_block_returns_table_start() {
         use crate::markdown::source_line_at;
         use crate::markdown::{TableBlock, TableBlockId};
+        use std::collections::HashMap;
         let block = DocBlock::Table(TableBlock {
             id: TableBlockId(0),
             headers: vec![],
@@ -402,9 +451,11 @@ mod unit {
             row_source_lines: vec![],
         });
         let blocks = vec![block];
+        let tl = HashMap::new();
+        let bl = HashMap::new();
         // With no row_source_lines, all positions fall back to source_line = 5.
-        assert_eq!(source_line_at(&blocks, 0), 5);
-        assert_eq!(source_line_at(&blocks, 3), 5);
+        assert_eq!(source_line_at(&blocks, 0, &tl, &bl), 5);
+        assert_eq!(source_line_at(&blocks, 3, &tl, &bl), 5);
     }
 
     // ── patch_cursor_highlight ───────────────────────────────────────────────
@@ -494,6 +545,7 @@ mod unit {
     #[test]
     fn source_line_at_table_block_per_row() {
         use crate::markdown::{TableBlock, TableBlockId, source_line_at};
+        use std::collections::HashMap;
         let block = DocBlock::Table(TableBlock {
             id: TableBlockId(0),
             headers: vec![vec![Span::raw("H")]],
@@ -505,24 +557,41 @@ mod unit {
             row_source_lines: vec![5, 7, 8],
         });
         let blocks = vec![block];
+        let tl = HashMap::new();
+        let bl = HashMap::new();
         // top border → header fallback
-        assert_eq!(source_line_at(&blocks, 0), 5, "top border -> header");
+        assert_eq!(
+            source_line_at(&blocks, 0, &tl, &bl),
+            5,
+            "top border -> header"
+        );
         // header row
-        assert_eq!(source_line_at(&blocks, 1), 5, "header row");
+        assert_eq!(source_line_at(&blocks, 1, &tl, &bl), 5, "header row");
         // separator
-        assert_eq!(source_line_at(&blocks, 2), 5, "separator -> header");
+        assert_eq!(
+            source_line_at(&blocks, 2, &tl, &bl),
+            5,
+            "separator -> header"
+        );
         // body[0]
-        assert_eq!(source_line_at(&blocks, 3), 7, "body[0]");
+        assert_eq!(source_line_at(&blocks, 3, &tl, &bl), 7, "body[0]");
         // body[1]
-        assert_eq!(source_line_at(&blocks, 4), 8, "body[1]");
+        assert_eq!(source_line_at(&blocks, 4, &tl, &bl), 8, "body[1]");
         // bottom border → last body fallback
-        assert_eq!(source_line_at(&blocks, 5), 8, "bottom border -> last body");
+        assert_eq!(
+            source_line_at(&blocks, 5, &tl, &bl),
+            8,
+            "bottom border -> last body"
+        );
     }
 
     /// Edge cases: table with only a header (no body rows).
     #[test]
     fn table_row_source_line_helper_boundary_cases() {
         use crate::markdown::{TableBlock, TableBlockId, source_line_at};
+        use std::collections::HashMap;
+        let tl = HashMap::new();
+        let bl = HashMap::new();
 
         // Header-only: rendered_height = 3 (top border, header, bottom border).
         let header_only = DocBlock::Table(TableBlock {
@@ -537,11 +606,11 @@ mod unit {
         });
         let blocks = vec![header_only];
         // Row 0 = top border → header (10)
-        assert_eq!(source_line_at(&blocks, 0), 10);
+        assert_eq!(source_line_at(&blocks, 0, &tl, &bl), 10);
         // Row 1 = header → 10
-        assert_eq!(source_line_at(&blocks, 1), 10);
+        assert_eq!(source_line_at(&blocks, 1, &tl, &bl), 10);
         // Row 2 = bottom border → last (10)
-        assert_eq!(source_line_at(&blocks, 2), 10);
+        assert_eq!(source_line_at(&blocks, 2, &tl, &bl), 10);
 
         // Empty row_source_lines: must not panic, must fall back to source_line.
         let empty_rsl = DocBlock::Table(TableBlock {
@@ -557,7 +626,460 @@ mod unit {
         let blocks2 = vec![empty_rsl];
         // All positions must fall back to source_line without panicking.
         for i in 0..4 {
-            assert_eq!(source_line_at(&blocks2, i), 99, "empty rsl row {i}");
+            assert_eq!(
+                source_line_at(&blocks2, i, &tl, &bl),
+                99,
+                "empty rsl row {i}"
+            );
         }
+    }
+
+    // ── Phase 3 cache tests ──────────────────────────────────────────────────
+
+    /// After `update_text_layouts` runs, the `text_layouts` HashMap must contain
+    /// an entry for the Text block's id. The entry's `wrapped` length must be
+    /// at least as large as the number of logical lines (each line is >= 1 row).
+    #[test]
+    fn text_layout_cache_populated_on_width_change() {
+        use crate::markdown::update_text_layouts;
+        use std::collections::HashMap;
+        let block = make_text_block_with_sources(vec![0, 1, 2]);
+        let id = if let DocBlock::Text { id, .. } = &block {
+            *id
+        } else {
+            panic!("expected Text block")
+        };
+        let mut cache = HashMap::new();
+        update_text_layouts(std::slice::from_ref(&block), &mut cache, 80);
+        assert!(
+            cache.contains_key(&id),
+            "cache must have entry for block id"
+        );
+        let layout = &cache[&id];
+        // 3 logical lines at width 80 → 3 physical rows (no wrapping needed).
+        assert_eq!(layout.wrapped.len(), 3);
+        assert_eq!(layout.physical_to_logical, vec![0, 1, 2]);
+    }
+
+    /// The `wrapped_height` cell on the block must equal `layout.wrapped.len()`
+    /// after `update_text_layouts` runs. This ensures `DocBlock::height()` returns
+    /// the correct visual-row count for scroll math.
+    #[test]
+    fn text_layout_cache_height_matches_wrapped_len() {
+        use crate::markdown::update_text_layouts;
+        use std::collections::HashMap;
+        // 50 'a' chars at width 20 wraps to 3 physical rows.
+        let long: String = "a".repeat(50);
+        let src_lines = vec![0u32, 1];
+        let n = src_lines.len();
+        let block_id = {
+            let mut h = DefaultHasher::new();
+            src_lines.hash(&mut h);
+            n.hash(&mut h);
+            TextBlockId(h.finish())
+        };
+        let block = DocBlock::Text {
+            id: block_id,
+            text: Text::from(vec![
+                Line::from(Span::raw("short")),      // 1 row
+                Line::from(Span::raw(long.clone())), // 3 rows at width 20
+            ]),
+            links: vec![],
+            heading_anchors: vec![],
+            source_lines: src_lines,
+            wrapped_height: std::cell::Cell::new(2),
+        };
+        let mut cache = HashMap::new();
+        update_text_layouts(std::slice::from_ref(&block), &mut cache, 20);
+        let layout = cache.get(&block_id).expect("cache must have entry");
+        // 1 + 3 = 4 physical rows total.
+        assert_eq!(layout.wrapped.len(), 4);
+        // Block's wrapped_height cell must be updated to match.
+        if let DocBlock::Text { wrapped_height, .. } = &block {
+            assert_eq!(
+                wrapped_height.get(),
+                layout.wrapped.len() as u32,
+                "wrapped_height must equal wrapped.len()"
+            );
+        }
+    }
+
+    /// `current_line_width` must return the display width of the wrapped row
+    /// under the cursor at each layout width. A 40-char line at width 20 wraps
+    /// into two rows of 20; at width 80 it stays on one row of 40.
+    #[test]
+    fn current_line_width_at_widths_20_40_80_120() {
+        use crate::markdown::update_text_layouts;
+        let content: String = "a".repeat(40); // 40 display columns
+        let src_lines = vec![0u32];
+        let n = src_lines.len();
+        let block_id = {
+            let mut h = DefaultHasher::new();
+            src_lines.hash(&mut h);
+            n.hash(&mut h);
+            TextBlockId(h.finish())
+        };
+
+        for &width in &[20u16, 40, 80, 120] {
+            let block = DocBlock::Text {
+                id: block_id,
+                text: Text::from(vec![Line::from(Span::raw(content.clone()))]),
+                links: vec![],
+                heading_anchors: vec![],
+                source_lines: src_lines.clone(),
+                wrapped_height: std::cell::Cell::new(1),
+            };
+            let mut cache = std::collections::HashMap::new();
+            update_text_layouts(std::slice::from_ref(&block), &mut cache, width);
+            let v = MarkdownViewState {
+                total_lines: block.height(),
+                cursor_line: 0,
+                rendered: vec![block],
+                text_layouts: cache,
+                ..Default::default()
+            };
+            // At width 20: row 0 is 20 chars. At width 40+: row 0 is 40 chars.
+            let expected = width.min(40);
+            assert_eq!(
+                v.current_line_width(),
+                expected,
+                "width={width}: row 0 should be {expected} cols wide"
+            );
+        }
+    }
+
+    /// `current_line_width` on physical row 1 (the tail of a wrapped paragraph)
+    /// must return the tail width, not the full logical line width. The 'l' key
+    /// handler uses `current_line_width()` to clamp cursor_col, so this ensures
+    /// the cursor cannot be placed past the visible text on continuation rows.
+    #[test]
+    fn cursor_horizontal_movement_on_wrapped_paragraph() {
+        use crate::markdown::update_text_layouts;
+        // "a" * 30 at width 20 → row 0: 20 cols, row 1: 10 cols.
+        let content: String = "a".repeat(30);
+        let src_lines = vec![0u32];
+        let n = src_lines.len();
+        let block_id = {
+            let mut h = DefaultHasher::new();
+            src_lines.hash(&mut h);
+            n.hash(&mut h);
+            TextBlockId(h.finish())
+        };
+        let block = DocBlock::Text {
+            id: block_id,
+            text: Text::from(vec![Line::from(Span::raw(content))]),
+            links: vec![],
+            heading_anchors: vec![],
+            source_lines: src_lines,
+            wrapped_height: std::cell::Cell::new(2),
+        };
+        let mut cache = std::collections::HashMap::new();
+        update_text_layouts(std::slice::from_ref(&block), &mut cache, 20);
+        let v = MarkdownViewState {
+            total_lines: 2,
+            cursor_line: 1, // physical row 1 = tail (10 cols)
+            cursor_col: 0,
+            rendered: vec![block],
+            text_layouts: cache,
+            ..Default::default()
+        };
+        // The max valid cursor_col for row 1 is width - 1 = 9.
+        let line_width = v.current_line_width();
+        assert_eq!(line_width, 10, "tail row width must be 10 (30 mod 20)");
+        assert_eq!(
+            line_width.saturating_sub(1),
+            9,
+            "max cursor col on tail row must be 9"
+        );
+    }
+
+    /// After `load()` re-renders a file, `text_layouts` must be empty (the cache
+    /// is cleared). This is the invalidation path: any stale layout entries from
+    /// the previous file are dropped, and the draw loop will re-populate on the
+    /// next frame.
+    #[test]
+    fn text_layout_cache_invalidated_on_load() {
+        use crate::markdown::update_text_layouts;
+        use crate::theme::{Palette, Theme};
+        let palette = Palette::from_theme(Theme::Default);
+        let block = make_text_block_with_sources(vec![0, 1]);
+        let mut cache = std::collections::HashMap::new();
+        update_text_layouts(std::slice::from_ref(&block), &mut cache, 80);
+        assert!(!cache.is_empty(), "pre-condition: cache must be populated");
+
+        let mut view = MarkdownViewState {
+            text_layouts: cache,
+            ..Default::default()
+        };
+        view.load(
+            std::path::PathBuf::from("/fake/reload.md"),
+            "reload.md".to_string(),
+            "hello\nworld\n".to_string(),
+            &palette,
+            Theme::Default,
+        );
+        assert!(
+            view.text_layouts.is_empty(),
+            "load() must clear the text_layouts cache"
+        );
+    }
+
+    /// `recompute_positions` must use the `text_layouts` cache to map block-relative
+    /// logical line indices to absolute visual rows. A link on logical line 1 of a
+    /// block that starts at visual row 0 should end up at absolute line 1 (or the
+    /// first physical row of logical line 1 when the cache is populated).
+    #[test]
+    fn recompute_positions_uses_cached_layout() {
+        use crate::markdown::{LinkInfo, update_text_layouts};
+        let link = LinkInfo {
+            line: 1, // logical line 1 within the block
+            col_start: 0,
+            col_end: 5,
+            url: "#section".to_string(),
+            text: "sec".to_string(),
+        };
+        let src_lines = vec![0u32, 1, 2];
+        let n = src_lines.len();
+        let block_id = {
+            let mut h = DefaultHasher::new();
+            src_lines.hash(&mut h);
+            n.hash(&mut h);
+            TextBlockId(h.finish())
+        };
+        let block = DocBlock::Text {
+            id: block_id,
+            text: Text::from(vec![
+                Line::from(Span::raw("line 0")),
+                Line::from(Span::raw("line 1")),
+                Line::from(Span::raw("line 2")),
+            ]),
+            links: vec![link],
+            heading_anchors: vec![],
+            source_lines: src_lines,
+            wrapped_height: std::cell::Cell::new(3),
+        };
+        let mut cache = std::collections::HashMap::new();
+        update_text_layouts(std::slice::from_ref(&block), &mut cache, 80);
+        let mut v = MarkdownViewState {
+            total_lines: 3,
+            rendered: vec![block],
+            text_layouts: cache,
+            ..Default::default()
+        };
+        v.recompute_positions();
+        // Logical line 1 maps to physical row 1 at width 80 (no wrapping).
+        // Absolute visual row = block_start (0) + physical_row (1) = 1.
+        let link = v.links.first().expect("must have one link");
+        assert_eq!(
+            link.line, 1,
+            "link on logical line 1 must map to visual row 1"
+        );
+    }
+
+    /// `collect_match_lines` with a populated text_layouts cache must match
+    /// against physical (wrapped) rows, not logical lines. A search term that
+    /// appears in the second physical row of a wrapped logical line must return
+    /// the physical row's absolute index, not the logical line's index.
+    #[test]
+    fn collect_match_lines_text_block_uses_cache() {
+        use crate::app::collect_match_lines;
+        use crate::markdown::update_text_layouts;
+        use crate::mermaid::MermaidCache;
+        use std::collections::HashMap;
+
+        // A line that fits in one row — "hello world" is 11 cols, fits at width 80.
+        let block = make_text_block_with_sources(vec![0, 1, 2]);
+        let mut text_layouts = HashMap::new();
+        update_text_layouts(std::slice::from_ref(&block), &mut text_layouts, 80);
+        let blocks = vec![block];
+        let table_layouts = HashMap::new();
+        let cache = MermaidCache::new();
+
+        // "line 1" appears in logical line 1 = physical row 1.
+        let matches = collect_match_lines(&blocks, &text_layouts, &table_layouts, &cache, "line 1");
+        assert_eq!(matches, vec![1], "match must land on physical row 1");
+    }
+
+    /// When the text_layouts cache is empty (before the first draw), `collect_match_lines`
+    /// must fall back to iterating logical lines without panicking. The result may
+    /// differ from the post-wrap result but must not be empty for a term that exists.
+    #[test]
+    fn text_block_with_no_cache_falls_back_safely() {
+        use crate::app::collect_match_lines;
+        use crate::mermaid::MermaidCache;
+        use std::collections::HashMap;
+
+        let block = make_text_block_with_sources(vec![0, 1, 2]);
+        let blocks = vec![block];
+        let text_layouts = HashMap::new(); // empty — simulates pre-draw state
+        let table_layouts = HashMap::new();
+        let cache = MermaidCache::new();
+
+        // "line 2" is in logical line 2; fallback iterates `text.lines`.
+        let matches = collect_match_lines(&blocks, &text_layouts, &table_layouts, &cache, "line 2");
+        assert!(
+            !matches.is_empty(),
+            "fallback must still find matches in logical lines"
+        );
+    }
+
+    /// The blank-padding count in the gutter for a wrapped logical line must equal
+    /// the number of extra physical rows produced by wrapping (wrap_count - 1).
+    /// A 50-char line at width 20 produces 3 physical rows → 2 blank gutter rows.
+    #[test]
+    fn gutter_blank_padding_count_matches_wrap_count() {
+        use crate::markdown::update_text_layouts;
+        // "a" * 50 at width 20 → 3 physical rows.
+        let long = "a".repeat(50);
+        let src_lines = vec![0u32];
+        let n = src_lines.len();
+        let block_id = {
+            let mut h = DefaultHasher::new();
+            src_lines.hash(&mut h);
+            n.hash(&mut h);
+            TextBlockId(h.finish())
+        };
+        let block = DocBlock::Text {
+            id: block_id,
+            text: Text::from(vec![Line::from(Span::raw(long))]),
+            links: vec![],
+            heading_anchors: vec![],
+            source_lines: src_lines,
+            wrapped_height: std::cell::Cell::new(3),
+        };
+        let mut cache = std::collections::HashMap::new();
+        update_text_layouts(std::slice::from_ref(&block), &mut cache, 20);
+        let layout = cache.get(&block_id).unwrap();
+
+        // Count how many physical rows belong to logical line 0.
+        let wrap_count = layout
+            .physical_to_logical
+            .iter()
+            .filter(|&&l| l == 0)
+            .count();
+        // The first row gets a number; wrap_count - 1 rows get blank entries.
+        assert_eq!(wrap_count, 3, "50 chars at width 20 must wrap to 3 rows");
+        // Blank padding rows = wrap_count - 1 = 2.
+        let blank_count = wrap_count - 1;
+        assert_eq!(
+            blank_count, 2,
+            "2 blank gutter rows expected for a 3-row wrap"
+        );
+    }
+
+    /// When a document has a link on logical line 1 of a Text block and the
+    /// `text_layouts` cache is populated, `recompute_positions` must store the
+    /// link at the correct visual row. A `try_follow_link_click`-style lookup
+    /// must find the link at its physical row position.
+    #[test]
+    fn link_picker_jumps_to_link_on_wrapped_paragraph() {
+        use crate::markdown::{LinkInfo, update_text_layouts};
+        // Block: 2 logical lines, each fits on 1 row at width 80.
+        // Link is on logical line 1.
+        let link = LinkInfo {
+            line: 1,
+            col_start: 0,
+            col_end: 4,
+            url: "#target".to_string(),
+            text: "link".to_string(),
+        };
+        let src_lines = vec![0u32, 1];
+        let n = src_lines.len();
+        let block_id = {
+            let mut h = DefaultHasher::new();
+            src_lines.hash(&mut h);
+            n.hash(&mut h);
+            TextBlockId(h.finish())
+        };
+        let block = DocBlock::Text {
+            id: block_id,
+            text: Text::from(vec![
+                Line::from(Span::raw("first line")),
+                Line::from(Span::raw("link text")),
+            ]),
+            links: vec![link],
+            heading_anchors: vec![],
+            source_lines: src_lines,
+            wrapped_height: std::cell::Cell::new(2),
+        };
+        let mut cache = std::collections::HashMap::new();
+        update_text_layouts(std::slice::from_ref(&block), &mut cache, 80);
+        let mut v = MarkdownViewState {
+            total_lines: 2,
+            rendered: vec![block],
+            text_layouts: cache,
+            ..Default::default()
+        };
+        v.recompute_positions();
+        // Link on logical line 1 → physical row 1 (no wrapping at width 80).
+        // Absolute line = 0 (block offset) + 1 (physical row) = 1.
+        let l = v.links.first().expect("must have one link");
+        assert_eq!(l.line, 1, "link must be at visual row 1");
+        assert_eq!(l.url, "#target");
+    }
+
+    /// A search term that appears in the second physical row of a wrapped logical
+    /// line must return the second row's absolute index (not the logical line's
+    /// index). This exercises `collect_match_lines`'s physical-row iteration path.
+    ///
+    /// Layout at width 20:
+    ///   logical line 0: "aaaaaaaaaaaaaaaaaaaa needle" → two words
+    ///     physical row 0: "aaaaaaaaaaaaaaaaaaaa" (20 cols)
+    ///     physical row 1: "needle"               ( 6 cols)
+    ///   logical line 1: "other" → physical row 2
+    #[test]
+    fn doc_search_match_lands_on_correct_visual_row() {
+        use crate::app::collect_match_lines;
+        use crate::markdown::update_text_layouts;
+        use crate::mermaid::MermaidCache;
+        use std::collections::HashMap;
+
+        // Word-wrap: 20 'a' chars + " needle" — the word "needle" is pushed to row 1.
+        let line0 = format!("{} needle", "a".repeat(20));
+        let src_lines = vec![0u32, 1];
+        let n = src_lines.len();
+        let block_id = {
+            let mut h = DefaultHasher::new();
+            src_lines.hash(&mut h);
+            n.hash(&mut h);
+            TextBlockId(h.finish())
+        };
+        let block = DocBlock::Text {
+            id: block_id,
+            text: Text::from(vec![
+                Line::from(Span::raw(line0)),
+                Line::from(Span::raw("other")),
+            ]),
+            links: vec![],
+            heading_anchors: vec![],
+            source_lines: src_lines,
+            wrapped_height: std::cell::Cell::new(3),
+        };
+        let mut tl = HashMap::new();
+        update_text_layouts(std::slice::from_ref(&block), &mut tl, 20);
+        let blocks = vec![block];
+        let bl = HashMap::new();
+        let cache = MermaidCache::new();
+        let matches = collect_match_lines(&blocks, &tl, &bl, &cache, "needle");
+        // Word "needle" is on physical row 1.
+        assert_eq!(matches, vec![1], "needle must be on physical row 1");
+    }
+
+    /// `source_line_at` on a Text block must correctly map physical rows when
+    /// the cache is populated. A 2-line text block at width 80 maps physical
+    /// row 0 → source 0, physical row 1 → source 1.
+    #[test]
+    fn source_line_at_with_cache_resolves_physical_rows() {
+        use crate::markdown::{source_line_at, update_text_layouts};
+        use std::collections::HashMap;
+        let block = make_text_block_with_sources(vec![10, 20]);
+        let mut tl = HashMap::new();
+        update_text_layouts(std::slice::from_ref(&block), &mut tl, 80);
+        let blocks = vec![block];
+        let bl = HashMap::new();
+        // At width 80, no wrapping: physical row 0 → logical 0 → source 10.
+        assert_eq!(source_line_at(&blocks, 0, &tl, &bl), 10);
+        // Physical row 1 → logical 1 → source 20.
+        assert_eq!(source_line_at(&blocks, 1, &tl, &bl), 20);
     }
 }

@@ -13,7 +13,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::markdown::{
     CellSpans, DocBlock, HeadingAnchor, LinkInfo, MermaidBlockId, TableBlock, TableBlockId,
-    cell_to_string, heading_to_anchor, highlight::highlight_code,
+    TextBlockId, cell_to_string, heading_to_anchor, highlight::highlight_code,
 };
 use crate::mermaid::DEFAULT_MERMAID_HEIGHT;
 use crate::theme::{Palette, Theme};
@@ -280,16 +280,27 @@ impl MdRenderer {
                 source_lines.len(),
                 lines.len(),
             );
-            // visual_height starts at the logical line count — a no-wrap
-            // safe upper bound. update_text_visual_heights replaces it with
-            // the true wrapped count once the layout width is known.
+            // Derive a stable id from a hash of (source_lines, lines.len()).
+            // This matches the invariant checked by the layout cache: the same
+            // block content always produces the same id, so a re-render at a
+            // different width can reuse or invalidate the cached layout by id.
+            let id = {
+                let mut h = DefaultHasher::new();
+                source_lines.hash(&mut h);
+                lines.len().hash(&mut h);
+                TextBlockId(h.finish())
+            };
+            // wrapped_height starts at the logical line count — a no-wrap
+            // safe upper bound. update_text_layouts replaces it with the true
+            // wrapped count once the layout width is known.
             let logical_count = crate::cast::u32_sat(lines.len());
             self.blocks.push(DocBlock::Text {
+                id,
                 text: Text::from(lines),
                 links,
                 heading_anchors,
                 source_lines,
-                visual_height: Cell::new(logical_count),
+                wrapped_height: Cell::new(logical_count),
             });
         }
     }
@@ -1723,15 +1734,21 @@ mod tests {
             source_line: 0, // fence is on line 0
         }];
 
+        let tl = std::collections::HashMap::new();
+        let bl = std::collections::HashMap::new();
         // local == 0 → fence line
-        assert_eq!(source_line_at(&blocks, 0), 0, "fence row");
+        assert_eq!(source_line_at(&blocks, 0, &tl, &bl), 0, "fence row");
         // local == 1 → first content line: fence + 1 + 0 = 1
-        assert_eq!(source_line_at(&blocks, 1), 1, "content[0]");
+        assert_eq!(source_line_at(&blocks, 1, &tl, &bl), 1, "content[0]");
         // local == 2 → second content line: fence + 1 + 1 = 2
-        assert_eq!(source_line_at(&blocks, 2), 2, "content[1]");
+        assert_eq!(source_line_at(&blocks, 2, &tl, &bl), 2, "content[1]");
         // local == 3 → third content line: fence + 1 + 2 = 3
-        assert_eq!(source_line_at(&blocks, 3), 3, "content[2]");
+        assert_eq!(source_line_at(&blocks, 3, &tl, &bl), 3, "content[2]");
         // local == 4 → clamped to last content (index 2): fence + 1 + 2 = 3
-        assert_eq!(source_line_at(&blocks, 4), 3, "clamped past last content");
+        assert_eq!(
+            source_line_at(&blocks, 4, &tl, &bl),
+            3,
+            "clamped past last content"
+        );
     }
 }

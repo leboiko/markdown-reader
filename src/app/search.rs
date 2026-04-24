@@ -221,13 +221,12 @@ impl App {
             return;
         };
 
-        let layout_width = tab.view.layout_width;
         let match_lines = collect_match_lines(
             &tab.view.rendered,
+            &tab.view.text_layouts,
             &tab.view.table_layouts,
             &self.mermaid_cache,
             &query_lower,
-            layout_width,
         );
         tab.doc_search.match_lines = match_lines;
         // Copy the first match line before dropping the `tab` borrow so we can

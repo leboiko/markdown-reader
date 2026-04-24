@@ -5,6 +5,60 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.21.0] - 2026-04-23
+
+### Changed — Phase 3 of the architecture cleanup: own prose wrapping; visual_rows.rs deleted
+
+The viewer no longer delegates wrapping to ratatui's `Paragraph::wrap`.
+`DocBlock::Text` now carries a stable `TextBlockId`; the viewer caches a
+`WrappedTextLayout { wrapped, physical_to_logical }` per block,
+populated whenever `layout_width` changes — exactly the pattern Phase 2
+established for tables. `block.height()` reads from the cache.
+
+The visual-vs-logical rift introduced in 1.18.4 (and patched
+reactively in 1.18.5) collapses back into one coordinate space:
+`cursor_line`, `scroll_offset`, `total_lines`, link/anchor positions,
+and search match positions all agree, by construction.
+
+Internal:
+- `src/ui/markdown_view/visual_rows.rs` — **deleted**.
+- `update_text_visual_heights` → `update_text_layouts`. Populates the
+  cache and updates `wrapped_height`.
+- `source_line_at_width` → `source_line_at`; `logical_line_at_source_width`
+  → `logical_line_at_source`. Both now consume the layout caches
+  (`text_layouts` + `table_layouts`) instead of recomputing wrap on
+  every call.
+- `current_line_width` is 5 lines, reads cached `WrappedLine.width`.
+- `apply_visual_or_cursor_highlight` lost the visual-→-logical
+  conversion; cursor index = `cursor_line - block_start` directly.
+- Text blocks render via plain `Paragraph::new(text).scroll((skip, 0))`;
+  `Wrap { trim: false }` is gone.
+- `WrappedLine::to_ratatui_line()` re-introduced as the single
+  conversion site (previously hand-rolled in three places).
+- `gutter.rs` extracted `build_gutter_lines` so the line-number logic
+  is unit-testable without a `Frame` (5 new direct tests).
+- `collect_match_lines` Text branch consults the cache; visual row =
+  match index.
+- Char-mode visual yank iterates the cached wrapped rows. Previously
+  it iterated `text.lines` (logical) treating indices as visual rows
+  — broken for any wrapped paragraph.
+
+User-visible: nothing should change. Cursor, scroll, gutter, links,
+search, yank all behave the same way they did in 1.20.5; the
+implementation is just architecturally honest.
+
+Tests: 284 binary tests pass (was 267 before Phase 3 work — +17 net,
+including 12 new Phase 3 cases and 5 new gutter unit tests). 351
+mermaid-text tests pass. Clippy + fmt clean.
+
+Audit gate: Explore-agent pass found 1 real ship-blocker (char-mode
+yank used logical line indices as visual rows — fixed before this
+commit), 1 clarity nit on the gutter increment logic (refactored to a
+single advance per emit), 1 stale doc comment (corrected). The plan's
+"Phase 3.5" follow-up: merge `apply_block_highlight` and
+`apply_visual_or_cursor_highlight` once the table path's clip-start
+offset semantics are unified with text's full-block view.
+
 ## [1.20.5] - 2026-04-23
 
 ### Changed — Phase 2 of the architecture cleanup: wrapped-cell tables

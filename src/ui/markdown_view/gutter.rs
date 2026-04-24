@@ -1,11 +1,10 @@
-use super::visual_rows::line_visual_rows;
 use crate::theme::Palette;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout},
     style::Style,
     text::{Line, Span, Text},
-    widgets::{Paragraph, Wrap},
+    widgets::Paragraph,
 };
 
 /// Render a slice of text with an absolute-line-number gutter.
@@ -14,9 +13,16 @@ use ratatui::{
 /// first row; `total_doc_lines` is used to size the gutter so width is stable
 /// across blocks. `scroll_skip` is the number of visual rows to skip from
 /// the top of `text` (matches the `scroll((scroll_skip, 0))` applied to the
-/// content paragraph). `wrap` enables ratatui's word wrap on the content
-/// pane — Tables pass `false` because their cached layout is already pre-
-/// sized to the content width.
+/// content paragraph).
+///
+/// `physical_to_logical` controls gutter numbering for Text blocks:
+/// - `Some(mapping)` — a pre-wrapped Text block. A source-line number is
+///   emitted only when the physical row index `i` maps to a different logical
+///   line than row `i-1` (i.e. when `physical_to_logical[i] != physical_to_logical[i-1]`
+///   or `i == 0`); continuation rows of the same logical line get a blank gutter
+///   entry so the number stays adjacent to its first row.
+/// - `None` — a pre-sliced Table block. Every visible row is numbered
+///   sequentially from `first_line_number` (tables have no wrapped rows).
 #[allow(clippy::too_many_arguments)]
 pub fn render_text_with_gutter(
     f: &mut Frame,
@@ -26,7 +32,7 @@ pub fn render_text_with_gutter(
     total_doc_lines: u32,
     p: &Palette,
     scroll_skip: u16,
-    wrap: bool,
+    physical_to_logical: Option<&[u32]>,
 ) {
     let num_digits = if total_doc_lines == 0 {
         4
@@ -41,41 +47,14 @@ pub fn render_text_with_gutter(
     ])
     .split(rect);
 
-    // The content pane uses `Paragraph::wrap(Wrap { trim: false })`, so a
-    // single logical `Line` can occupy multiple visual rows on narrow
-    // terminals. The gutter must match that per-row layout: emit the line
-    // number on the row where the logical line starts and blank padding on
-    // each continuation row, so the number stays visually adjacent to its
-    // content.
-    //
-    // `first_line_number` is the absolute visual row of the first row of
-    // `text` after `scroll_skip` rows are skipped. We emit numbers tracking
-    // the source-line each logical line came from. Since logical lines map
-    // 1:1 to source lines (renderer flushes per source line via the
-    // SoftBreak fix in 1.18.3), we number each logical line sequentially —
-    // the visual continuation rows of a wrapped line get blank padding so
-    // the gutter never gets out of step with the wrapped content.
-    let content_width = chunks[1].width;
     let gutter_style = Style::new().fg(p.gutter);
-    let mut gutter_lines: Vec<Line<'static>> = Vec::with_capacity(text.lines.len());
-    let blank_span = Span::styled(
-        format!("{:>width$} | ", "", width = num_digits as usize),
+    let gutter_lines = build_gutter_lines(
+        text.lines.len(),
+        first_line_number,
+        num_digits as usize,
+        physical_to_logical,
         gutter_style,
     );
-    for (i, line) in text.lines.iter().enumerate() {
-        gutter_lines.push(Line::from(Span::styled(
-            format!(
-                "{:>width$} | ",
-                first_line_number + crate::cast::u32_sat(i),
-                width = num_digits as usize
-            ),
-            gutter_style,
-        )));
-        let wraps = line_visual_rows(line, content_width);
-        for _ in 1..wraps {
-            gutter_lines.push(Line::from(blank_span.clone()));
-        }
-    }
 
     let mut gutter_para = Paragraph::new(Text::from(gutter_lines));
     if scroll_skip > 0 {
@@ -83,12 +62,143 @@ pub fn render_text_with_gutter(
     }
     f.render_widget(gutter_para, chunks[0]);
 
+    // Text blocks are pre-wrapped — no Paragraph::wrap() needed.
+    // Tables are pre-sliced — also no wrap.
     let mut content_para = Paragraph::new(text);
-    if wrap {
-        content_para = content_para.wrap(Wrap { trim: false });
-    }
     if scroll_skip > 0 {
         content_para = content_para.scroll((scroll_skip, 0));
     }
     f.render_widget(content_para, chunks[1]);
+}
+
+/// Build the per-row gutter strings for a given content row count.
+///
+/// Extracted from [`render_text_with_gutter`] so the line-numbering
+/// logic can be unit-tested without a `Frame`. For Text blocks (`p2l =
+/// Some(...)`) emits a number on the first physical row of each logical
+/// source line and blanks on continuation rows. For Tables (`p2l =
+/// None`) every row is numbered sequentially starting at
+/// `first_line_number`.
+fn build_gutter_lines(
+    row_count: usize,
+    first_line_number: u32,
+    num_digits: usize,
+    physical_to_logical: Option<&[u32]>,
+    style: Style,
+) -> Vec<Line<'static>> {
+    let blank_span = Span::styled(format!("{:>num_digits$} | ", "",), style);
+    let mut out: Vec<Line<'static>> = Vec::with_capacity(row_count);
+
+    match physical_to_logical {
+        Some(p2l) => {
+            // Source-line numbering: emit a number when the logical index
+            // changes; blank otherwise. `source_number` advances by 1 each
+            // time we emit a number — exactly once per logical line.
+            let mut source_number = first_line_number;
+            let mut prev_logical: Option<u32> = None;
+            for i in 0..row_count {
+                let current = p2l.get(i).copied();
+                let is_new = match (prev_logical, current) {
+                    (None, _) | (Some(_), None) => true,
+                    (Some(p), Some(c)) => c != p,
+                };
+                if is_new {
+                    out.push(Line::from(Span::styled(
+                        format!("{source_number:>num_digits$} | "),
+                        style,
+                    )));
+                    source_number = source_number.saturating_add(1);
+                } else {
+                    out.push(Line::from(blank_span.clone()));
+                }
+                prev_logical = current;
+            }
+        }
+        None => {
+            for i in 0..row_count {
+                out.push(Line::from(Span::styled(
+                    format!(
+                        "{:>num_digits$} | ",
+                        first_line_number + crate::cast::u32_sat(i)
+                    ),
+                    style,
+                )));
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_gutter_lines;
+    use ratatui::style::Style;
+
+    /// Render `build_gutter_lines` to a plain `Vec<String>` of trimmed cells
+    /// so the assertions are easy to read. Trims the ` | ` suffix to keep
+    /// the snapshot focused on the line-number formatting.
+    fn render(
+        row_count: usize,
+        first_line: u32,
+        digits: usize,
+        p2l: Option<&[u32]>,
+    ) -> Vec<String> {
+        build_gutter_lines(row_count, first_line, digits, p2l, Style::default())
+            .into_iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+                    .trim_end_matches(" | ")
+                    .trim()
+                    .to_string()
+            })
+            .collect()
+    }
+
+    /// A 3-row wrapped paragraph (one logical line) shows the source number
+    /// once and blank padding on the two continuation rows.
+    #[test]
+    fn text_wrapped_logical_line_numbers_once() {
+        let p2l = vec![0u32, 0, 0];
+        let out = render(3, 1, 4, Some(&p2l));
+        assert_eq!(out, vec!["1", "", ""]);
+    }
+
+    /// Mixed-height layout: logical 0 wraps to 2 rows, logical 1 stays 1
+    /// row, logical 2 wraps to 3 rows. Numbers appear at the first row of
+    /// each new logical line; advances by 1 each time.
+    #[test]
+    fn text_mixed_heights_advance_per_logical_line() {
+        let p2l = vec![0u32, 0, 1, 2, 2, 2];
+        let out = render(6, 1, 4, Some(&p2l));
+        assert_eq!(out, vec!["1", "", "2", "3", "", ""]);
+    }
+
+    /// Numbering starts from `first_line_number`, not from 1.
+    #[test]
+    fn text_starts_from_offset() {
+        let p2l = vec![0u32, 1];
+        let out = render(2, 105, 4, Some(&p2l));
+        assert_eq!(out, vec!["105", "106"]);
+    }
+
+    /// Tables (`p2l = None`) number every row sequentially regardless of
+    /// content.
+    #[test]
+    fn table_rows_numbered_sequentially() {
+        let out = render(4, 10, 4, None);
+        assert_eq!(out, vec!["10", "11", "12", "13"]);
+    }
+
+    /// The blank span is exactly `num_digits` spaces — keeps gutter width
+    /// stable across rows.
+    #[test]
+    fn blank_padding_matches_digit_width() {
+        let p2l = vec![0u32, 0];
+        let lines = build_gutter_lines(2, 1, 4, Some(&p2l), Style::default());
+        let blank: String = lines[1].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(blank, "     | ", "4 spaces + ` | ` = 7 cells");
+    }
 }

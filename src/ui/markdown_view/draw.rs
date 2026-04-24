@@ -6,9 +6,7 @@ use super::mermaid_draw::{MermaidDrawParams, draw_mermaid_block};
 use super::state::VisualRange;
 use crate::action::Action;
 use crate::app::App;
-use crate::markdown::{
-    DocBlock, MermaidBlockId, update_mermaid_heights, update_text_visual_heights,
-};
+use crate::markdown::{DocBlock, MermaidBlockId, update_mermaid_heights, update_text_layouts};
 use crate::mermaid::MermaidRenderConfig;
 use crate::ui::table_render::layout_table;
 use ratatui::{
@@ -16,7 +14,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Style},
     text::Text,
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Paragraph},
 };
 use std::borrow::Cow;
 
@@ -40,11 +38,10 @@ struct TextDraw {
     /// visible slice) and for Text blocks fully visible from their top edge;
     /// non-zero for Text blocks scrolled past their top.
     scroll_skip: u16,
-    /// `true` when rendering should use `Paragraph::wrap(Wrap { trim: false })`.
-    /// Tables disable wrap because their cached layout is already pre-sized to
-    /// the content width; Text blocks need it because long source lines
-    /// otherwise extend past the right edge.
-    wrap: bool,
+    /// `physical_to_logical` from the `WrappedTextLayout` for this block,
+    /// or `None` for Table blocks (their layout is already pre-sized).
+    /// Used by `render_text_with_gutter` to emit line numbers correctly.
+    physical_to_logical: Option<Vec<u32>>,
 }
 
 /// Deferred mermaid-block render instruction.
@@ -149,8 +146,8 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
         inner.width
     };
 
-    // If the effective width has changed, all table layout caches are stale.
-    // Recompute heights for every table block and update total_lines.
+    // If the effective width has changed, all layout caches are stale.
+    // Recompute heights for every block and update total_lines.
     {
         // Safety: `has_content` is true so there is always an active tab here.
         // Use a guard instead of `.unwrap()` to satisfy the no-unwrap rule.
@@ -185,20 +182,28 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                 &app.mermaid_cache,
                 app.mermaid_max_height,
             );
-            if layout_changed || mermaid_changed {
+            // Populate text layout cache for any Text blocks not yet wrapped
+            // (e.g. first draw). Returns true when any height changed.
+            let text_changed = update_text_layouts(
+                &tab.view.rendered,
+                &mut tab.view.text_layouts,
+                effective_width,
+            );
+            if layout_changed || mermaid_changed || text_changed {
                 tab.view.total_lines = tab
                     .view
                     .rendered
                     .iter()
                     .map(|b: &DocBlock| b.height())
                     .sum();
-                tab.view.recompute_positions(effective_width);
+                tab.view.recompute_positions();
                 let max_scroll = tab.view.total_lines.saturating_sub(view_height / 2);
                 tab.view.scroll_offset = tab.view.scroll_offset.min(max_scroll);
             }
         } else {
             tab.view.layout_width = effective_width;
             tab.view.table_layouts.clear();
+            tab.view.text_layouts.clear();
             // AsciiDiagram entries are fixed-width text — they need to
             // re-render at the new width.  Clearing the whole cache is
             // cheap; image entries will re-populate via ensure_queued on
@@ -226,17 +231,20 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                 &app.mermaid_cache,
                 app.mermaid_max_height,
             );
-            // Re-measure each Text block's visual row count at the new width;
-            // long lines that wrap now contribute > 1 row to total_lines so
-            // tables and following content stop drifting under scroll.
-            update_text_visual_heights(&tab.view.rendered, effective_width);
+            // Re-wrap each Text block at the new width so `block.height()` and
+            // the layout cache are accurate for all downstream callers.
+            update_text_layouts(
+                &tab.view.rendered,
+                &mut tab.view.text_layouts,
+                effective_width,
+            );
             tab.view.total_lines = tab
                 .view
                 .rendered
                 .iter()
                 .map(|b: &DocBlock| b.height())
                 .sum();
-            tab.view.recompute_positions(effective_width);
+            tab.view.recompute_positions();
             let max_scroll = tab.view.total_lines.saturating_sub(view_height / 2);
             tab.view.scroll_offset = tab.view.scroll_offset.min(max_scroll);
         }
@@ -327,58 +335,78 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                     );
 
                     match doc_block {
-                        DocBlock::Text { text, .. } => {
-                            // The block iterator above runs in visual rows
-                            // (block_height = visual_height), so clip_start /
-                            // visible_lines / draw_height are also in visual
-                            // rows. We render the FULL text via Paragraph and
-                            // let `.scroll((clip_start, 0))` skip the rows
-                            // above the viewport. This keeps the wrap math
-                            // consistent: ratatui wraps once and we scroll
-                            // through the wrapped output, instead of slicing
-                            // by logical line (which produces drifting rows
-                            // when long lines wrap).
+                        DocBlock::Text { id, text, .. } => {
+                            // Look up the pre-wrapped layout for this block. On the
+                            // very first draw the cache may not be populated yet
+                            // (race between width-change path and first paint); call
+                            // update_text_layouts immediately so we always have data.
                             //
-                            // Highlights operate on logical lines in the
-                            // full text; their styled spans appear on
-                            // whatever wrapped rows ratatui places them on.
+                            // SAFETY: active tab is guaranteed by `has_content`.
+                            let layout_opt = tab.view.text_layouts.get(id).map(|l| {
+                                // Clone the physical_to_logical mapping for the gutter;
+                                // the wrapped lines are converted to ratatui Lines below.
+                                l.physical_to_logical.clone()
+                            });
+                            let physical_to_logical = layout_opt;
+
+                            // Build ratatui Lines from the pre-wrapped output.
+                            // Single-source conversion via `WrappedLine::to_ratatui_line`.
+                            let wrapped_lines: Vec<ratatui::text::Line<'static>> = tab
+                                .view
+                                .text_layouts
+                                .get(id)
+                                .map(|layout| {
+                                    layout
+                                        .wrapped
+                                        .iter()
+                                        .map(|wl| wl.to_ratatui_line())
+                                        .collect()
+                                })
+                                .unwrap_or_else(|| {
+                                    // Cache absent — fall back to logical lines (no wrap).
+                                    text.lines.clone()
+                                });
+
+                            // Apply search match highlights on the wrapped lines.
+                            // `highlight_matches` operates on logical lines from the
+                            // original `text`, keyed by block_start (visual row).
+                            // Since wrapped_lines now IS the visual-row space, we
+                            // pass it directly as both the data and index base.
                             let mut full_text =
                                 if let Some((query, current_line)) = &doc_search_query {
-                                    highlight_matches(text, query, *current_line, block_start, &p)
+                                    // Build a temporary Text from wrapped lines and highlight.
+                                    let tmp = Text::from(wrapped_lines.clone());
+                                    highlight_matches(&tmp, query, *current_line, block_start, &p)
                                 } else {
-                                    Text::from(text.lines.clone())
+                                    Text::from(wrapped_lines)
                                 };
 
                             let block_end_visual = block_start + block_height;
                             if focused {
+                                // In Phase 3 the wrapped lines ARE the visual rows —
+                                // cursor_line and block_start are in the same coordinate
+                                // space as the indices into full_text.lines. No conversion
+                                // needed; the mapping is identity.
                                 apply_visual_or_cursor_highlight(
                                     &mut full_text.lines,
                                     visual_mode,
                                     cursor_line,
                                     block_start,
                                     block_end_visual,
-                                    effective_width,
                                     p.selection_bg,
                                 );
 
-                                // Single-cell cursor at (cursor_line,
-                                // cursor_col) so the horizontal position is
-                                // visible. Convert the visual cursor row to
-                                // the logical line it sits on; mark that
-                                // logical line so it stands out against the
-                                // selection background.
+                                // Single-cell cursor highlight at the cursor's physical
+                                // wrapped row. `cursor_visual_in_block` IS the index into
+                                // full_text.lines — no logical→visual conversion needed.
                                 if cursor_line >= block_start && cursor_line < block_end_visual {
-                                    let cursor_visual_in_block = cursor_line - block_start;
-                                    let logical_idx =
-                                        super::visual_rows::visual_row_to_logical_in_block(
-                                            text,
-                                            effective_width,
-                                            cursor_visual_in_block,
-                                        ) as usize;
-                                    if let Some(line) = full_text.lines.get(logical_idx) {
+                                    let cursor_visual_in_block =
+                                        (cursor_line - block_start) as usize;
+                                    if let Some(line) = full_text.lines.get(cursor_visual_in_block)
+                                    {
                                         let col =
                                             app.tabs.active_tab().map_or(0, |t| t.view.cursor_col);
-                                        full_text.lines[logical_idx] =
+                                        full_text.lines[cursor_visual_in_block] =
                                             super::highlight::highlight_columns(
                                                 line,
                                                 col,
@@ -394,15 +422,13 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                                 height: draw_height,
                                 text: full_text,
                                 // Logical block start + 1 so the gutter
-                                // numbers each `text.lines[i]` as
-                                // `first_line_number + i` (one number per
-                                // source line, blank rows for wrap
-                                // continuations). The Paragraph's scroll
-                                // moves the visible window through the
-                                // same generated gutter Vec.
+                                // numbers each source line once; wrap
+                                // continuation rows get a blank gutter entry
+                                // (controlled by physical_to_logical in the
+                                // gutter renderer).
                                 first_line_number: block_start_logical + 1,
                                 scroll_skip: crate::cast::u16_from_u32(clip_start),
-                                wrap: true,
+                                physical_to_logical,
                             });
                         }
                         DocBlock::Mermaid { id, source, .. } => {
@@ -467,7 +493,9 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                                     text: visible_text,
                                     first_line_number: block_start + clip_start + 1,
                                     scroll_skip: 0,
-                                    wrap: false,
+                                    // Tables are already pre-sliced to the visible
+                                    // rows; no wrap continuation rows exist.
+                                    physical_to_logical: None,
                                 });
                             }
                         }
@@ -530,13 +558,12 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                 total_doc_lines,
                 &p,
                 td.scroll_skip,
-                td.wrap,
+                td.physical_to_logical.as_deref(),
             );
         } else {
             let mut para = Paragraph::new(td.text);
-            if td.wrap {
-                para = para.wrap(Wrap { trim: false });
-            }
+            // Text blocks are pre-wrapped — no Paragraph::wrap() needed.
+            // Tables pass physical_to_logical = None and are also pre-sized.
             if td.scroll_skip > 0 {
                 para = para.scroll((td.scroll_skip, 0));
             }

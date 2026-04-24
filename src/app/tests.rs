@@ -2,10 +2,12 @@
 ///
 /// Kept in a dedicated file to keep `mod.rs` focused on production code.
 use super::*;
-use crate::markdown::{CellSpans, MermaidBlockId, TableBlock, TableBlockId};
+use crate::markdown::{CellSpans, MermaidBlockId, TableBlock, TableBlockId, TextBlockId};
 use crate::mermaid::{DEFAULT_MERMAID_HEIGHT, MermaidEntry};
 use crate::ui::editor::{CommandOutcome, dispatch_command};
 use crate::ui::markdown_view::TableLayout;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::time::Instant;
 // `MouseEvent` is not pulled in by `use super::*`; the others (KeyModifiers,
 // MouseButton, MouseEventKind) are already in scope from the parent module.
@@ -19,12 +21,18 @@ fn make_text_block(lines: &[&str]) -> DocBlock {
         .map(|l| Line::from(Span::raw(l.to_string())))
         .collect();
     let n = text_lines.len();
+    let source_lines: Vec<u32> = (0..crate::cast::u32_sat(n)).collect();
+    let mut h = DefaultHasher::new();
+    source_lines.hash(&mut h);
+    n.hash(&mut h);
+    let id = TextBlockId(h.finish());
     DocBlock::Text {
+        id,
         text: Text::from(text_lines),
         links: Vec::new(),
         heading_anchors: Vec::new(),
-        source_lines: (0..crate::cast::u32_sat(n)).collect(),
-        visual_height: std::cell::Cell::new(crate::cast::u32_sat(n)),
+        source_lines,
+        wrapped_height: std::cell::Cell::new(crate::cast::u32_sat(n)),
     }
 }
 
@@ -96,23 +104,45 @@ fn ready_cache(id: u64) -> MermaidCache {
     cache
 }
 
+/// Helper to build an empty text_layouts cache (for tests without pre-wrapped layouts).
+fn empty_text_layouts() -> HashMap<TextBlockId, crate::ui::markdown_view::WrappedTextLayout> {
+    HashMap::new()
+}
+
+/// Helper to build a pre-wrapped text layout for a set of lines.
+///
+/// Each line is treated as fitting on one physical row (no wrapping at test widths).
+fn make_text_layouts_for(
+    block: &DocBlock,
+    width: u16,
+) -> HashMap<TextBlockId, crate::ui::markdown_view::WrappedTextLayout> {
+    let mut layouts = HashMap::new();
+    crate::markdown::update_text_layouts(std::slice::from_ref(block), &mut layouts, width);
+    layouts
+}
+
 #[test]
 fn collect_matches_text_block() {
-    let blocks = vec![make_text_block(&["hello world", "no match", "world again"])];
-    let layouts = HashMap::new();
+    // Build blocks and populate the text layout cache so search uses wrapped rows.
+    let block = make_text_block(&["hello world", "no match", "world again"]);
+    let text_layouts = make_text_layouts_for(&block, 80);
+    let blocks = vec![block];
+    let table_layouts = HashMap::new();
     let cache = empty_mermaid_cache();
-    let result = collect_match_lines(&blocks, &layouts, &cache, "world", 0);
+    let result = collect_match_lines(&blocks, &text_layouts, &table_layouts, &cache, "world");
     assert_eq!(result, vec![0, 2]);
 }
 
 #[test]
 fn collect_matches_table_with_layout_cache() {
+    let block_text = make_text_block(&["intro"]);
+    let text_layouts = make_text_layouts_for(&block_text, 80);
     let blocks = vec![
-        make_text_block(&["intro"]),
+        block_text,
         make_table_block(1, &["Header"], &[&["alpha"], &["beta needle"]]),
     ];
-    let mut layouts = HashMap::new();
-    layouts.insert(
+    let mut table_layouts = HashMap::new();
+    table_layouts.insert(
         TableBlockId(1),
         make_cached_layout(&[
             "\u{250c}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2510}",
@@ -124,7 +154,7 @@ fn collect_matches_table_with_layout_cache() {
         ]),
     );
     let cache = empty_mermaid_cache();
-    let result = collect_match_lines(&blocks, &layouts, &cache, "needle", 0);
+    let result = collect_match_lines(&blocks, &text_layouts, &table_layouts, &cache, "needle");
     // text block has 1 line (offset 0); table starts at offset 1.
     // "beta needle" is at layout index 4, so absolute = 1 + 4 = 5.
     assert_eq!(result, vec![5]);
@@ -133,9 +163,10 @@ fn collect_matches_table_with_layout_cache() {
 #[test]
 fn collect_matches_table_fallback_no_layout() {
     let blocks = vec![make_table_block(2, &["Col"], &[&["findme"], &["nothing"]])];
-    let layouts = HashMap::new();
+    let text_layouts = empty_text_layouts();
+    let table_layouts = HashMap::new();
     let cache = empty_mermaid_cache();
-    let result = collect_match_lines(&blocks, &layouts, &cache, "findme", 0);
+    let result = collect_match_lines(&blocks, &text_layouts, &table_layouts, &cache, "findme");
     // Fallback: header row is at row_offset=1, data rows follow.
     // "findme" is the first data row → row_offset = 2 → absolute = 0+2 = 2.
     assert_eq!(result, vec![2]);
@@ -145,8 +176,10 @@ fn collect_matches_table_fallback_no_layout() {
 fn collect_matches_mermaid_source_only() {
     let source = "graph LR\n    A --> needle\n    B --> C";
     let mermaid_id = MermaidBlockId(99);
+    let text_block = make_text_block(&["before"]);
+    let text_layouts = make_text_layouts_for(&text_block, 80);
     let blocks = vec![
-        make_text_block(&["before"]),
+        text_block,
         DocBlock::Mermaid {
             id: mermaid_id,
             source: source.to_string(),
@@ -155,8 +188,8 @@ fn collect_matches_mermaid_source_only() {
         },
     ];
     let cache = source_only_cache(99);
-    let layouts = HashMap::new();
-    let result = collect_match_lines(&blocks, &layouts, &cache, "needle", 0);
+    let table_layouts = HashMap::new();
+    let result = collect_match_lines(&blocks, &text_layouts, &table_layouts, &cache, "needle");
     // text block: 1 line (offset 0). mermaid starts at offset 1.
     // "A --> needle" is source line index 1, so absolute = 1 + 1 = 2.
     assert_eq!(result, vec![2]);
@@ -172,8 +205,9 @@ fn collect_matches_mermaid_failed_shows_source() {
         source_line: 0,
     }];
     let cache = ready_cache(42);
-    let layouts = HashMap::new();
-    let result = collect_match_lines(&blocks, &layouts, &cache, "find_this", 0);
+    let text_layouts = empty_text_layouts();
+    let table_layouts = HashMap::new();
+    let result = collect_match_lines(&blocks, &text_layouts, &table_layouts, &cache, "find_this");
     assert_eq!(result, vec![1]);
 }
 
@@ -186,9 +220,10 @@ fn collect_matches_mermaid_absent_shows_source() {
         cell_height: Cell::new(DEFAULT_MERMAID_HEIGHT),
         source_line: 0,
     }];
-    let layouts = HashMap::new();
+    let text_layouts = empty_text_layouts();
+    let table_layouts = HashMap::new();
     let cache = empty_mermaid_cache();
-    let result = collect_match_lines(&blocks, &layouts, &cache, "match_me", 0);
+    let result = collect_match_lines(&blocks, &text_layouts, &table_layouts, &cache, "match_me");
     assert_eq!(result, vec![1]);
 }
 
@@ -336,13 +371,17 @@ fn click_inside_modal_does_not_close_it() {
 
 #[test]
 fn collect_matches_absolute_offsets_across_blocks() {
+    let text_block0 = make_text_block(&["line0", "line1", "line2"]);
+    let text_block2 = make_text_block(&["after"]);
+    let mut text_layouts = make_text_layouts_for(&text_block0, 80);
+    text_layouts.extend(make_text_layouts_for(&text_block2, 80));
     let blocks = vec![
-        make_text_block(&["line0", "line1", "line2"]),
+        text_block0,
         make_table_block(5, &["H"], &[&["row0"], &["row1 target"]]),
-        make_text_block(&["after"]),
+        text_block2,
     ];
-    let mut layouts = HashMap::new();
-    layouts.insert(
+    let mut table_layouts = HashMap::new();
+    table_layouts.insert(
         TableBlockId(5),
         make_cached_layout(&[
             "\u{250c}\u{2500}\u{2510}",
@@ -354,7 +393,7 @@ fn collect_matches_absolute_offsets_across_blocks() {
         ]),
     );
     let cache = empty_mermaid_cache();
-    let result = collect_match_lines(&blocks, &layouts, &cache, "target", 0);
+    let result = collect_match_lines(&blocks, &text_layouts, &table_layouts, &cache, "target");
     // text block: 3 lines (offsets 0-2). table starts at 3, rendered_height=4.
     // "row1 target" is at layout index 4 → absolute = 3+4 = 7.
     // after block starts at 3+4=7. "after" is at 7+0=7 — no match for "target".
@@ -570,13 +609,29 @@ fn enter_edit_mode_uses_cursor_for_source_line() {
         .iter()
         .map(|i| Line::from(Span::raw(format!("line {i}"))))
         .collect();
-    tab.view.rendered = vec![DocBlock::Text {
+    let n = src_lines.len();
+    let block_id = {
+        let mut h = DefaultHasher::new();
+        src_lines.hash(&mut h);
+        n.hash(&mut h);
+        TextBlockId(h.finish())
+    };
+    let block = DocBlock::Text {
+        id: block_id,
         text: Text::from(text_lines),
         links: Vec::<LinkInfo>::new(),
         heading_anchors: Vec::<HeadingAnchor>::new(),
         source_lines: src_lines,
-        visual_height: std::cell::Cell::new(3),
-    }];
+        wrapped_height: std::cell::Cell::new(3),
+    };
+    // Populate the text_layouts cache so `source_line_at` can resolve physical rows
+    // to logical line indices (and then to source lines).
+    crate::markdown::update_text_layouts(
+        std::slice::from_ref(&block),
+        &mut tab.view.text_layouts,
+        80,
+    );
+    tab.view.rendered = vec![block];
     tab.view.total_lines = 3;
     // Set cursor to logical line 1 → source_line_at returns 11.
     tab.view.cursor_line = 1;
@@ -1185,6 +1240,12 @@ fn y_in_visual_mode_yanks_and_exits() {
     if let Some(tab) = app.tabs.active_tab_mut() {
         let block = make_text_block(&["alpha", "beta", "gamma", "delta"]);
         let total = block.height();
+        // Populate the text_layouts cache so `source_line_at` can resolve rows.
+        crate::markdown::update_text_layouts(
+            std::slice::from_ref(&block),
+            &mut tab.view.text_layouts,
+            80,
+        );
         tab.view.rendered = vec![block];
         tab.view.total_lines = total;
         tab.view.content = content.to_string();
@@ -1202,8 +1263,10 @@ fn y_in_visual_mode_yanks_and_exits() {
         "y in visual mode must exit visual mode"
     );
     // Verify that the yank text for source lines 1..=2 is correct.
-    let top_source = crate::markdown::source_line_at(&tab.view.rendered, 1);
-    let bottom_source = crate::markdown::source_line_at(&tab.view.rendered, 2);
+    // Use the tab's own text_layouts so `source_line_at` resolves correctly.
+    let tl = &tab.view.text_layouts;
+    let top_source = crate::markdown::source_line_at(&tab.view.rendered, 1, tl, &HashMap::new());
+    let bottom_source = crate::markdown::source_line_at(&tab.view.rendered, 2, tl, &HashMap::new());
     let expected = build_yank_text(content, top_source, bottom_source);
     assert_eq!(
         expected, "beta\ngamma",
@@ -1241,6 +1304,12 @@ fn l_moves_cursor_col_right_clamped() {
     // "abc" is 3 cells wide — max cursor_col = 2.
     if let Some(tab) = app.tabs.active_tab_mut() {
         let block = make_text_block(&["abc"]);
+        // Populate text_layouts so `current_line_width()` returns 3 for the single row.
+        crate::markdown::update_text_layouts(
+            std::slice::from_ref(&block),
+            &mut tab.view.text_layouts,
+            80,
+        );
         tab.view.rendered = vec![block];
         tab.view.total_lines = 1;
         tab.view.cursor_col = 2; // already at end
@@ -1318,7 +1387,7 @@ fn apply_file_loaded_jumps_cursor_to_source_line() {
 
     let expected_logical = {
         let tab = app.tabs.active_tab().unwrap();
-        crate::markdown::logical_line_at_source(&tab.view.rendered, 2)
+        crate::markdown::logical_line_at_source(&tab.view.rendered, 2, &HashMap::new())
             .expect("controlled block must map source 2 to logical 2")
     };
     assert_eq!(
@@ -1384,7 +1453,7 @@ fn open_link_picker_real_doc_repro() {
     if let Some(tab) = app.tabs.active_tab_mut() {
         tab.view.total_lines = blocks.iter().map(DocBlock::height).sum();
         tab.view.rendered = blocks;
-        tab.view.recompute_positions(0);
+        tab.view.recompute_positions();
     }
     app.focus = Focus::Viewer;
 
@@ -1469,7 +1538,7 @@ See [BadFirst](#real) and [GoodSecond](#real).
     if let Some(tab) = app.tabs.active_tab_mut() {
         tab.view.total_lines = blocks.iter().map(DocBlock::height).sum();
         tab.view.rendered = blocks;
-        tab.view.recompute_positions(0);
+        tab.view.recompute_positions();
     }
     app.focus = Focus::Viewer;
 
@@ -1523,7 +1592,7 @@ Final prose link: [Fig](#fig).
     if let Some(tab) = app.tabs.active_tab_mut() {
         tab.view.total_lines = blocks.iter().map(DocBlock::height).sum();
         tab.view.rendered = blocks;
-        tab.view.recompute_positions(0);
+        tab.view.recompute_positions();
     }
     app.focus = Focus::Viewer;
 
@@ -1569,7 +1638,7 @@ Skim [System overview](#system-overview) first. End-of-doc has [appendix](#appen
     if let Some(tab) = app.tabs.active_tab_mut() {
         tab.view.total_lines = blocks.iter().map(DocBlock::height).sum();
         tab.view.rendered = blocks;
-        tab.view.recompute_positions(0);
+        tab.view.recompute_positions();
     }
     app.focus = Focus::Viewer;
 
@@ -1628,7 +1697,7 @@ Finally [Cherry](#cherry).
     if let Some(tab) = app.tabs.active_tab_mut() {
         tab.view.total_lines = blocks.iter().map(DocBlock::height).sum();
         tab.view.rendered = blocks;
-        tab.view.recompute_positions(0);
+        tab.view.recompute_positions();
     }
     app.focus = Focus::Viewer;
 

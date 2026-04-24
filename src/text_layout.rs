@@ -75,6 +75,25 @@ pub struct WrappedLine {
     pub width: u16,
 }
 
+impl WrappedLine {
+    /// Convert to a `ratatui::text::Line<'static>` ready to feed into a
+    /// `Paragraph` or `Text`. Each [`WrappedSpan`] becomes a
+    /// `Span::styled(content.clone(), style)`.
+    ///
+    /// Used by every consumer of the wrap output (the viewer's draw path,
+    /// the table renderer, char-mode yank). Centralising the conversion
+    /// here means the shape of `WrappedSpan` can evolve without forcing
+    /// every call site to know how to map it.
+    pub fn to_ratatui_line(&self) -> ratatui::text::Line<'static> {
+        ratatui::text::Line::from(
+            self.spans
+                .iter()
+                .map(|ws| ratatui::text::Span::styled(ws.content.clone(), ws.style))
+                .collect::<Vec<_>>(),
+        )
+    }
+}
+
 // ── Public functions ──────────────────────────────────────────────────────────
 
 /// Greedy word-wrap of `spans` to fit within `max_width` display columns.

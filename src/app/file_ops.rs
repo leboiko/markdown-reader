@@ -108,10 +108,10 @@ impl App {
             if let Some(source_line) = jump_to_source {
                 let vh = self.tabs.view_height;
                 if let Some(tab) = self.tabs.find_tab_by_path_mut(&path)
-                    && let Some(logical) = crate::markdown::logical_line_at_source_width(
+                    && let Some(logical) = crate::markdown::logical_line_at_source(
                         &tab.view.rendered,
                         source_line,
-                        tab.view.layout_width,
+                        &tab.view.text_layouts,
                     )
                 {
                     tab.view.cursor_line = logical;
@@ -194,10 +194,10 @@ impl App {
             if pending_path == path {
                 let vh = self.tabs.view_height;
                 if let Some(tab) = self.tabs.find_tab_by_path_mut(&path)
-                    && let Some(logical) = crate::markdown::logical_line_at_source_width(
+                    && let Some(logical) = crate::markdown::logical_line_at_source(
                         &tab.view.rendered,
                         source_line,
-                        tab.view.layout_width,
+                        &tab.view.text_layouts,
                     )
                 {
                     tab.view.cursor_line = logical;
@@ -375,10 +375,10 @@ impl App {
         // using the block metadata stored at render time.  This is precise: code
         // block borders and table borders are mapped to their fence / header line
         // rather than being offset by visual border rows.
-        let target_source_line = crate::markdown::source_line_at_width(
+        let target_source_line = crate::markdown::source_line_at(
             &tab.view.rendered,
             tab.view.cursor_line,
-            tab.view.layout_width,
+            &tab.view.text_layouts,
             &tab.view.table_layouts,
         );
         let source_lines_total = content.split('\n').count();

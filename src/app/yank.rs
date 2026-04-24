@@ -12,10 +12,10 @@ impl App {
         let Some(tab) = self.tabs.active_tab() else {
             return;
         };
-        let target_source = crate::markdown::source_line_at_width(
+        let target_source = crate::markdown::source_line_at(
             &tab.view.rendered,
             tab.view.cursor_line,
-            tab.view.layout_width,
+            &tab.view.text_layouts,
             &tab.view.table_layouts,
         );
         // `content` is the raw markdown; we index into its lines.
@@ -38,25 +38,31 @@ impl App {
         let text = match range.mode {
             VisualMode::Line => {
                 // Line mode: yank whole source lines (existing behaviour).
-                let w = tab.view.layout_width;
-                let top_source = crate::markdown::source_line_at_width(
+                let top_source = crate::markdown::source_line_at(
                     &tab.view.rendered,
                     range.top_line(),
-                    w,
+                    &tab.view.text_layouts,
                     &tab.view.table_layouts,
                 );
-                let bottom_source = crate::markdown::source_line_at_width(
+                let bottom_source = crate::markdown::source_line_at(
                     &tab.view.rendered,
                     range.bottom_line(),
-                    w,
+                    &tab.view.text_layouts,
                     &tab.view.table_layouts,
                 );
                 build_yank_text(&tab.view.content, top_source, bottom_source)
             }
             VisualMode::Char => {
-                // Char mode: extract rendered text from only the selected columns.
-                // Walk each line in [top_line, bottom_line] and extract the column
-                // range reported by char_range_on_line.
+                // Char mode: extract rendered text from only the selected
+                // columns. Walks each VISUAL row in [top, bottom] and
+                // extracts the column range reported by char_range_on_line.
+                //
+                // Phase 3 invariant: `cursor_line` and `range.top_line()` /
+                // `range.bottom_line()` live in visual rows, and a Text
+                // block's `block.height()` is its wrapped row count. We
+                // must iterate the cached wrapped rows in lockstep, NOT
+                // `text.lines` (logical lines) — those agree only for
+                // unwrapped paragraphs.
                 let mut parts: Vec<String> = Vec::new();
                 let mut block_offset = 0u32;
                 let top = range.top_line();
@@ -71,24 +77,17 @@ impl App {
                     if block_offset > bottom {
                         break;
                     }
-                    if let crate::markdown::DocBlock::Text { text, .. } = block {
-                        for (local_idx, line) in text.lines.iter().enumerate() {
-                            let abs = block_offset + crate::cast::u32_sat(local_idx);
+                    if let crate::markdown::DocBlock::Text { id, .. } = block
+                        && let Some(layout) = tab.view.text_layouts.get(id)
+                    {
+                        for (local_visual, wrapped) in layout.wrapped.iter().enumerate() {
+                            let abs = block_offset + crate::cast::u32_sat(local_visual);
                             if abs > bottom {
                                 break 'blocks;
                             }
-                            // Compute display width of this line from its spans.
-                            let line_width: u16 = line
-                                .spans
-                                .iter()
-                                .map(|s| {
-                                    crate::cast::u16_sat(unicode_width::UnicodeWidthStr::width(
-                                        s.content.as_ref(),
-                                    ))
-                                })
-                                .fold(0u16, u16::saturating_add);
-                            if let Some((sc, ec)) = range.char_range_on_line(abs, line_width) {
-                                parts.push(extract_line_text_range(line, sc, ec));
+                            if let Some((sc, ec)) = range.char_range_on_line(abs, wrapped.width) {
+                                let line = wrapped.to_ratatui_line();
+                                parts.push(extract_line_text_range(&line, sc, ec));
                             }
                         }
                     }

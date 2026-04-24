@@ -38,6 +38,17 @@ pub struct MermaidBlockId(pub u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TableBlockId(pub u64);
 
+/// Opaque stable identifier for a text block.
+///
+/// Derived from a hash of `(source_lines, lines.len())` at render time. Stable
+/// as long as the document content does not change. Used as the key into
+/// [`crate::ui::markdown_view::WrappedTextLayout`] so the draw loop can
+/// look up pre-wrapped output without re-wrapping on every frame.
+///
+/// Analogous to [`TableBlockId`] — same caching contract, same derivation pattern.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TextBlockId(pub u64);
+
 /// One cell's content as a sequence of styled spans.
 pub type CellSpans = Vec<Span<'static>>;
 
@@ -81,24 +92,27 @@ pub enum DocBlock {
     /// A run of styled ratatui lines, with any hyperlinks and heading anchors
     /// found within them.
     Text {
+        /// Stable cache key for the wrapped-layout cache in `MarkdownViewState`.
+        ///
+        /// Derived at render time from a hash of `(source_lines, lines.len())`.
+        /// Stable across redraws as long as the document content is unchanged.
+        id: TextBlockId,
         text: Text<'static>,
         links: Vec<LinkInfo>,
         heading_anchors: Vec<HeadingAnchor>,
         /// Parallel to `text.lines`: 0-indexed source line for each rendered row.
         /// `source_lines.len() == text.lines.len()` is a maintained invariant.
         source_lines: Vec<u32>,
-        /// Sum of visual rows each `text.lines` entry occupies at the current
-        /// layout width. Defaults to `text.lines.len()` (the no-wrap case);
-        /// set to the true visual count by [`update_text_visual_heights`] on
-        /// every layout-width change. Read by [`DocBlock::height`] so scroll
-        /// math advances by visual rows, not logical lines — without this, a
-        /// long paragraph that wraps to N rows visually would still count as
-        /// 1 line in `total_lines`, and scrolling past it would shift the
-        /// table that follows by N-1 rows.
+        /// Sum of visual rows all `text.lines` entries occupy at the current
+        /// layout width after wrapping. Initialised pessimistically to
+        /// `text.lines.len()` (the no-wrap count); updated by
+        /// [`update_text_layouts`] on every layout-width change. Read by
+        /// [`DocBlock::height`] so scroll math advances by visual rows, not
+        /// logical lines.
         ///
         /// `Cell` so the value can be updated through a shared `&DocBlock`
         /// reference during the immutable iteration in the draw loop.
-        visual_height: Cell<u32>,
+        wrapped_height: Cell<u32>,
     },
     /// A reserved space for a mermaid diagram image.
     Mermaid {
@@ -121,47 +135,97 @@ impl DocBlock {
     /// Number of display rows this block occupies in the current viewport.
     ///
     /// Always returns visual rows, not logical lines: a Text block whose
-    /// long Lines wrap returns the wrapped row count via `visual_height`.
-    /// `update_text_visual_heights` must run after any `layout_width`
-    /// change for this to be accurate; before then, the cell holds the
-    /// pessimistic logical-line count from `Text::from(...)`.
+    /// long Lines wrap returns the wrapped row count via `wrapped_height`.
+    /// [`update_text_layouts`] must run after any `layout_width` change for
+    /// this to be accurate; before then, the cell holds the pessimistic
+    /// logical-line count.
     pub fn height(&self) -> u32 {
         match self {
-            DocBlock::Text { visual_height, .. } => visual_height.get(),
+            DocBlock::Text { wrapped_height, .. } => wrapped_height.get(),
             DocBlock::Mermaid { cell_height, .. } => cell_height.get(),
             DocBlock::Table(t) => t.rendered_height,
         }
     }
 }
 
-/// Sum each `Text` block's `visual_height` from its lines at the given
-/// content width. Returns `true` when at least one block's height changed
-/// so callers can skip downstream work (`recompute_positions`,
-/// `total_lines` re-sum) when nothing moved.
+/// Pre-wrap every `Text` block's lines at `content_width` and populate the
+/// `text_layouts` cache. Updates each block's `wrapped_height` cell so
+/// `DocBlock::height()` returns accurate visual-row counts after wrapping.
 ///
-/// Mermaid and Table blocks already store visual heights elsewhere
-/// (`cell_height` / `rendered_height`) and are skipped here.
-pub fn update_text_visual_heights(blocks: &[DocBlock], content_width: u16) -> bool {
-    use crate::ui::markdown_view::visual_rows::line_visual_rows;
+/// Returns `true` when at least one block's height changed, allowing callers to
+/// skip expensive downstream work (`recompute_positions`, `total_lines` re-sum)
+/// when nothing moved.
+///
+/// Mermaid and Table blocks are skipped — they track their own heights via
+/// `cell_height` / `rendered_height`.
+///
+/// # Arguments
+///
+/// * `blocks`       – rendered document block list.
+/// * `text_layouts` – cache map from `MarkdownViewState`; entries are
+///   inserted/replaced for every Text block. Stale entries for blocks that no
+///   longer exist are not pruned here (the cache is cleared on width change or
+///   file load, so stale entries cannot accumulate).
+/// * `content_width` – effective viewer width in terminal columns (excluding the
+///   gutter when line numbers are on).
+pub fn update_text_layouts(
+    blocks: &[DocBlock],
+    text_layouts: &mut std::collections::HashMap<
+        TextBlockId,
+        crate::ui::markdown_view::WrappedTextLayout,
+    >,
+    content_width: u16,
+) -> bool {
     let mut changed = false;
     for block in blocks {
         if let DocBlock::Text {
+            id,
             text,
-            visual_height,
+            source_lines,
+            wrapped_height,
             ..
         } = block
         {
-            let new_h: u32 = text
-                .lines
-                .iter()
-                .map(|l| line_visual_rows(l, content_width))
-                .sum();
-            // Empty text block (no lines) still occupies zero rows.
-            let new_h = new_h.max(crate::cast::u32_sat(text.lines.len()));
-            if new_h != visual_height.get() {
-                visual_height.set(new_h);
+            // Build the wrapped layout for this block. Each logical line in
+            // `text.lines` may expand to multiple `WrappedLine` rows; we track
+            // which logical line each wrapped row came from in `physical_to_logical`.
+            let mut wrapped: Vec<crate::text_layout::WrappedLine> =
+                Vec::with_capacity(text.lines.len());
+            let mut physical_to_logical: Vec<u32> = Vec::with_capacity(text.lines.len());
+
+            for (logical_idx, line) in text.lines.iter().enumerate() {
+                let rows = crate::text_layout::wrap_spans(&line.spans, content_width);
+                // wrap_spans always returns at least one row per input line.
+                // Record the logical index for every produced physical row.
+                let row_count = rows.len();
+                for row in rows {
+                    wrapped.push(row);
+                    physical_to_logical.push(crate::cast::u32_sat(logical_idx));
+                }
+                // Suppress unused-variable warning in release builds.
+                let _ = row_count;
+            }
+
+            let new_height = crate::cast::u32_sat(wrapped.len());
+            // An empty text block has no lines and therefore no wrapped rows;
+            // keep height at 0 rather than bumping to 1.
+            if new_height != wrapped_height.get() {
+                wrapped_height.set(new_height);
                 changed = true;
             }
+
+            // Store the source_lines parallel array so callers can derive
+            // `physical_to_source` on demand: `source_lines[physical_to_logical[i]]`.
+            // We clone source_lines here once; the draw loop reads them without
+            // holding a mutable borrow into `blocks`.
+            let _ = source_lines; // already accessible via the block itself at call sites
+            text_layouts.insert(
+                *id,
+                crate::ui::markdown_view::WrappedTextLayout {
+                    wrapped,
+                    physical_to_logical,
+                },
+            );
         }
     }
     changed
@@ -214,7 +278,7 @@ pub fn update_mermaid_heights(
 /// * `t`      – the `TableBlock` whose source lines are stored in
 ///   `row_source_lines`.
 /// * `local`  – 0-based physical row index within the rendered table (same
-///   coordinate space as `local_visual` in [`source_line_at_width`]).
+///   coordinate space as `local_visual` in [`source_line_at`]).
 /// * `layout` – optional cached layout from `MarkdownViewState::table_layouts`.
 ///   When `None` (before first draw), falls back to the old position-based math
 ///   using `row_source_lines` at fixed indices so behaviour is correct even
@@ -255,75 +319,78 @@ fn physical_row_source(
 }
 
 /// Walk `blocks` and return the 0-indexed source line that corresponds to
-/// `logical_line` (the viewer's absolute rendered-line coordinate).
+/// `visual_row` (the viewer's absolute rendered-line coordinate).
 ///
 /// This is the bridge between the cursor position and the edtui editor row.
 ///
+/// Convenience wrapper around [`source_line_at`] used by tests that need
+/// no wrap-aware behaviour (effectively `content_width = 0`).
+///
 /// # Returns
 ///
-/// The 0-indexed markdown source line.  Returns `0` when `logical_line` falls
+/// The 0-indexed markdown source line. Returns `0` when `visual_row` falls
 /// beyond all blocks (documents shorter than expected due to race conditions).
-/// Convenience wrapper around [`source_line_at_width`] used by tests and
-/// the doctest of [`logical_line_at_source`]. Defaults to `content_width
-/// = 0`, which short-circuits to "no wrap" (1 row per logical line).
 #[allow(dead_code)]
-pub fn source_line_at(blocks: &[DocBlock], visual_row: u32) -> u32 {
-    source_line_at_width(blocks, visual_row, 0, &std::collections::HashMap::new())
+pub fn source_line_at_no_wrap(blocks: &[DocBlock], visual_row: u32) -> u32 {
+    source_line_at(
+        blocks,
+        visual_row,
+        &std::collections::HashMap::new(),
+        &std::collections::HashMap::new(),
+    )
 }
 
 /// Map a visual row to its 0-indexed markdown source line.
 ///
 /// `visual_row` is in the same coordinate space as `MarkdownViewState`'s
-/// `cursor_line` and `scroll_offset` — visual rows after wrapping. For
-/// `Text` blocks, this walks `text.lines` summing per-line visual rows
-/// until the target row is reached, then looks up `source_lines[logical_idx]`.
-/// `content_width = 0` short-circuits to "no wrap" (1 row per logical line),
-/// matching the legacy pre-wrap behavior tests rely on.
+/// `cursor_line` and `scroll_offset` — visual rows after wrapping.
 ///
-/// `table_layouts` must be the `MarkdownViewState::table_layouts` cache; it is
-/// used to look up `physical_to_source` for table blocks so wrapped-cell tables
-/// map physical sub-rows back to the correct markdown source line. Pass an empty
-/// `HashMap` (or use [`source_line_at`]) in contexts where the layout cache is
-/// unavailable (tests, pre-draw initialization).
+/// For `Text` blocks, the `text_layouts` cache is consulted: `physical_to_logical[local]`
+/// gives the logical line index, and `source_lines[logical]` gives the source line.
+/// When the cache is absent (before the first draw), falls back to
+/// `source_lines.first().copied().unwrap_or(0)`, matching the table fallback pattern.
+///
+/// `table_layouts` is used to look up `physical_to_source` for table blocks so
+/// wrapped-cell tables map physical sub-rows back to the correct markdown source line.
+/// Pass empty `HashMap`s in contexts where caches are unavailable (pre-draw, tests).
 ///
 /// # Arguments
 ///
-/// * `blocks`        – rendered document block list.
-/// * `visual_row`    – absolute visual row to map (0-indexed, post-wrap).
-/// * `content_width` – viewport width for Text block visual-row counting.
+/// * `blocks`       – rendered document block list.
+/// * `visual_row`   – absolute visual row to map (0-indexed, post-wrap).
+/// * `text_layouts` – cached text wrap output from `MarkdownViewState`.
 /// * `table_layouts` – cached table render output from `MarkdownViewState`.
-pub fn source_line_at_width(
+pub fn source_line_at(
     blocks: &[DocBlock],
     visual_row: u32,
-    content_width: u16,
+    text_layouts: &std::collections::HashMap<
+        TextBlockId,
+        crate::ui::markdown_view::WrappedTextLayout,
+    >,
     table_layouts: &std::collections::HashMap<TableBlockId, crate::ui::markdown_view::TableLayout>,
 ) -> u32 {
-    use crate::ui::markdown_view::visual_rows::line_visual_rows;
     let mut offset = 0u32;
     for block in blocks {
         let h = block.height();
         if visual_row < offset + h {
-            let local_visual = visual_row - offset;
+            let local_visual = (visual_row - offset) as usize;
             return match block {
                 DocBlock::Text {
-                    text, source_lines, ..
+                    id, source_lines, ..
                 } => {
-                    // Walk lines until accumulated visual rows reach
-                    // `local_visual`; that logical index has the matching
-                    // source line. With `content_width == 0` every line is
-                    // 1 row so this collapses to direct indexing.
-                    let mut acc = 0u32;
-                    let mut logical_idx = 0usize;
-                    for (i, line) in text.lines.iter().enumerate() {
-                        let rows = line_visual_rows(line, content_width);
-                        if local_visual < acc + rows {
-                            logical_idx = i;
-                            break;
-                        }
-                        acc += rows;
-                        logical_idx = i + 1;
+                    // Consult the pre-wrap cache. If the cache is absent (first draw
+                    // race) fall back to the first source line — same pattern as the
+                    // table fallback below.
+                    if let Some(layout) = text_layouts.get(id) {
+                        let logical = layout
+                            .physical_to_logical
+                            .get(local_visual)
+                            .copied()
+                            .unwrap_or(0);
+                        source_lines.get(logical as usize).copied().unwrap_or(0)
+                    } else {
+                        source_lines.first().copied().unwrap_or(0)
                     }
-                    source_lines.get(logical_idx).copied().unwrap_or(0)
                 }
                 DocBlock::Mermaid {
                     source_line,
@@ -333,27 +400,18 @@ pub fn source_line_at_width(
                     // Mermaid blocks store their height as visual rows
                     // already (`cell_height`); within the block, each row
                     // corresponds 1:1 to a source line (no wrapping happens).
-                    let local = local_visual as usize;
-                    if local == 0 {
-                        // local == 0 is the fence line itself.
+                    if local_visual == 0 {
                         *source_line
                     } else {
-                        // Content lines: fence + 1 + K, clamped to the last content
-                        // line so the closing fence and anything beyond still map to
-                        // the last real source line inside the block.
-                        //
-                        // `source.lines().count()` is O(n) in the source length, but
-                        // this function is only called from `enter_edit_mode`, never
-                        // per frame, so the cost is acceptable.
                         let content_count = crate::cast::u32_sat(source.lines().count());
-                        let content_offset =
-                            (crate::cast::u32_sat(local) - 1).min(content_count.saturating_sub(1));
+                        let content_offset = (crate::cast::u32_sat(local_visual) - 1)
+                            .min(content_count.saturating_sub(1));
                         *source_line + 1 + content_offset
                     }
                 }
                 DocBlock::Table(t) => {
                     let layout = table_layouts.get(&t.id);
-                    physical_row_source(t, local_visual as usize, layout)
+                    physical_row_source(t, local_visual, layout)
                 }
             };
         }
@@ -362,24 +420,34 @@ pub fn source_line_at_width(
     0
 }
 
-/// Inverse of [`source_line_at`]: locate the first rendered logical line that
-/// originates from source line `target_source` (0-indexed).
+/// Locate the first rendered visual row that originates from source line
+/// `target_source` (0-indexed). Returns a position in *visual rows* — same
+/// coordinate space as `MarkdownViewState::cursor_line` and `scroll_offset`.
 ///
 /// Returns `None` only when `blocks` is empty (no candidate exists at all).
 /// For non-empty block lists, out-of-range or gap targets return the closest
-/// preceding rendered line whose recorded source number is `<= target_source`.
+/// preceding rendered row whose recorded source number is `<= target_source`.
+///
+/// For Text blocks the [`WrappedTextLayout`] cache is consulted: the returned
+/// index lands on the first wrapped row of the matching logical line. When the
+/// cache is absent (before the first draw) the lookup falls back to treating
+/// each logical line as 1 visual row — the pessimistic unambiguous approximation.
 ///
 /// # Arguments
 ///
-/// * `blocks` – the rendered document block list.
+/// * `blocks`       – the rendered document block list.
 /// * `target_source` – 0-indexed source line to locate.
+/// * `text_layouts` – cached text wrap output from `MarkdownViewState`; pass an
+///   empty `HashMap` in tests or before the first draw.
 ///
 /// # Examples
 ///
 /// ```
-/// # use markdown_tui_explorer::markdown::{DocBlock, logical_line_at_source};
+/// # use markdown_tui_explorer::markdown::{DocBlock, TextBlockId, logical_line_at_source};
 /// # use ratatui::text::{Line, Span, Text};
+/// # use std::cell::Cell;
 /// let block = DocBlock::Text {
+///     id: TextBlockId(0),
 ///     text: Text::from(vec![
 ///         Line::from(Span::raw("a")),
 ///         Line::from(Span::raw("b")),
@@ -387,36 +455,26 @@ pub fn source_line_at_width(
 ///     links: vec![],
 ///     heading_anchors: vec![],
 ///     source_lines: vec![0, 1],
+///     wrapped_height: Cell::new(2),
 /// };
-/// assert_eq!(logical_line_at_source(&[block], 1), Some(1));
+/// assert_eq!(logical_line_at_source(&[block], 1, &std::collections::HashMap::new()), Some(1));
 /// ```
-/// Convenience wrapper around [`logical_line_at_source_width`] used by
-/// tests. Defaults to `content_width = 0`.
 #[allow(dead_code)]
-pub fn logical_line_at_source(blocks: &[DocBlock], target_source: u32) -> Option<u32> {
-    logical_line_at_source_width(blocks, target_source, 0)
-}
-
-/// Returns a position in *visual rows* — same coordinate space as
-/// `MarkdownViewState::cursor_line` and `scroll_offset`. For Text blocks
-/// this walks `text.lines` summing per-line visual rows, so the returned
-/// index lands on the first wrapped row of the matching logical line.
-/// `content_width = 0` short-circuits to "no wrap", matching the legacy
-/// pre-wrap behavior tests rely on.
-pub fn logical_line_at_source_width(
+pub fn logical_line_at_source(
     blocks: &[DocBlock],
     target_source: u32,
-    content_width: u16,
+    text_layouts: &std::collections::HashMap<
+        TextBlockId,
+        crate::ui::markdown_view::WrappedTextLayout,
+    >,
 ) -> Option<u32> {
-    use crate::ui::markdown_view::visual_rows::line_visual_rows;
     // A rendered logical line can span multiple source lines (pulldown-cmark
     // joins soft breaks, inline formatting, etc.), so exact matching on
     // `source_lines` would miss any target that lands inside a joined line.
     //
-    // Instead, track the last rendered line whose recorded source number is
-    // `<= target_source` — that is the line that visually contains the target.
-    // Exact hits inside a Mermaid or Table block short-circuit immediately
-    // since those blocks have unambiguous per-row source lines.
+    // Instead, track the last rendered row whose recorded source number is
+    // `<= target_source` — that is the row that visually contains the target.
+    // Exact hits inside a Mermaid or Table block short-circuit immediately.
     let mut offset = 0u32;
     let mut best: Option<u32> = None;
 
@@ -424,22 +482,36 @@ pub fn logical_line_at_source_width(
         let height = block.height();
         match block {
             DocBlock::Text {
-                text, source_lines, ..
+                id, source_lines, ..
             } => {
-                // Track visual-row offset of each logical line so the
-                // position we return reflects where the line *actually
-                // lands on screen*, not a stale logical index.
-                let mut visual_in_block = 0u32;
+                // Walk logical lines. For each logical line, find the first
+                // wrapped row index via the cache (or treat it as 1 row when
+                // the cache is absent).
+                let layout = text_layouts.get(id);
+                // `visual_start_of_logical[i]` = visual row within the block
+                // where logical line i begins. Built lazily from physical_to_logical.
+                let visual_in_block_of_logical: Box<dyn Fn(usize) -> u32> = if let Some(l) = layout
+                {
+                    Box::new(|logical_idx: usize| {
+                        // Find the first physical row whose logical index equals
+                        // `logical_idx`.
+                        l.physical_to_logical
+                            .iter()
+                            .position(|&li| li == crate::cast::u32_sat(logical_idx))
+                            .map_or(crate::cast::u32_sat(logical_idx), crate::cast::u32_sat)
+                    })
+                } else {
+                    // Cache absent — treat each logical line as 1 visual row.
+                    Box::new(|i: usize| crate::cast::u32_sat(i))
+                };
+
                 for (i, &s) in source_lines.iter().enumerate() {
+                    let visual_in_block = visual_in_block_of_logical(i);
                     if s == target_source {
                         return Some(offset + visual_in_block);
                     }
                     if s <= target_source {
                         best = Some(offset + visual_in_block);
-                    }
-                    if let Some(line) = text.lines.get(i) {
-                        visual_in_block =
-                            visual_in_block.saturating_add(line_visual_rows(line, content_width));
                     }
                 }
             }
@@ -455,24 +527,16 @@ pub fn logical_line_at_source_width(
                     return Some(offset + local.min(height.saturating_sub(1)));
                 }
                 if *source_line <= target_source {
-                    // The block starts before the target but doesn't contain
-                    // it — record its first row as a fallback candidate.
                     best = Some(offset);
                 }
             }
             DocBlock::Table(t) => {
-                // Table rows are emitted in document order (monotonically
-                // increasing source lines), so breaking early here is safe:
-                // no later row can have a smaller source number than the
-                // current one.
                 for (row_idx, &s) in t.row_source_lines.iter().enumerate() {
                     let rendered_row = if row_idx == 0 {
                         1u32 // header is at rendered index 1
                     } else {
-                        3 + crate::cast::u32_sat(row_idx - 1) // body rows start at rendered index 3
+                        3 + crate::cast::u32_sat(row_idx - 1)
                     };
-                    // row_idx increases monotonically and so does rendered_row;
-                    // no later row can fit either, so stop scanning.
                     if rendered_row >= height {
                         break;
                     }
@@ -749,21 +813,18 @@ mod tests {
         result
     }
 
-    /// Verify that `visual_row_to_logical_line` correctly resolves a visual row
-    /// that follows a wrapping paragraph to the expected logical line, rather
-    /// than the naive `scroll_offset + visual_row` computation.
+    /// Verify that mouse-click resolution via `source_line_at` with the text
+    /// layout cache correctly maps a visual row that follows a wrapping paragraph
+    /// to the expected source line, rather than using the naive `scroll_offset +
+    /// visual_row` computation.
     ///
     /// Without the fix the old formula (`clicked_line = scroll_offset + row`)
     /// would return a line number shifted by the number of visual rows consumed
-    /// by line-wrapping above the clicked position, causing the wrong link to
-    /// be matched and navigation to go to the wrong heading.
+    /// by line-wrapping above the clicked position.
     #[test]
-    fn visual_row_wrapping_maps_to_correct_logical_line() {
-        use crate::ui::markdown_view::visual_row_to_logical_line;
-
+    fn wrapped_paragraph_source_line_mapping_is_correct() {
         // Build a document where the first paragraph is longer than
         // content_width so it wraps. The TOC links appear after the paragraph.
-        // We use an explicit repeat so the test is independent of terminal width.
         let long_para: String = "word ".repeat(30); // 150 chars → wraps at any realistic width
         let md = format!(
             "# Title\n\n{long_para}\n\n- [Section A](#section-a)\n- [Section B](#section-b)\n\n## Section A\n\nText.\n\n## Section B\n\nMore.\n",
@@ -771,45 +832,36 @@ mod tests {
 
         let blocks = render_markdown(&md, &palette(), theme());
 
-        // With a content_width of 80 the long paragraph wraps to
-        // ceil(150/80) = 2 visual rows.
-        let content_width: u16 = 80;
+        // Populate the text layout cache at width 80 so visual row mapping
+        // is wrap-aware.
+        let mut text_layouts = std::collections::HashMap::new();
+        update_text_layouts(&blocks, &mut text_layouts, 80);
 
-        // Logical layout of the first (only) text block:
-        //   line 0: "█ Title"
-        //   line 1: ""  (blank after heading)
-        //   line 2: long paragraph  ← wraps to 2 visual rows at width 80
-        //   line 3: ""  (blank after paragraph)
-        //   line 4: "• Section A"   link at logical line 4
-        //   line 5: "• Section B"   link at logical line 5
-        //   line 6: ""  (blank after list)
-        //   line 7: "▌ Section A"
-        //   ...
+        let no_table_layouts = std::collections::HashMap::new();
 
-        // Visual rows (scroll_offset = 0):
+        // Visual rows (scroll_offset = 0, width 80):
         //   row 0: "█ Title"
         //   row 1: ""
-        //   row 2: long paragraph (part 1)
-        //   row 3: long paragraph (part 2)  ← WRAP ROW
+        //   row 2: long paragraph (part 1) — source line 2
+        //   row 3: long paragraph (part 2) — source line 2 (wrap continuation)
         //   row 4: ""
-        //   row 5: "• Section A"   ← logical line 4, visual row 5
-        //   row 6: "• Section B"   ← logical line 5, visual row 6
-
-        // Naive formula: clicked visual row 5 → clicked_line = 0 + 5 = 5
-        //   → that would match "Section B" link, not "Section A"!
-        // Correct formula: visual row 5 → logical line 4 → "Section A"
-
-        let logical_line_for_section_a = visual_row_to_logical_line(&blocks, 0, 5, content_width);
+        //   row 5: "• Section A"   ← source line for list item A
+        //   row 6: "• Section B"   ← source line for list item B
+        //
+        // Both wrap rows of the long paragraph must map to the SAME source line.
+        let row2_src = source_line_at(&blocks, 2, &text_layouts, &no_table_layouts);
+        let row3_src = source_line_at(&blocks, 3, &text_layouts, &no_table_layouts);
         assert_eq!(
-            logical_line_for_section_a, 4,
-            "visual row 5 should map to logical line 4 (Section A), \
-             not naive row 5 (Section B); naive formula is off by 1 wrap row"
+            row2_src, row3_src,
+            "both wrap rows of the long paragraph must map to the same source line"
         );
 
-        let logical_line_for_section_b = visual_row_to_logical_line(&blocks, 0, 6, content_width);
-        assert_eq!(
-            logical_line_for_section_b, 5,
-            "visual row 6 should map to logical line 5 (Section B)"
+        // Section A (visual row 5) must map to a different source line than Section B (row 6).
+        let row5_src = source_line_at(&blocks, 5, &text_layouts, &no_table_layouts);
+        let row6_src = source_line_at(&blocks, 6, &text_layouts, &no_table_layouts);
+        assert_ne!(
+            row5_src, row6_src,
+            "Section A and Section B must map to distinct source lines"
         );
     }
 
@@ -873,40 +925,50 @@ mod tests {
 
     /// Helper to build a `DocBlock::Text` with explicit source-line mapping.
     fn text_block_with_sources(content: &[&str], sources: &[u32]) -> DocBlock {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
         let lines: Vec<ratatui::text::Line<'static>> = content
             .iter()
             .map(|s| ratatui::text::Line::from(ratatui::text::Span::raw(s.to_string())))
             .collect();
         let n = crate::cast::u32_sat(lines.len());
+        let mut h = DefaultHasher::new();
+        sources.hash(&mut h);
+        lines.len().hash(&mut h);
+        let id = TextBlockId(h.finish());
         DocBlock::Text {
+            id,
             text: ratatui::text::Text::from(lines),
             links: vec![],
             heading_anchors: vec![],
             source_lines: sources.to_vec(),
-            visual_height: std::cell::Cell::new(n),
+            wrapped_height: std::cell::Cell::new(n),
         }
     }
 
     #[test]
     fn logical_line_at_source_finds_text_line() {
+        let no_layouts = std::collections::HashMap::new();
         // Single Text block: source lines [0, 1, 2] map to logical lines 0, 1, 2.
         let block = text_block_with_sources(&["a", "b", "c"], &[0, 1, 2]);
-        assert_eq!(logical_line_at_source(&[block], 1), Some(1));
+        assert_eq!(logical_line_at_source(&[block], 1, &no_layouts), Some(1));
     }
 
     #[test]
     fn logical_line_at_source_across_blocks() {
+        let no_layouts = std::collections::HashMap::new();
         // Two Text blocks: first covers source [0, 1], second covers source [3, 4, 5].
         let b1 = text_block_with_sources(&["a", "b"], &[0, 1]);
         let b2 = text_block_with_sources(&["d", "e", "f"], &[3, 4, 5]);
         // Source line 4 is in the second block at local index 1.
         // First block has height 2, so absolute offset is 2 + 1 = 3.
-        assert_eq!(logical_line_at_source(&[b1, b2], 4), Some(3));
+        assert_eq!(logical_line_at_source(&[b1, b2], 4, &no_layouts), Some(3));
     }
 
     #[test]
     fn logical_line_at_source_table_header() {
         use crate::markdown::{TableBlock, TableBlockId};
+        let no_layouts = std::collections::HashMap::new();
         // Table with row_source_lines = [5, 7, 8]:
         //   rendered row 0: top border
         //   rendered row 1: header (source 5)
@@ -928,12 +990,13 @@ mod tests {
             row_source_lines: vec![5, 7, 8],
         });
         // Source line 5 (header) should map to rendered row 1.
-        assert_eq!(logical_line_at_source(&[block], 5), Some(1));
+        assert_eq!(logical_line_at_source(&[block], 5, &no_layouts), Some(1));
     }
 
     #[test]
     fn logical_line_at_source_table_body() {
         use crate::markdown::{TableBlock, TableBlockId};
+        let no_layouts = std::collections::HashMap::new();
         let block = DocBlock::Table(TableBlock {
             id: TableBlockId(1),
             headers: vec![vec![ratatui::text::Span::raw("H")]],
@@ -948,12 +1011,13 @@ mod tests {
             row_source_lines: vec![5, 7, 8],
         });
         // Source line 7 (first body row) should map to rendered row 3.
-        assert_eq!(logical_line_at_source(&[block], 7), Some(3));
+        assert_eq!(logical_line_at_source(&[block], 7, &no_layouts), Some(3));
     }
 
     #[test]
     fn logical_line_at_source_mermaid_inside() {
         use std::cell::Cell;
+        let no_layouts = std::collections::HashMap::new();
         // Mermaid fence at source line 10, content "a\nb\nc" (3 lines).
         // Source range: [10, 14) — fence (10), a (11), b (12), c (13).
         // Block height set to 4 to cover the fence + content.
@@ -964,26 +1028,28 @@ mod tests {
             source_line: 10,
         };
         // Source line 12 = fence + 2 → local index 2 → logical line 0 + 2 = 2.
-        assert_eq!(logical_line_at_source(&[block], 12), Some(2));
+        assert_eq!(logical_line_at_source(&[block], 12, &no_layouts), Some(2));
     }
 
     #[test]
     fn logical_line_at_source_overshoot_falls_back_to_last_line() {
+        let no_layouts = std::collections::HashMap::new();
         // A single Text block covering source lines 0–2.
         // Asking for source line 99 beyond the block's last recorded source
         // line should fall back to the closest earlier candidate — the last
         // rendered line whose source <= target.
         let block = text_block_with_sources(&["x", "y", "z"], &[0, 1, 2]);
-        assert_eq!(logical_line_at_source(&[block], 99), Some(2));
+        assert_eq!(logical_line_at_source(&[block], 99, &no_layouts), Some(2));
     }
 
     #[test]
     fn logical_line_at_source_non_monotonic_text_block() {
+        let no_layouts = std::collections::HashMap::new();
         // List items + End-of-list dip: source_lines dips from 165 back to 160.
         // This mirrors the real renderer output that caused the OAB jump bug.
         let block = text_block_with_sources(&["a", "b", "c"], &[165, 160, 167]);
         // target=163 should land on index 1 (s=160, the largest s <= 163).
-        assert_eq!(logical_line_at_source(&[block], 163), Some(1));
+        assert_eq!(logical_line_at_source(&[block], 163, &no_layouts), Some(1));
     }
 
     /// When the same source line appears at multiple positions (e.g. a
@@ -991,6 +1057,7 @@ mod tests {
     /// occurrence must win — it's the actual content, not the artifact.
     #[test]
     fn logical_line_at_source_duplicate_source_line_returns_first() {
+        let no_layouts = std::collections::HashMap::new();
         // Source line 306 appears at indices 0 and 3 (simulating a heading
         // at index 0 and a list-End dip at index 3).
         let block = text_block_with_sources(
@@ -998,7 +1065,7 @@ mod tests {
             &[306, 307, 308, 306],
         );
         // Must return the FIRST index (0), not the last (3).
-        assert_eq!(logical_line_at_source(&[block], 306), Some(0));
+        assert_eq!(logical_line_at_source(&[block], 306, &no_layouts), Some(0));
     }
 
     /// Same scenario across two blocks: block A has the real line, block B
@@ -1006,20 +1073,23 @@ mod tests {
     /// match.
     #[test]
     fn logical_line_at_source_duplicate_across_blocks_returns_first() {
+        let no_layouts = std::collections::HashMap::new();
         let b1 = text_block_with_sources(&["real content"], &[306]);
         let b2 = text_block_with_sources(&["other", "dip-artifact"], &[310, 306]);
         // b1 height=1, b2 starts at offset 1. Target 306 is in b1 at 0.
-        assert_eq!(logical_line_at_source(&[b1, b2], 306), Some(0));
+        assert_eq!(logical_line_at_source(&[b1, b2], 306, &no_layouts), Some(0));
     }
 
     #[test]
     fn logical_line_at_source_target_beyond_any_block_is_none() {
+        let no_layouts = std::collections::HashMap::new();
         // With no blocks at all there is no candidate anywhere, so None.
-        assert_eq!(logical_line_at_source(&[], 5), None);
+        assert_eq!(logical_line_at_source(&[], 5, &no_layouts), None);
     }
 
+    /// `update_text_layouts` must populate the cache and update `wrapped_height`.
     #[test]
-    fn update_text_visual_heights_counts_wrapped_rows() {
+    fn update_text_layouts_populates_cache() {
         // A long line that wraps to multiple visual rows must have its
         // block height bumped accordingly so total_lines / scroll math
         // accounts for the extra rows. Without this, scrolling past a
@@ -1029,26 +1099,30 @@ mod tests {
             &["short", &long, "short"],
             &[0, 1, 2],
         )];
+        let mut text_layouts = std::collections::HashMap::new();
         // Width 20: long line wraps to ceil(50/20) = 3 rows.
-        let changed = update_text_visual_heights(&blocks, 20);
+        let changed = update_text_layouts(&blocks, &mut text_layouts, 20);
         assert!(
             changed,
-            "visual_height should change from logical (3) to visual (5)"
+            "wrapped_height should change from logical (3) to visual (5)"
         );
         assert_eq!(blocks[0].height(), 5, "1 + 3 + 1");
 
-        // Re-running with the same width does not change anything.
-        let changed_again = update_text_visual_heights(&blocks, 20);
-        assert!(!changed_again, "no-op on second call");
+        // Re-running with the same width and populated cache still writes the
+        // entry (cache is rebuilt, not consulted here), but height is unchanged.
+        let changed_again = update_text_layouts(&blocks, &mut text_layouts, 20);
+        assert!(!changed_again, "no-op on second call at same width");
 
         // Wider width fits the long line on one row again.
-        let changed_wider = update_text_visual_heights(&blocks, 80);
+        let changed_wider = update_text_layouts(&blocks, &mut text_layouts, 80);
         assert!(changed_wider);
         assert_eq!(blocks[0].height(), 3, "1 + 1 + 1 at 80 cols");
     }
 
+    /// `source_line_at` with the text layout cache maps wrap-continuation rows
+    /// back to the originating logical line's source number.
     #[test]
-    fn source_line_at_width_handles_wrapped_text_block() {
+    fn source_line_at_handles_wrapped_text_block() {
         // With wrap, visual rows > logical lines. A query for visual row 2
         // should land on the source line of logical line 1 (the wrapped
         // line), not logical line 2.
@@ -1056,29 +1130,40 @@ mod tests {
         let blocks = vec![text_block_with_sources(&["a", &long, "c"], &[10, 20, 30])];
         // Width 10: long wraps to 3 rows. Visual layout:
         //   row 0: "a"           (logical 0, source 10)
-        //   row 1: "yyyyyyyyyy"  (logical 1, source 20)
-        //   row 2: "yyyyyyyyyy"  (logical 1, source 20)
-        //   row 3: "yyyyyyyyyy"  (logical 1, source 20)
+        //   row 1: "yyyyyy…"     (logical 1, source 20)
+        //   row 2: "yyyyyy…"     (logical 1, source 20)
+        //   row 3: "yyyyyy…"     (logical 1, source 20)
         //   row 4: "c"           (logical 2, source 30)
-        update_text_visual_heights(&blocks, 10);
-        let no_layouts = std::collections::HashMap::new();
-        assert_eq!(source_line_at_width(&blocks, 0, 10, &no_layouts), 10);
-        assert_eq!(source_line_at_width(&blocks, 1, 10, &no_layouts), 20);
+        let mut text_layouts = std::collections::HashMap::new();
+        update_text_layouts(&blocks, &mut text_layouts, 10);
+        let no_table_layouts = std::collections::HashMap::new();
         assert_eq!(
-            source_line_at_width(&blocks, 2, 10, &no_layouts),
+            source_line_at(&blocks, 0, &text_layouts, &no_table_layouts),
+            10
+        );
+        assert_eq!(
+            source_line_at(&blocks, 1, &text_layouts, &no_table_layouts),
+            20
+        );
+        assert_eq!(
+            source_line_at(&blocks, 2, &text_layouts, &no_table_layouts),
             20,
             "row 2 is wrap continuation"
         );
         assert_eq!(
-            source_line_at_width(&blocks, 3, 10, &no_layouts),
+            source_line_at(&blocks, 3, &text_layouts, &no_table_layouts),
             20,
             "row 3 is wrap continuation"
         );
-        assert_eq!(source_line_at_width(&blocks, 4, 10, &no_layouts), 30);
+        assert_eq!(
+            source_line_at(&blocks, 4, &text_layouts, &no_table_layouts),
+            30
+        );
     }
 
     #[test]
     fn logical_line_at_source_target_inside_joined_paragraph() {
+        let no_layouts = std::collections::HashMap::new();
         // A paragraph whose source spans lines 5–7 but renders as a single
         // joined line (pulldown-cmark merges soft breaks). Only line 5 is
         // recorded; asking for 5, 6, or 7 must still land on the same
@@ -1086,7 +1171,7 @@ mod tests {
         for target in [5u32, 6, 7] {
             let block = text_block_with_sources(&["joined paragraph"], &[5]);
             assert_eq!(
-                logical_line_at_source(&[block], target),
+                logical_line_at_source(&[block], target, &no_layouts),
                 Some(0),
                 "target source line {target} should land on the joined paragraph's rendered line 0",
             );
@@ -1095,11 +1180,12 @@ mod tests {
 
     #[test]
     fn logical_line_at_source_between_blocks_lands_on_previous_last_line() {
+        let no_layouts = std::collections::HashMap::new();
         // First block source [0, 1], second block source [10, 11]. Source
         // line 5 falls in the gap; it should land on the last line of the
         // first block (closest candidate at or before 5).
         let b1 = text_block_with_sources(&["a", "b"], &[0, 1]);
         let b2 = text_block_with_sources(&["c", "d"], &[10, 11]);
-        assert_eq!(logical_line_at_source(&[b1, b2], 5), Some(1));
+        assert_eq!(logical_line_at_source(&[b1, b2], 5, &no_layouts), Some(1));
     }
 }

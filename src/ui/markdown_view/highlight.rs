@@ -204,41 +204,34 @@ pub fn extract_line_text_range(line: &Line<'static>, start_col: u16, end_col: u1
     out
 }
 
-/// Visual-row aware cursor / selection highlight for Text blocks rendered
-/// via `Paragraph::scroll`.
+/// Cursor / selection highlight for Text blocks whose lines are already
+/// pre-wrapped (Phase 3+).
 ///
-/// The draw loop now feeds Paragraph the FULL text of each Text block and
-/// scrolls past the rows above the viewport, instead of slicing logical
-/// lines. That keeps the wrap math consistent with `block.height()` (also
-/// visual rows) — but it means highlights have to operate on the original
-/// logical lines, not on a sliced view.
+/// After Phase 3 the draw loop passes pre-wrapped [`crate::text_layout::WrappedLine`]
+/// rows converted to ratatui `Line`s. Each element of `lines` is one physical
+/// terminal row — the same coordinate space as `cursor_line` and `block_start`.
+/// The mapping is therefore **identity**: visual row `i` within the block is
+/// `lines[i]`, with no conversion through `visual_rows`.
 ///
-/// This helper takes the visual coordinate space for `cursor_line` and
-/// `block_start`/`block_end`, walks the block's lines counting visual rows
-/// to find which logical line each cursor / selection row lands on, then
-/// patches the highlight onto that logical line. Paragraph's wrap then
-/// repaints the styled spans across whichever rendered rows they end up on.
+/// Do not merge with [`apply_block_highlight`] — Phase 3.5 work; risks
+/// regressing the table highlight path.
 ///
 /// # Arguments
 ///
-/// * `lines`         – mutable slice of the block's full logical lines.
-/// * `visual_mode`   – current visual selection (anchor/cursor in visual rows).
-/// * `cursor_line`   – cursor's absolute visual row.
-/// * `block_start`   – absolute visual row of the block's first row.
-/// * `block_end`     – absolute visual row exclusive (block_start + visual_height).
-/// * `content_width` – effective viewer width (excluding the gutter), used
-///   to mirror Paragraph's wrap when computing per-line rows.
-/// * `bg`            – background colour to apply.
+/// * `lines`       – mutable slice of the block's pre-wrapped physical rows.
+/// * `visual_mode` – current visual selection (anchor/cursor in visual rows).
+/// * `cursor_line` – cursor's absolute visual row.
+/// * `block_start` – absolute visual row of the block's first row.
+/// * `block_end`   – absolute visual row exclusive (`block_start + wrapped_height`).
+/// * `bg`          – background colour to apply.
 pub fn apply_visual_or_cursor_highlight(
     lines: &mut [Line<'static>],
     visual_mode: Option<VisualRange>,
     cursor_line: u32,
     block_start: u32,
     block_end: u32,
-    content_width: u16,
     bg: Color,
 ) {
-    use super::visual_rows::line_visual_rows;
     match visual_mode {
         Some(range) => {
             let top_visual = range.top_line();
@@ -249,42 +242,18 @@ pub fn apply_visual_or_cursor_highlight(
             if sel_top > sel_bot || block_end == 0 {
                 return;
             }
-            let sel_top_in_block = sel_top - block_start;
-            let sel_bot_in_block = sel_bot - block_start;
-            // Walk lines counting visual rows; highlight the logical line
-            // wherever its visual range overlaps the selection range.
-            // Char-mode column precision on the first/last logical line is
-            // dropped here — full-line painting matches the visual range
-            // semantics on a wrapped viewer (selecting "this row" of a long
-            // paragraph naturally selects the whole paragraph since rows
-            // within it aren't separable in the source).
-            // Collect targets first to avoid an iter() / patch() borrow
-            // conflict on `lines`.
-            let mut targets: Vec<usize> = Vec::new();
-            let mut acc = 0u32;
-            for (idx, line) in lines.iter().enumerate() {
-                let rows = line_visual_rows(line, content_width);
-                let line_top = acc;
-                let line_bot = acc + rows.saturating_sub(1);
-                acc += rows;
-                if line_top > sel_bot_in_block || line_bot < sel_top_in_block {
-                    continue;
-                }
-                targets.push(idx);
-            }
-            for idx in targets {
+            // Convert absolute visual rows to indices into `lines`.
+            let start_idx = (sel_top - block_start) as usize;
+            let end_idx = (sel_bot - block_start) as usize;
+            for idx in start_idx..=end_idx {
                 patch_cursor_highlight(lines, idx, bg);
             }
         }
         None => {
             if cursor_line >= block_start && cursor_line < block_end {
-                let cursor_visual_in_block = cursor_line - block_start;
-                let logical_idx = super::visual_rows::visual_row_to_logical_in_block_lines(
-                    lines,
-                    content_width,
-                    cursor_visual_in_block,
-                ) as usize;
-                patch_cursor_highlight(lines, logical_idx, bg);
+                // Identity mapping: cursor visual row within block = line index.
+                let idx = (cursor_line - block_start) as usize;
+                patch_cursor_highlight(lines, idx, bg);
             }
         }
     }

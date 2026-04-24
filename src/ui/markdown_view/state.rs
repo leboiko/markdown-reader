@@ -1,4 +1,4 @@
-use crate::markdown::{DocBlock, TableBlockId};
+use crate::markdown::{DocBlock, TableBlockId, TextBlockId};
 use crate::theme::Palette;
 use ratatui::text::Text;
 use std::collections::HashMap;
@@ -150,6 +150,13 @@ pub struct MarkdownViewState {
     pub layout_width: u16,
     /// Per-table rendering cache keyed by `TableBlockId`.
     pub table_layouts: HashMap<TableBlockId, TableLayout>,
+    /// Per-text-block wrap cache keyed by [`TextBlockId`].
+    ///
+    /// Populated by [`crate::markdown::update_text_layouts`] on every layout-width
+    /// change. Cleared on file load and width change alongside `table_layouts`.
+    /// Consulted by draw, highlight, gutter, and cursor code so each call-site
+    /// gets the same pre-wrapped output without re-wrapping.
+    pub text_layouts: HashMap<TextBlockId, WrappedTextLayout>,
     /// All hyperlinks in the document with absolute display-line positions.
     pub links: Vec<AbsoluteLink>,
     /// All heading anchors in the document with absolute display-line positions.
@@ -168,39 +175,40 @@ impl MarkdownViewState {
     /// targets and the link picker stay aligned with what the user sees on
     /// screen.
     ///
-    /// `content_width` is the effective viewer width (excluding the gutter
-    /// when line numbers are on); used to translate logical line indices
-    /// stored on `LinkInfo` / `HeadingAnchor` into the visual rows actually
-    /// occupied by those lines after wrapping.
-    pub fn recompute_positions(&mut self, content_width: u16) {
-        use super::visual_rows::line_visual_rows;
+    /// Uses the `text_layouts` cache to translate logical line indices stored on
+    /// `LinkInfo` / `HeadingAnchor` into the visual rows actually occupied by
+    /// those lines after wrapping. When the cache is absent for a block (before
+    /// the first draw), the logical line index is used directly as a fallback.
+    pub fn recompute_positions(&mut self) {
         let mut abs_links: Vec<AbsoluteLink> = Vec::new();
         let mut abs_anchors: Vec<AbsoluteAnchor> = Vec::new();
         let mut block_offset = 0u32;
         for block in &self.rendered {
             if let DocBlock::Text {
-                text,
+                id,
                 links,
                 heading_anchors,
                 ..
             } = block
             {
-                // Cumulative visual-row offset of each logical line within
-                // this block. `visual_offset_of_logical[i]` is the visual
-                // row at which `text.lines[i]` begins.
-                let mut visual_offset_of_logical: Vec<u32> =
-                    Vec::with_capacity(text.lines.len() + 1);
-                let mut acc = 0u32;
-                visual_offset_of_logical.push(acc);
-                for line in &text.lines {
-                    acc = acc.saturating_add(line_visual_rows(line, content_width));
-                    visual_offset_of_logical.push(acc);
-                }
+                // Build a closure that maps a logical line index to its first
+                // visual row within the block using the pre-wrap cache.
+                let visual_row_of_logical = |logical: u32| -> u32 {
+                    if let Some(layout) = self.text_layouts.get(id) {
+                        // Find the first physical row whose logical index equals `logical`.
+                        layout
+                            .physical_to_logical
+                            .iter()
+                            .position(|&li| li == logical)
+                            .map_or(logical, crate::cast::u32_sat)
+                    } else {
+                        // Cache absent — treat each logical line as 1 visual row.
+                        logical
+                    }
+                };
+
                 for link in links {
-                    let visual_row = visual_offset_of_logical
-                        .get(link.line as usize)
-                        .copied()
-                        .unwrap_or(link.line);
+                    let visual_row = visual_row_of_logical(link.line);
                     abs_links.push(AbsoluteLink {
                         line: block_offset + visual_row,
                         col_start: link.col_start,
@@ -210,10 +218,7 @@ impl MarkdownViewState {
                     });
                 }
                 for ha in heading_anchors {
-                    let visual_row = visual_offset_of_logical
-                        .get(ha.line as usize)
-                        .copied()
-                        .unwrap_or(ha.line);
+                    let visual_row = visual_row_of_logical(ha.line);
                     abs_anchors.push(AbsoluteAnchor {
                         anchor: ha.anchor.clone(),
                         line: block_offset + visual_row,
@@ -247,11 +252,12 @@ impl MarkdownViewState {
         let blocks = crate::markdown::renderer::render_markdown(&content, palette, theme);
         self.total_lines = blocks.iter().map(crate::markdown::DocBlock::height).sum();
         self.rendered = blocks;
-        // No layout width yet — pass 0 so `line_visual_rows` short-circuits
-        // to "1 row per logical line", matching the pre-wrap heights stored
-        // by the renderer. The first `draw` call will recompute with the
-        // real width once the viewport rect is known.
-        self.recompute_positions(0);
+        // Recompute positions with an empty text_layouts cache (layout width 0 —
+        // not yet known). The fallback path treats each logical line as 1 visual
+        // row, matching the pre-wrap pessimistic heights set at render time. The
+        // first draw call will call update_text_layouts and then recompute_positions
+        // again with accurate wrapped heights.
+        self.recompute_positions();
         self.content = content;
         self.file_name = file_name;
         self.current_path = Some(path);
@@ -261,13 +267,14 @@ impl MarkdownViewState {
         // Always clear visual-line selection when loading a new file so the
         // previous document's selection doesn't appear in the new one.
         self.visual_mode = None;
-        // Invalidate table layout cache. The fresh DocBlock::Table values carry
-        // a pessimistic rendered_height that only becomes accurate once the
-        // draw loop runs layout_table; forcing a rebuild keeps the hint line
-        // and doc-search line numbers in sync after re-renders (e.g. on theme
-        // change, live reload, or session restore).
+        // Invalidate layout caches. Fresh DocBlock values carry pessimistic
+        // heights that only become accurate once the draw loop runs layout_table
+        // / update_text_layouts; forcing a rebuild keeps hint lines and
+        // doc-search line numbers in sync after re-renders (theme change, live
+        // reload, session restore).
         self.layout_width = 0;
         self.table_layouts.clear();
+        self.text_layouts.clear();
     }
 
     /// Move the cursor down by `n` logical lines, clamped to the last line.
@@ -345,82 +352,61 @@ impl MarkdownViewState {
         }
     }
 
-    /// Display width (in terminal cells) of the logical line at `cursor_line`.
+    /// Locate the block and local-visual-row position that `cursor_line` falls in.
     ///
-    /// Walks the rendered blocks to find the [`Line`] at `cursor_line` and sums
-    /// the display width of each span's content via `UnicodeWidthStr`. Returns 0
-    /// for empty lines or when `cursor_line` is out of range.
+    /// Returns `(id, local_visual)` where `id` is the `TextBlockId` of the
+    /// enclosing Text block and `local_visual` is the 0-based visual row within
+    /// that block. Returns `None` for Mermaid/Table blocks and out-of-range
+    /// positions.
     ///
-    /// Not cached — only called on key events, not per frame.
-    pub fn current_line_width(&self) -> u16 {
+    /// This is a shared helper for `current_line_width` and `current_line_text`
+    /// so both walk the block list exactly once.
+    fn cursor_block_and_local_visual(&self) -> Option<(TextBlockId, usize)> {
         let mut offset = 0u32;
         for block in &self.rendered {
             let h = block.height();
             if self.cursor_line < offset + h {
-                let local_visual = self.cursor_line - offset;
-                let width = match block {
-                    DocBlock::Text { text, .. } => {
-                        // `cursor_line` is in visual rows now (1.18.4) but
-                        // `text.lines` is still indexed by logical line —
-                        // walk the lines to convert. Without this, a cursor
-                        // sitting on a wrapped paragraph mapped past the
-                        // end of `text.lines`, returning width 0, which
-                        // forced `clamp_cursor_col` to reset `cursor_col`
-                        // to 0 on every `j`/`k` and clamped the Right arrow
-                        // to a no-op.
-                        let logical_idx = super::visual_rows::visual_row_to_logical_in_block(
-                            text,
-                            self.layout_width,
-                            local_visual,
-                        ) as usize;
-                        text.lines
-                            .get(logical_idx)
-                            .map_or(0, |l| crate::text_layout::measure(&l.spans) as usize)
-                    }
-                    // Mermaid and Table blocks have opaque content — treat them
-                    // as having no horizontal extent for cursor purposes.
-                    DocBlock::Mermaid { .. } | DocBlock::Table(_) => 0,
-                };
-                return crate::cast::u16_sat(width);
-            }
-            offset += h;
-        }
-        0
-    }
-
-    /// Joined span text of the logical line under the cursor, or `None` for
-    /// Mermaid / Table blocks (which have no per-cell cursor concept) and
-    /// blank/out-of-range positions.
-    ///
-    /// Used by the word-jump helpers to find whitespace-separated word
-    /// boundaries. Indexed by char position (display column on
-    /// ASCII-only lines, which covers the vast majority of prose markdown).
-    fn current_line_text(&self) -> Option<String> {
-        let mut offset = 0u32;
-        for block in &self.rendered {
-            let h = block.height();
-            if self.cursor_line < offset + h {
-                let local_visual = self.cursor_line - offset;
+                let local_visual = (self.cursor_line - offset) as usize;
                 return match block {
-                    DocBlock::Text { text, .. } => {
-                        let logical_idx = super::visual_rows::visual_row_to_logical_in_block(
-                            text,
-                            self.layout_width,
-                            local_visual,
-                        ) as usize;
-                        text.lines.get(logical_idx).map(|l| {
-                            l.spans
-                                .iter()
-                                .map(|s| s.content.as_ref())
-                                .collect::<String>()
-                        })
-                    }
+                    DocBlock::Text { id, .. } => Some((*id, local_visual)),
                     DocBlock::Mermaid { .. } | DocBlock::Table(_) => None,
                 };
             }
             offset += h;
         }
         None
+    }
+
+    /// Display width (in terminal cells) of the physical wrapped row at `cursor_line`.
+    ///
+    /// Consults `text_layouts` to map `cursor_line` (a visual row) to the
+    /// correct pre-wrapped [`crate::text_layout::WrappedLine`] and returns
+    /// its cached `width`. Returns 0 for Mermaid/Table blocks, empty lines,
+    /// or when the cursor is out of range.
+    ///
+    /// Not cached — only called on key events, not per frame.
+    pub fn current_line_width(&self) -> u16 {
+        let Some((id, local_visual)) = self.cursor_block_and_local_visual() else {
+            return 0;
+        };
+        self.text_layouts
+            .get(&id)
+            .and_then(|layout| layout.wrapped.get(local_visual))
+            .map_or(0, |w| w.width)
+    }
+
+    /// Joined span text of the physical wrapped row under the cursor, or `None`
+    /// for Mermaid / Table blocks (which have no per-cell cursor concept) and
+    /// blank/out-of-range positions.
+    ///
+    /// Used by the word-jump helpers to find whitespace-separated word
+    /// boundaries. Indexed by char position (display column on ASCII-only
+    /// lines, which covers the vast majority of prose markdown).
+    fn current_line_text(&self) -> Option<String> {
+        let (id, local_visual) = self.cursor_block_and_local_visual()?;
+        let layout = self.text_layouts.get(&id)?;
+        let row = layout.wrapped.get(local_visual)?;
+        Some(row.spans.iter().map(|s| s.content.as_str()).collect())
     }
 
     /// Move the cursor to the start of the next word on the current line, or
@@ -525,6 +511,29 @@ pub struct TableLayout {
     pub text: Text<'static>,
     /// Source-line mapping: one entry per rendered line in `text`.
     pub physical_to_source: Vec<u32>,
+}
+
+/// Cached wrap output for a single `DocBlock::Text` at the current layout width.
+///
+/// `wrapped[i]` is the `i`-th physical output row after greedy word-wrap.
+/// `physical_to_logical[i]` is the 0-based index into `DocBlock::Text::text.lines`
+/// (the *logical* lines) that physical row `i` comes from.
+///
+/// Invariants:
+/// - `wrapped.len() == physical_to_logical.len()`.
+/// - `physical_to_logical` is non-decreasing: rows from the same logical line
+///   always appear consecutively.
+/// - `source_lines[physical_to_logical[i]]` gives the markdown source line for
+///   physical row `i` (computed on demand; not stored here to avoid duplication).
+///
+/// Analogous to [`TableLayout`] — same caching contract keyed by a stable block id.
+#[derive(Debug)]
+pub struct WrappedTextLayout {
+    /// One [`crate::text_layout::WrappedLine`] per physical output row.
+    pub wrapped: Vec<crate::text_layout::WrappedLine>,
+    /// `physical_to_logical[i]` — the logical-line index within `DocBlock::Text::text.lines`
+    /// that physical row `i` comes from. Length equals `wrapped.len()`.
+    pub physical_to_logical: Vec<u32>,
 }
 
 /// Find the start of the next whitespace-separated word at or after

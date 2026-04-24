@@ -87,6 +87,11 @@ fn contains(rect: Rect, col: u16, row: u16) -> bool {
 /// Collect absolute display-line numbers whose text matches `query_lower` across
 /// all block types in `blocks`.
 ///
+/// Text blocks: match against the pre-wrapped physical rows from `text_layouts`
+/// so recorded line indices are in the same visual-row coordinate space as
+/// `cursor_line` / `scroll_offset`. Falls back to logical lines when the cache
+/// is absent (before the first draw).
+///
 /// Tables: match against the cached fair-share rendered lines so highlights align
 /// with what is on screen; fall back to joining raw cell text before the first draw.
 ///
@@ -96,31 +101,43 @@ fn contains(rect: Rect, col: u16, row: u16) -> bool {
 /// overflow the fixed block height and are not visible.
 pub fn collect_match_lines(
     blocks: &[DocBlock],
+    text_layouts: &HashMap<
+        crate::markdown::TextBlockId,
+        crate::ui::markdown_view::WrappedTextLayout,
+    >,
     table_layouts: &HashMap<crate::markdown::TableBlockId, TableLayout>,
     mermaid_cache: &MermaidCache,
     query_lower: &str,
-    content_width: u16,
 ) -> Vec<u32> {
-    use crate::ui::markdown_view::visual_rows::line_visual_rows;
     let mut matches = Vec::new();
     let mut offset = 0u32;
 
     for block in blocks {
         match block {
-            DocBlock::Text { text, .. } => {
-                // Track visual row offsets per logical line so a match's
-                // recorded line index matches `cursor_line` / `scroll_offset`
-                // (both in visual rows). Without this, jumping to a search
-                // match in a document with wrapped paragraphs lands the
-                // cursor on the wrong row by `Σ wraps_before_match - 1`.
-                let mut visual_in_block = 0u32;
-                for line in &text.lines {
-                    let line_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-                    if line_text.to_lowercase().contains(query_lower) {
-                        matches.push(offset + visual_in_block);
+            DocBlock::Text { id, text, .. } => {
+                if let Some(layout) = text_layouts.get(id) {
+                    // Phase 3: match against pre-wrapped physical rows so match
+                    // positions align with visual-row coordinate space.
+                    for (i, row) in layout.wrapped.iter().enumerate() {
+                        let line_text: String =
+                            row.spans.iter().map(|s| s.content.as_str()).collect();
+                        if line_text.to_lowercase().contains(query_lower) {
+                            matches.push(offset + crate::cast::u32_sat(i));
+                        }
                     }
-                    visual_in_block =
-                        visual_in_block.saturating_add(line_visual_rows(line, content_width));
+                } else {
+                    // Cache absent (before first draw) — fall back to logical
+                    // lines with 1:1 visual mapping. This is the pre-wrap
+                    // approximation and may be off by wrap-row counts, but is
+                    // correct enough for document-open search before the layout
+                    // pass has run.
+                    for (i, line) in text.lines.iter().enumerate() {
+                        let line_text: String =
+                            line.spans.iter().map(|s| s.content.as_ref()).collect();
+                        if line_text.to_lowercase().contains(query_lower) {
+                            matches.push(offset + crate::cast::u32_sat(i));
+                        }
+                    }
                 }
                 offset += block.height();
             }
