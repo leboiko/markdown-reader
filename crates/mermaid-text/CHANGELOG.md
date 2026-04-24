@@ -3,6 +3,43 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.16.6 — 2026-04-24
+
+### Added — Sugiyama backend: subgraph cluster passthrough (sub-phase 1)
+
+The opt-in `LayoutBackend::Sugiyama` backend (enabled via `--sugiyama` CLI
+flag or `RenderOptions { backend: LayoutBackend::Sugiyama, .. }`) now
+registers mermaid subgraphs with ascii-dag's native cluster API before
+computing the layout. Previously, subgraph membership was silently discarded
+and ascii-dag treated all nodes as unclustered.
+
+**What changed:** `register_subgraphs` (new private helper in
+`layout/sugiyama.rs`) performs a BFS over the full subgraph tree, then
+two-pass registers every subgraph via `add_subgraph` / `put_nodes` /
+`put_subgraphs`. ascii-dag's layer-assignment algorithm now sees the cluster
+membership and can co-locate cluster members within the same layer band.
+
+**What did NOT change:**
+- The **default backend remains `LayoutBackend::Native`** — all existing
+  snapshots and behavior are byte-identical. This sub-phase only wires the
+  cluster passthrough; the backend flip is planned for sub-phase 5.
+- Border drawing is unchanged: mermaid-text continues to compute subgraph
+  bounding rectangles itself via `compute_subgraph_bounds` from the final
+  node positions, independent of whether ascii-dag was aware of the clusters.
+  This guarantees border rendering consistency across backends.
+
+### Tests added
+
+- `subgraph_register_one_cluster` — single cluster, 3 nodes in a chain.
+- `subgraph_register_two_sibling_clusters` — two adjacent clusters with
+  one inter-cluster edge; pins the "no interleaving" property.
+- `subgraph_register_nested_clusters` — outer + inner cluster; pins the
+  containment property on the row-axis bounding box.
+- `single_subgraph_lr_sugiyama` (snapshot) — side-by-side Sugiyama render
+  of the `single_subgraph_lr` chart; lets reviewers compare before the flip.
+- `nested_subgraphs_td_sugiyama` (snapshot) — side-by-side Sugiyama render
+  of the `nested_subgraphs_td` chart.
+
 ## 0.16.5 — 2026-04-24
 
 ### Fixed — subgraph border + edge label cluster (audit Phase 3)

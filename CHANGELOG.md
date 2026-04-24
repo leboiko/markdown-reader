@@ -5,6 +5,16 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.27.2] - 2026-04-24
+
+### Changed
+
+- Bumped `mermaid-text` dependency to `0.16.6`. The Sugiyama opt-in
+  backend (`--sugiyama`) now passes subgraph cluster membership to
+  ascii-dag's native cluster API, improving layer assignment for
+  diagrams with named subgraphs. The default backend (`Native`) is
+  unchanged — all existing rendered output is byte-identical.
+
 ## [1.27.1] - 2026-04-24
 
 ### Fixed
