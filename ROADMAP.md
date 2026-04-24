@@ -19,22 +19,83 @@ _Nothing actively in progress._
 
 ## Next up (ordered roughly by ROI)
 
-### Caller migration off `Palette` to `Tokens` (continuing) — `markdown-tui-explorer`
+### Mermaid rendering bugs found in 2026-04-24 gallery audit
 
-Ship 2 follow-up C (1.25.0) migrated `render_code_block` —
-the highest-leverage cluster, where `surface.raised` revealed a
-non-obvious sourcing decision the old `code_bg` name hid. Same
-treatment available for the rest of the codebase, smaller per-site
-gain since most palette field names are already self-explanatory:
+Systematic audit of 43 mermaid charts (10 README + 19 gallery + 14
+real-user-doc) surfaced 12 visual bugs and 3 missing-test patterns.
+Listed in priority order (visibility × user-frequency × fix-scope).
+Each row identifies the most-likely-affected file from inspection.
 
-- Other `render_*` functions in `src/markdown/renderer.rs` (heading,
-  list, blockquote, link, table chrome). After all of them migrate,
-  the per-color cached struct fields on `MdRenderer` can be deleted —
-  that's the secondary structural payoff beyond semantic naming.
-- `ui::markdown_view::*` (search modal, mermaid draw, gutter,
-  highlight, draw — all read `palette.code_*` and `palette.selection_*`).
-- Eventually drop `Palette` entirely once nothing reads from it,
-  collapsing to `Tokens` as the single typed surface.
+**High visibility (cluster around routing & label placement):**
+
+- **B8** `crates/mermaid-text/src/layout/grid.rs` — Edge labels in
+  the README Supervisor chart bleed through subgraph walls
+  (`│└─────creates`, `│┌────panics┼┘`, `│▸│ Worker ││      beat│`).
+  Cells adjacent to subgraph borders aren't cleared/padded; junction
+  logic uses `├`/`┤` where it should use `│` + space.
+- **B11** `…/grid.rs` — Wrapped multi-line edge labels escape the
+  subgraph right border (Personal_05 TS projections). Second wrapped
+  line lacks a left `│` wall — bare text below the border. Likely
+  same root cause as B8.
+- **B5** `…/grid.rs` — Cross-subgraph edge label
+  (`Route -. not wired to .-> FeedPage`) writes into the closing
+  `╰─╯` of a subgraph. No guard for "this cell is a subgraph border."
+- **B7** `…/render/flowchart.rs` or `…/layout/grid.rs` — Adjacent
+  sibling subgraphs in TB layout collide on the same `y` row when
+  combined width approaches terminal width; titles overwrite each
+  other's `╮` corner glyph (Personal_01, Personal_10).
+- **B3** `…/layout/route.rs` — `App` box top border broken in the
+  README dependency graph (`┌─────┐────┐`); the `App→Worker` edge
+  exits through the box top row. No obstacle placed for top cells.
+
+**Smaller, but real (cluster around route-attach corners):**
+
+- **B12** `…/layout/route.rs` — Back-edge source-attach pierces the
+  bottom of a rounded box (`╰─────────┬────────╯`) in the circuit
+  breaker FSM — should connect *below* the box, not on its border.
+  ⚠️ **Touches the source-attach anchor logic that took 3 iterations
+  to stabilize in 1.22.x; needs careful regression testing.**
+- **B9** `…/layout/route.rs` — Back-edge route deposits a `├` on the
+  right wall of the `Idle` state box (`│ Idle ├┘`) instead of placing
+  it outside. Same family as B12 — same caution applies.
+- **B4** `…/render/state.rs` — Self-loop on the `pending` state in
+  Personal_04 deposits `┌┐` / `├┼` glyphs that merge with adjacent
+  state box borders.
+- **B6** `…/layout/grid.rs` — Stray `└────────────┘` fragment one
+  line below the diagram's closing `╯` in Personal_13 (back-edge
+  not clipped to diagram bounds after subgraph close).
+- **B10** `…/layout/grid.rs` — Note-box label clips into the corner
+  glyph in the circuit breaker (`     ─│ traffic for cool-down…`,
+  `timeout reached─┘`). Edge label written over the corner cell.
+
+**Parser feature gaps (silent failure → ghost boxes):**
+
+- **B1, B2** `crates/mermaid-text/src/parser/flowchart.rs` — Quoted
+  edge labels in dashed (`A -. "label" .-> B`) and thick
+  (`A == "label" ==> B`) arrow forms aren't matched by the parser;
+  it consumes `A -. "label"` as a bare node definition, producing a
+  ghost box with no edge. Pipe-label syntax (`A -.->|label| B`)
+  works. The two quoted-label forms are documented Mermaid syntax.
+- **S1 (test gap)** — `snapshots__all_edge_styles` covers pipe-labels
+  only. Add snapshots for `-. "x" .->` and `== "x" ==>` once B1+B2
+  are fixed so the regression net catches both.
+
+**Medium-grade observations (defer or batch):**
+
+- **S2** Multi-subgraph horizontal-crowding pattern (B7 above) is a
+  new failure mode worth pinning a snapshot for once fixed.
+- **S3** Cross-subgraph edge label placement (B5 above) is also a
+  new failure mode without test coverage today.
+
+**Suggested attack order:**
+
+1. **B1+B2+S1** (parser, isolated, low-risk, immediate user value).
+2. **B4, B6, B10** (small, no source-attach risk).
+3. **B8+B11+B5** (label-vs-subgraph-border cluster — likely shared
+   root cause; one careful fix may resolve all three).
+4. **B7** (subgraph crowding — its own design pass).
+5. **B3, B9, B12** (route-attach issues — defer until someone has
+   time to carefully review against past source-attach iterations).
 
 ### Pie chart slice colours
 

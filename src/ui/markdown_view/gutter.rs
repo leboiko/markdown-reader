@@ -1,4 +1,4 @@
-use crate::theme::Palette;
+use crate::theme::Tokens;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout},
@@ -30,7 +30,7 @@ pub fn render_text_with_gutter(
     text: Text<'static>,
     first_line_number: u32,
     total_doc_lines: u32,
-    p: &Palette,
+    tokens: &Tokens,
     scroll_skip: u16,
     physical_to_logical: Option<&[u32]>,
 ) {
@@ -47,7 +47,7 @@ pub fn render_text_with_gutter(
     ])
     .split(rect);
 
-    let gutter_style = Style::new().fg(p.gutter);
+    let gutter_style = Style::new().fg(tokens.status.gutter);
     let gutter_lines = build_gutter_lines(
         text.lines.len(),
         first_line_number,

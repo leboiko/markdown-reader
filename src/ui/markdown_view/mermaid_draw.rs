@@ -1,7 +1,7 @@
 use super::highlight::apply_block_highlight;
 use super::state::VisualRange;
 use crate::app::App;
-use crate::theme::Palette;
+use crate::theme::{Palette, Tokens};
 use ratatui::{
     Frame,
     layout::{Alignment, Rect},
@@ -96,7 +96,8 @@ pub fn draw_mermaid_block(
                             height: 1,
                         };
                         f.render_widget(
-                            Block::default().style(Style::default().bg(p.selection_bg)),
+                            Block::default()
+                                .style(Style::default().bg(app.tokens.state.selection_bg)),
                             bar_rect,
                         );
                     }
@@ -110,20 +111,20 @@ pub fn draw_mermaid_block(
         }
         Some(MermaidEntry::Failed(msg)) => {
             let footer = format!("[mermaid \u{2014} {}]", truncate(msg.as_str(), 60));
-            let text = render_mermaid_source_text(params.source, &footer, p);
-            render_mermaid_text_block(f, rect, text, p, params);
+            let text = render_mermaid_source_text(params.source, &footer, &app.tokens, p);
+            render_mermaid_text_block(f, rect, text, &app.tokens, p, params);
         }
         Some(MermaidEntry::SourceOnly(reason)) => {
             let footer = format!("[mermaid \u{2014} {reason}]");
-            let text = render_mermaid_source_text(params.source, &footer, p);
-            render_mermaid_text_block(f, rect, text, p, params);
+            let text = render_mermaid_source_text(params.source, &footer, &app.tokens, p);
+            render_mermaid_text_block(f, rect, text, &app.tokens, p, params);
         }
         Some(MermaidEntry::AsciiDiagram { diagram, reason }) => {
             // figurehead rendered a Unicode box-drawing diagram — show it
             // instead of the raw mermaid source.
             let footer = format!("[mermaid \u{2014} {reason}, text-mode diagram]");
-            let text = render_mermaid_source_text(diagram.as_str(), &footer, p);
-            render_mermaid_text_block(f, rect, text, p, params);
+            let text = render_mermaid_source_text(diagram.as_str(), &footer, &app.tokens, p);
+            render_mermaid_text_block(f, rect, text, &app.tokens, p, params);
         }
     }
 }
@@ -169,8 +170,17 @@ pub fn render_mermaid_placeholder(f: &mut Frame, rect: Rect, msg: &str, p: &Pale
 ///
 /// Separating text construction from rendering lets callers mutate the lines
 /// (e.g., apply cursor highlight) before committing to the frame buffer.
-pub fn render_mermaid_source_text(source: &str, footer: &str, p: &Palette) -> Text<'static> {
-    let code_style = Style::default().fg(p.code_fg).bg(p.code_bg);
+pub fn render_mermaid_source_text(
+    source: &str,
+    footer: &str,
+    tokens: &Tokens,
+    p: &Palette,
+) -> Text<'static> {
+    // `surface.raised` — code-fallback text shares the raised surface tier with
+    // code blocks and the status bar (same sourcing as `render_code_block`).
+    let code_style = Style::default()
+        .fg(tokens.syntax.code_fg)
+        .bg(tokens.surface.raised);
     let dim_style = p.dim_style();
 
     let mut lines: Vec<Line<'static>> = source
@@ -210,6 +220,7 @@ fn render_mermaid_text_block(
     f: &mut Frame,
     rect: Rect,
     mut text: Text<'static>,
+    tokens: &Tokens,
     p: &Palette,
     params: &MermaidDrawParams,
 ) {
@@ -237,7 +248,7 @@ fn render_mermaid_text_block(
             params.block_start,
             params.block_end,
             start,
-            p.selection_bg,
+            tokens.state.selection_bg,
         );
     }
     render_mermaid_source_styled(f, rect, text, p);

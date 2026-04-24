@@ -64,6 +64,7 @@ impl App {
             let theme = Theme::ALL[cursor];
             self.theme = theme;
             self.palette = Palette::from_theme(theme);
+            self.tokens = crate::theme::Tokens::from_theme(theme);
             self.rerender_all_tabs();
             self.persist_config();
         } else if cursor == markdown_start {

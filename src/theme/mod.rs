@@ -110,6 +110,12 @@ impl Theme {
 /// Adding a field here requires extending `Tokens` first; the
 /// `From<Tokens>` impl will fail to compile until the new mapping is
 /// written, which guarantees no field is ever silently uninitialised.
+// Several fields are now only populated (not read) at the binary level —
+// their readers migrated to `Tokens` slots in Ship 2 follow-up D. The fields
+// stay in the struct so the `From<Tokens>` exhaustiveness check keeps compiling
+// and tests that compare palette values continue to work. A future ship deletes
+// `Palette` entirely once all callers have moved off it.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {
     pub background: Color,

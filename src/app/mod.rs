@@ -7,7 +7,7 @@ use crate::fs::git_status;
 use crate::markdown::DocBlock;
 use crate::mermaid::{MermaidCache, MermaidEntry};
 use crate::state::{AppState, TabSession};
-use crate::theme::{Palette, Theme};
+use crate::theme::{Palette, Theme, Tokens};
 use crate::ui::file_tree::FileTreeState;
 use crate::ui::link_picker::LinkPickerState;
 use crate::ui::markdown_view::TableLayout;
@@ -367,6 +367,9 @@ pub struct App {
     pub theme: Theme,
     /// Cached style palette derived from `theme`.
     pub palette: Palette,
+    /// Cached design tokens derived from `theme`. Re-derived alongside `palette`
+    /// whenever the theme changes; never recomputed on every call.
+    pub tokens: Tokens,
     /// Whether to show line numbers in the viewer.
     pub show_line_numbers: bool,
     /// Which side of the screen the file-tree panel appears on.
@@ -460,6 +463,7 @@ impl App {
     pub fn new(root: PathBuf, initial_file: Option<PathBuf>) -> Self {
         let config = Config::load();
         let palette = Palette::from_theme(config.theme);
+        let tokens = Tokens::from_theme(config.theme);
         let app_state = AppState::load();
 
         let entries = FileEntry::discover(&root);
@@ -486,6 +490,7 @@ impl App {
             root,
             theme: config.theme,
             palette,
+            tokens,
             show_line_numbers: config.show_line_numbers,
             tree_position: config.tree_position,
             search_preview: config.search_preview,

@@ -5,7 +5,7 @@ use std::ops::Range;
 
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use ratatui::{
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span, Text},
 };
 use std::cell::Cell;
@@ -117,28 +117,13 @@ struct MdRenderer {
     heading_text: String,
     /// Heading anchors accumulated for the current pending `Text` block.
     pending_heading_anchors: Vec<HeadingAnchor>,
-    h1: Color,
-    h2: Color,
-    h3: Color,
-    heading_other: Color,
-    inline_code: Color,
-    code_fg: Color,
-    code_bg: Color,
-    code_border: Color,
-    link: Color,
-    list_marker: Color,
-    task_marker: Color,
-    block_quote_fg: Color,
-    block_quote_border: Color,
-    dim: Color,
     /// Syntect theme name corresponding to the active UI theme. Used to
     /// resolve the correct token colors when highlighting fenced code blocks.
     syntax_theme_name: &'static str,
-    /// Semantic design tokens for the active theme. `render_code_block` reads
-    /// directly from these rather than the cached per-color fields, making the
-    /// sourcing decisions visible at the call site (e.g. `tokens.surface.raised`
-    /// makes it clear that code-block backgrounds share the raised-surface tier
-    /// with popups and the status bar).
+    /// Semantic design tokens for the active theme. All per-element colors are
+    /// read directly from these slots rather than cached per-field copies, so
+    /// the sourcing decisions (e.g. `surface.raised` for code-block backgrounds)
+    /// are visible at every call site.
     tokens: Tokens,
 
     // ── Source-line tracking ─────────────────────────────────────────────────
@@ -194,20 +179,6 @@ impl MdRenderer {
             pending_links: Vec::new(),
             heading_text: String::new(),
             pending_heading_anchors: Vec::new(),
-            h1: palette.h1,
-            h2: palette.h2,
-            h3: palette.h3,
-            heading_other: palette.heading_other,
-            inline_code: palette.inline_code,
-            code_fg: palette.code_fg,
-            code_bg: palette.code_bg,
-            code_border: palette.code_border,
-            link: palette.link,
-            list_marker: palette.list_marker,
-            task_marker: palette.task_marker,
-            block_quote_fg: palette.block_quote_fg,
-            block_quote_border: palette.block_quote_border,
-            dim: palette.dim,
             syntax_theme_name: theme.syntax_theme_name(),
             tokens,
             line_boundaries: Vec::new(),
@@ -244,7 +215,7 @@ impl MdRenderer {
         if self.in_blockquote && !self.in_code_block {
             let mut bq_spans = vec![Span::styled(
                 "│ ".to_string(),
-                Style::default().fg(self.block_quote_border),
+                Style::default().fg(self.tokens.list.block_quote_border),
             )];
             bq_spans.extend(spans);
             self.lines.push(Line::from(bq_spans));
@@ -364,7 +335,7 @@ impl MdRenderer {
                 Event::Code(code) => {
                     let style = self
                         .current_style()
-                        .fg(self.inline_code)
+                        .fg(self.tokens.syntax.inline_code)
                         .add_modifier(Modifier::BOLD);
                     self.current_spans
                         .push(Span::styled(format!("`{code}`"), style));
@@ -412,7 +383,7 @@ impl MdRenderer {
                     self.flush_line();
                     self.lines.push(Line::from(Span::styled(
                         "─".repeat(60),
-                        Style::default().fg(self.dim),
+                        Style::default().fg(self.tokens.text.muted),
                     )));
                     // Rule line and the blank after it both map to current source line.
                     self.current_source_lines.push(self.current_source_line);
@@ -422,7 +393,7 @@ impl MdRenderer {
                     let marker = if checked { "☑ " } else { "☐ " };
                     self.current_spans.push(Span::styled(
                         marker.to_string(),
-                        Style::default().fg(self.task_marker),
+                        Style::default().fg(self.tokens.list.task_marker),
                     ));
                 }
                 Event::InlineMath(math) => {
@@ -432,7 +403,7 @@ impl MdRenderer {
                     let rendered = crate::markdown::math::latex_to_unicode(&math);
                     let style = self
                         .current_style()
-                        .fg(self.inline_code)
+                        .fg(self.tokens.syntax.inline_code)
                         .add_modifier(Modifier::ITALIC);
                     self.current_spans.push(Span::styled(rendered, style));
                 }
@@ -442,10 +413,10 @@ impl MdRenderer {
                     // frame.
                     let rendered = crate::markdown::math::latex_to_unicode(&math);
                     self.flush_line();
-                    let border_style = Style::default().fg(self.code_border);
+                    let border_style = Style::default().fg(self.tokens.syntax.code_border);
                     let math_style = Style::default()
-                        .fg(self.code_fg)
-                        .bg(self.code_bg)
+                        .fg(self.tokens.syntax.code_fg)
+                        .bg(self.tokens.surface.raised)
                         .add_modifier(Modifier::ITALIC);
                     let math_lines: Vec<&str> = rendered.lines().collect();
                     let max_width = math_lines
@@ -464,7 +435,7 @@ impl MdRenderer {
                         Span::styled(
                             label.to_string(),
                             Style::default()
-                                .fg(self.inline_code)
+                                .fg(self.tokens.syntax.inline_code)
                                 .add_modifier(Modifier::BOLD),
                         ),
                         Span::styled(
@@ -481,12 +452,16 @@ impl MdRenderer {
                         self.lines.push(Line::from(vec![
                             Span::styled(
                                 "│ ".to_string(),
-                                Style::default().fg(self.code_border).bg(self.code_bg),
+                                Style::default()
+                                    .fg(self.tokens.syntax.code_border)
+                                    .bg(self.tokens.surface.raised),
                             ),
                             Span::styled(format!("{line:<inner_width$}"), math_style),
                             Span::styled(
                                 "│".to_string(),
-                                Style::default().fg(self.code_border).bg(self.code_bg),
+                                Style::default()
+                                    .fg(self.tokens.syntax.code_border)
+                                    .bg(self.tokens.surface.raised),
                             ),
                         ]));
                         self.current_source_lines.push(self.current_source_line);
@@ -518,10 +493,10 @@ impl MdRenderer {
                 self.heading_level = level as u8;
                 self.heading_text.clear();
                 let color = match level {
-                    pulldown_cmark::HeadingLevel::H1 => self.h1,
-                    pulldown_cmark::HeadingLevel::H2 => self.h2,
-                    pulldown_cmark::HeadingLevel::H3 => self.h3,
-                    _ => self.heading_other,
+                    pulldown_cmark::HeadingLevel::H1 => self.tokens.heading.h1,
+                    pulldown_cmark::HeadingLevel::H2 => self.tokens.heading.h2,
+                    pulldown_cmark::HeadingLevel::H3 => self.tokens.heading.h3,
+                    _ => self.tokens.heading.other,
                 };
                 let mut style = Style::default().fg(color).add_modifier(Modifier::BOLD);
                 if level == pulldown_cmark::HeadingLevel::H1 {
@@ -540,7 +515,7 @@ impl MdRenderer {
             Tag::Paragraph => {}
             Tag::BlockQuote(_) => {
                 self.in_blockquote = true;
-                self.push_style(Style::default().fg(self.block_quote_fg));
+                self.push_style(Style::default().fg(self.tokens.list.block_quote_fg));
             }
             Tag::CodeBlock(kind) => {
                 self.in_code_block = true;
@@ -590,8 +565,10 @@ impl MdRenderer {
                 } else {
                     format!("{indent}• ")
                 };
-                self.current_spans
-                    .push(Span::styled(bullet, Style::default().fg(self.list_marker)));
+                self.current_spans.push(Span::styled(
+                    bullet,
+                    Style::default().fg(self.tokens.list.marker),
+                ));
             }
             Tag::Emphasis => {
                 self.push_style(Style::default().add_modifier(Modifier::ITALIC));
@@ -607,7 +584,7 @@ impl MdRenderer {
                 self.current_link_url = Some(dest_url.into_string());
                 self.push_style(
                     Style::default()
-                        .fg(self.link)
+                        .fg(self.tokens.accent.link)
                         .add_modifier(Modifier::UNDERLINED),
                 );
             }

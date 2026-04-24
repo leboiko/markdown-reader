@@ -5,6 +5,41 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.26.0] - 2026-04-24
+
+### Internal — Palette → Tokens migration completed (Ship 2 follow-up D)
+
+Caps the design-token migration arc. Every per-color field on
+`MdRenderer` (14 of them: `h1`, `h2`, `h3`, `heading_other`,
+`inline_code`, `code_fg`, `code_bg`, `code_border`, `link`,
+`list_marker`, `task_marker`, `block_quote_fg`,
+`block_quote_border`, `dim`) is gone — render methods read straight
+from `self.tokens.<group>.<slot>`. The `MdRenderer` struct shrinks
+by 14 fields and 14 init lines. Two `ui::markdown_view` helpers
+(`gutter::draw`, `highlight::apply_block_highlight`) drop their
+`palette: &Palette` parameter entirely — they only ever needed
+1-3 specific token slots.
+
+**App** now carries `tokens: Tokens` alongside the existing
+`palette: Palette`. Both are re-derived in lockstep at the single
+theme-change site (`key_handlers.rs`). `Palette` itself stays
+intact (with `#[allow(dead_code)]` to suppress the now-mostly-unused
+field warnings) — Ship 2 explicitly defers full `Palette` deletion
+to a later round once nothing reads it. Some readers remain in
+unmigrated paths (`status_bar`, `tab_bar`, popup widgets, file
+tree).
+
+**Subjective verdict on the migration arc:** the structural payoff
+is real (14 cached struct fields gone, 2 functions take fewer
+parameters, eventual `Palette` deletion now in sight). The
+per-call-site clarity payoff is concentrated in a few specific
+mappings — `tokens.surface.raised` revealing that code blocks,
+popups, and status bar share a tier; `tokens.state.search_bg`
+making the interaction-state grouping visible — rather than
+spread evenly. The wins justified the effort.
+
+842 tests pass, clippy + fmt clean.
+
 ## [1.25.0] - 2026-04-24
 
 ### Internal — centered-popup layout helpers consolidated (Ship 2 follow-up B)

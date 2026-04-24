@@ -1,5 +1,5 @@
 use super::state::VisualRange;
-use crate::theme::Palette;
+use crate::theme::Tokens;
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
@@ -298,16 +298,16 @@ pub fn highlight_matches(
     query: &str,
     current_line: Option<u32>,
     block_start: u32,
-    p: &Palette,
+    tokens: &Tokens,
 ) -> Text<'static> {
     let query_lower = query.to_lowercase();
     let match_style = Style::default()
-        .bg(p.search_match_bg)
-        .fg(p.match_fg)
+        .bg(tokens.state.search_bg)
+        .fg(tokens.state.match_fg)
         .add_modifier(Modifier::BOLD);
     let current_style = Style::default()
-        .bg(p.current_match_bg)
-        .fg(p.match_fg)
+        .bg(tokens.state.current_match_bg)
+        .fg(tokens.state.match_fg)
         .add_modifier(Modifier::BOLD);
 
     let lines: Vec<Line<'static>> = text

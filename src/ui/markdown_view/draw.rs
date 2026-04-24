@@ -376,7 +376,13 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                                 if let Some((query, current_line)) = &doc_search_query {
                                     // Build a temporary Text from wrapped lines and highlight.
                                     let tmp = Text::from(wrapped_lines.clone());
-                                    highlight_matches(&tmp, query, *current_line, block_start, &p)
+                                    highlight_matches(
+                                        &tmp,
+                                        query,
+                                        *current_line,
+                                        block_start,
+                                        &app.tokens,
+                                    )
                                 } else {
                                     Text::from(wrapped_lines)
                                 };
@@ -393,7 +399,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                                     cursor_line,
                                     block_start,
                                     block_end_visual,
-                                    p.selection_bg,
+                                    app.tokens.state.selection_bg,
                                 );
 
                                 // Single-cell cursor highlight at the cursor's physical
@@ -411,7 +417,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                                                 line,
                                                 col,
                                                 col + 1,
-                                                p.accent,
+                                                app.tokens.accent.primary,
                                             );
                                     }
                                 }
@@ -466,7 +472,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                                             query,
                                             *current_line,
                                             block_start,
-                                            &p,
+                                            &app.tokens,
                                         );
                                         Text::from(full.lines[start..end].to_vec())
                                     } else {
@@ -484,7 +490,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                                         block_start,
                                         block_end,
                                         start,
-                                        p.selection_bg,
+                                        app.tokens.state.selection_bg,
                                     );
                                 }
                                 text_draws.push(TextDraw {
@@ -556,7 +562,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                 td.text,
                 td.first_line_number,
                 total_doc_lines,
-                &p,
+                &app.tokens,
                 td.scroll_skip,
                 td.physical_to_logical.as_deref(),
             );
