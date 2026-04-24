@@ -3,6 +3,33 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.16.1 — 2026-04-23
+
+### Fixed
+
+- **Edge labels now honour `<br>` line breaks and strip surrounding
+  quotes**, matching node-label behaviour. Previously a label like
+  `|"recommendations.getFeed,<br/>records event"|` rendered the
+  literal `<br/>` inline and kept the `"`s. Now it splits on the
+  break and drops the quotes, same as `["@queries hooks<br/>(args)"]`
+  has done for nodes.
+
+- **Edges that cross a subgraph border no longer look detached.** The
+  border line at the crossing cell now becomes a proper junction
+  glyph (`┴ ┬ ├ ┤ ┼`) instead of leaving the bare border line in
+  place, which had hidden the route's vertical/horizontal segment.
+  Implemented by seeding direction bits on subgraph border line cells
+  before edge routing, and letting the edge router's `add_dirs` OR
+  through protected cells when they already carry direction bits.
+
+- **Edge attach points anchor visually to the source box border.** A
+  forward edge whose source and target columns differ by one (very
+  common when boxes have different widths) was rendering the first
+  cell as a sideways turn — making the edge look like it started
+  mid-air. The router now adds a "back into the source box"
+  direction bit at the first cell so the corner glyph (`└ ┘ ┐ ┌`)
+  is drawn instead.
+
 ## 0.16.0 — 2026-04-23 — Phase 5: `classDiagram` support
 
 ### Added

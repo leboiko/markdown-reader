@@ -2,4 +2,4 @@
 source: crates/mermaid-text/tests/crossings.rs
 expression: "fmt_count(\"dense_td_crossing\", n)"
 ---
-dense_td_crossing: 3 crossing(s)
+dense_td_crossing: 6 crossing(s)

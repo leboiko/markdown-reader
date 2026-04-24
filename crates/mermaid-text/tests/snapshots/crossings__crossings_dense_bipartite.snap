@@ -2,4 +2,4 @@
 source: crates/mermaid-text/tests/crossings.rs
 expression: "fmt_count(\"dense_bipartite\", n)"
 ---
-dense_bipartite: 5 crossing(s)
+dense_bipartite: 8 crossing(s)

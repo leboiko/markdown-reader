@@ -2,4 +2,4 @@
 source: crates/mermaid-text/tests/crossings.rs
 expression: "fmt_count(\"supervisor_bidirectional_in_subgraph\", n)"
 ---
-supervisor_bidirectional_in_subgraph: 1 crossing(s)
+supervisor_bidirectional_in_subgraph: 2 crossing(s)

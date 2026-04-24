@@ -1280,7 +1280,7 @@ fn draw_subgraph_border(grid: &mut Grid, bounds: &SubgraphBounds, style: Option<
     }
 
     // Protect all border cells so edge routing and later node drawing leave
-    // them alone.  We only protect the outline (border ring), not interior.
+    // them alone. We only protect the outline (border ring), not interior.
     for x in col..(col + w) {
         grid.protect_cell(x, row);
         grid.protect_cell(x, row + h - 1);
@@ -1290,14 +1290,31 @@ fn draw_subgraph_border(grid: &mut Grid, bounds: &SubgraphBounds, style: Option<
         grid.protect_cell(col + w - 1, y);
     }
 
-    // Subgraph borders are *protected* (so their glyphs survive edge
-    // routing) but NOT marked as hard `NodeBox` obstacles. Hard marking
-    // would prevent any edge whose source or destination lies inside the
-    // subgraph from exiting through the border — A* would give up and
-    // fall back to Manhattan routing, which ignores obstacles entirely.
-    // Leaving borders passable lets A* find real orthogonal paths that
-    // cross subgraph boundaries naturally; the border glyph at the
-    // crossing cell stays intact thanks to `protect_cell`.
+    // Seed direction bits on the border *line* cells (not corners) so that
+    // when an edge crosses a border, `Grid::add_dirs` ORs the route's
+    // direction in and produces a proper junction glyph (┴ ┬ ├ ┤ ┼)
+    // instead of leaving the bare border line in place — which made the
+    // edge look "missing its initial portion" because the route's `│`
+    // glyph at the crossing cell was suppressed by the border's `─`.
+    // Corners stay un-seeded so an edge that happens to land on `╭` /
+    // `╮` / `╰` / `╯` doesn't try to merge into a rounded corner glyph.
+    use crate::layout::grid::{DIR_DOWN, DIR_LEFT, DIR_RIGHT, DIR_UP};
+    for x in (col + 1)..(col + w - 1) {
+        grid.seed_border_dirs(x, row, DIR_LEFT | DIR_RIGHT);
+        grid.seed_border_dirs(x, row + h - 1, DIR_LEFT | DIR_RIGHT);
+    }
+    for y in (row + 1)..(row + h - 1) {
+        grid.seed_border_dirs(col, y, DIR_UP | DIR_DOWN);
+        grid.seed_border_dirs(col + w - 1, y, DIR_UP | DIR_DOWN);
+    }
+
+    // Subgraph borders are NOT marked as hard `NodeBox` obstacles. Hard
+    // marking would prevent any edge whose source or destination lies
+    // inside the subgraph from exiting through the border — A* would give
+    // up and fall back to Manhattan routing, which ignores obstacles
+    // entirely. Leaving borders passable lets A* find real orthogonal
+    // paths that cross subgraph boundaries naturally; the border glyph at
+    // the crossing cell now becomes a junction (see seed_border_dirs above).
 
     // Write the label inline in the top border row, starting 2 cells in from
     // the left corner. This avoids overlapping with node boxes whose top edge

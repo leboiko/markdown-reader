@@ -2,4 +2,4 @@
 source: crates/mermaid-text/tests/crossings.rs
 expression: "fmt_count(\"dense_multiple_back_edges\", n)"
 ---
-dense_multiple_back_edges: 1 crossing(s)
+dense_multiple_back_edges: 2 crossing(s)

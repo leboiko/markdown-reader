@@ -5,6 +5,32 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.22.1] - 2026-04-23
+
+### Fixed — mermaid-text 0.16.1 polish from real-doc testing
+
+Reported on flowcharts and a sequence diagram in a user's
+`personal_notes.md`:
+
+- **Edge labels now honour `<br>`** the same way node labels do —
+  `|"recommendations.getFeed,<br/>records event"|` no longer
+  renders the literal `<br/>` inline. Surrounding quotes stripped
+  too.
+- **Sequence participant labels and message text** strip `<br>`
+  to a single space (renderer is single-row in those positions —
+  `\n` would break the layout). Notes still convert to `\n` since
+  they have multi-line box support.
+- **Edges crossing subgraph borders** show a proper junction glyph
+  (`┴ ┬ ├ ┤ ┼`) at the crossing instead of the bare border line.
+  Previously the route's vertical/horizontal segment was hidden by
+  the protected border, making edges look "missing their initial
+  portion" through subgraph boundaries.
+- **Edge attach points anchor visually to the source box border**
+  via a corner glyph (`└ ┘ ┐ ┌`). An edge whose source/target
+  columns differ by one (boxes of different widths — common when
+  layout pins boxes to their content) no longer looks detached at
+  the source side.
+
 ## [1.22.0] - 2026-04-23
 
 ### Added — Phase 5 of the architecture cleanup: classDiagram support

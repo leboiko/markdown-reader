@@ -2,4 +2,4 @@
 source: crates/mermaid-text/tests/crossings.rs
 expression: "fmt_count(\"single_subgraph_lr\", n)"
 ---
-single_subgraph_lr: 0 crossing(s)
+single_subgraph_lr: 1 crossing(s)

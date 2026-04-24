@@ -636,24 +636,31 @@ fn try_consume_pipe_label(s: &str) -> (String, usize) {
 /// Handles `-->|label|`, `-- label -->`, etc.
 fn extract_arrow_label(arrow: &str) -> Option<String> {
     // Pipe-style: -->|label| or -.->|label|
-    if let Some(start) = arrow.find('|')
+    let raw = if let Some(start) = arrow.find('|')
         && let Some(end) = arrow[start + 1..].find('|')
     {
-        let label = arrow[start + 1..start + 1 + end].trim().to_string();
-        if !label.is_empty() {
-            return Some(label);
-        }
-    }
-    // Dash-style: -- label -->
-    if arrow.starts_with("-- ")
+        Some(arrow[start + 1..start + 1 + end].trim())
+    } else if arrow.starts_with("-- ")
         && let Some(end) = arrow.rfind("-->")
     {
-        let label = arrow[3..end].trim().to_string();
-        if !label.is_empty() {
-            return Some(label);
+        // Dash-style: -- label -->
+        Some(arrow[3..end].trim())
+    } else {
+        None
+    };
+    raw.and_then(|s| {
+        // Strip the optional surrounding quotes Mermaid allows so labels
+        // with commas / spaces survive, then run through `normalize_label`
+        // so HTML `<br>` tags become real newlines (matching node labels)
+        // and overly-long lines get soft-wrapped.
+        let unquoted = s.trim_matches('"');
+        let normalised = normalize_label(unquoted);
+        if normalised.is_empty() {
+            None
+        } else {
+            Some(normalised)
         }
-    }
-    None
+    })
 }
 
 // ---------------------------------------------------------------------------

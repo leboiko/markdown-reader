@@ -100,10 +100,10 @@ const THICK_DIR_TO_CHAR: [char; 16] = [
 // used to live in `merge_h_line`/`merge_v_line`/`merge_corner_*` collapses
 // into a single table lookup.
 
-const DIR_UP: u8 = 0b0001;
-const DIR_DOWN: u8 = 0b0010;
-const DIR_LEFT: u8 = 0b0100;
-const DIR_RIGHT: u8 = 0b1000;
+pub(crate) const DIR_UP: u8 = 0b0001;
+pub(crate) const DIR_DOWN: u8 = 0b0010;
+pub(crate) const DIR_LEFT: u8 = 0b0100;
+pub(crate) const DIR_RIGHT: u8 = 0b1000;
 
 /// Lookup table mapping a 4-bit direction mask (UP=1, DOWN=2, LEFT=4, RIGHT=8)
 /// to the single box-drawing glyph that represents it.
@@ -316,15 +316,33 @@ impl Grid {
     /// Protected cells (rounded corners, arrow tips, labels) are left alone —
     /// their glyph is preserved and the direction bits are not recorded.
     /// Out-of-bounds writes are silently ignored.
-    fn add_dirs(&mut self, col: usize, row: usize, bits: u8) {
+    pub(crate) fn add_dirs(&mut self, col: usize, row: usize, bits: u8) {
         if row >= self.height || col >= self.width {
             return;
         }
-        if self.protected[row][col] {
+        // Protected cells with NO direction bits are label text, arrow tips,
+        // or rounded corners — leave them alone. Protected cells WITH
+        // direction bits are box-drawing lines (subgraph border edges
+        // explicitly seed their bits via `seed_border_dirs` so an edge
+        // crossing one can OR in its own direction and produce a proper
+        // junction glyph (┴ ┬ ├ ┤ ┼) instead of the bare border line.
+        if self.protected[row][col] && self.directions[row][col] == 0 {
             return;
         }
         self.directions[row][col] |= bits;
         self.cells[row][col] = DIR_TO_CHAR[self.directions[row][col] as usize];
+    }
+
+    /// Record direction bits at `(col, row)` *without* writing the glyph or
+    /// honouring protection. Used by [`crate::render::unicode`]'s subgraph
+    /// border drawer to seed the bit map at border-line cells: subsequent
+    /// edge-routing writes via [`add_dirs`] then OR their own direction bits
+    /// in, turning the crossing into a proper junction (`┴`/`┬`/`├`/`┤`/`┼`)
+    /// instead of leaving the bare border line in place.
+    pub fn seed_border_dirs(&mut self, col: usize, row: usize, bits: u8) {
+        if row < self.height && col < self.width {
+            self.directions[row][col] |= bits;
+        }
     }
 
     /// Mark a cell as protected — subsequent [`Grid::add_dirs`] calls will

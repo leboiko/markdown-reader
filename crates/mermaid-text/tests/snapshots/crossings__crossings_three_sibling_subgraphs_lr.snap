@@ -2,4 +2,4 @@
 source: crates/mermaid-text/tests/crossings.rs
 expression: "fmt_count(\"three_sibling_subgraphs_lr\", n)"
 ---
-three_sibling_subgraphs_lr: 0 crossing(s)
+three_sibling_subgraphs_lr: 4 crossing(s)

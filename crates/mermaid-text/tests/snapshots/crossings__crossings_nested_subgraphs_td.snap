@@ -2,4 +2,4 @@
 source: crates/mermaid-text/tests/crossings.rs
 expression: "fmt_count(\"nested_subgraphs_td\", n)"
 ---
-nested_subgraphs_td: 0 crossing(s)
+nested_subgraphs_td: 2 crossing(s)

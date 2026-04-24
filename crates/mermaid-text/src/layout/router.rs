@@ -23,8 +23,8 @@
 //! `paths[edge_idx]` without any remapping.
 
 use crate::layout::Grid;
-use crate::layout::grid::Attach;
-use crate::types::Graph;
+use crate::layout::grid::{Attach, DIR_DOWN, DIR_LEFT, DIR_RIGHT, DIR_UP};
+use crate::types::{Direction, Graph};
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -88,6 +88,29 @@ pub(crate) fn route_all(
         } else {
             grid.route_edge(src.col, src.row, dst.col, dst.row, horizontal_first, tip)
         };
+
+        // Anchor the route's first cell to the source box border. Without
+        // this, an edge that immediately turns sideways (because the
+        // source-target columns differ by one, common when boxes have
+        // different widths) shows only its turn glyph at the attach cell
+        // — the visual connection to the source box is missing. Adding
+        // the "back into the box" direction bit produces the right corner
+        // glyph (└ ┘ ┐ ┌) and the edge looks attached.
+        //
+        // The arrow tip on the target side is already drawn ON the target
+        // box border for vertical flow (entry_point puts it on the border
+        // row), so the target side is already visually anchored. For
+        // horizontal flow the tip lands one column outside; A*'s
+        // protection on the tip cell suppresses any extra bits.
+        if path.is_some() {
+            let anchor = match graph.direction {
+                Direction::TopToBottom => DIR_UP,
+                Direction::BottomToTop => DIR_DOWN,
+                Direction::LeftToRight => DIR_LEFT,
+                Direction::RightToLeft => DIR_RIGHT,
+            };
+            grid.add_dirs(src.col, src.row, anchor);
+        }
 
         paths[edge_idx] = path;
     }

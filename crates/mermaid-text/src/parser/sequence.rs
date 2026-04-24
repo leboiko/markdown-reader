@@ -398,6 +398,12 @@ fn finalize_activations(events: &[ActEvent], diag: &mut SequenceDiagram) -> Resu
 /// Formats:
 /// - `ID` → label defaults to ID
 /// - `ID as Alias` → label is Alias (may contain spaces)
+///
+/// HTML `<br>` / `<br/>` / `<br />` (case-insensitive) in the alias collapse
+/// to a single space — Mermaid uses these for line breaks inside participant
+/// boxes, but sequence participant boxes in this renderer are single-row, so
+/// joining with a space produces a clean readable label instead of leaking
+/// the literal `<br>` tag into the output.
 fn parse_participant_decl(rest: &str) -> Result<Participant, Error> {
     // Look for ` as ` separator (case-insensitive, surrounded by whitespace).
     // We split on the first occurrence.
@@ -406,7 +412,7 @@ fn parse_participant_decl(rest: &str) -> Result<Participant, Error> {
     // Find " as " with surrounding whitespace.
     if let Some(as_idx) = lower.find(" as ") {
         let id = rest[..as_idx].trim().to_string();
-        let label = rest[as_idx + 4..].trim().to_string();
+        let label = strip_br_tags(rest[as_idx + 4..].trim());
         if id.is_empty() {
             return Err(Error::ParseError(
                 "participant declaration has an empty ID".to_string(),
@@ -424,6 +430,20 @@ fn parse_participant_decl(rest: &str) -> Result<Participant, Error> {
     }
 }
 
+/// Replace HTML `<br>` variants with a single space.
+///
+/// Sequence participant boxes are single-row so we can't honour the line
+/// break visually — but leaving the literal tag in the label is the worst
+/// of both worlds. Spaces give a clean readable result.
+fn strip_br_tags(s: &str) -> String {
+    s.replace("<br/>", " ")
+        .replace("<br>", " ")
+        .replace("<br />", " ")
+        .replace("<BR/>", " ")
+        .replace("<BR>", " ")
+        .replace("<BR />", " ")
+}
+
 /// Attempt to parse a message arrow line of the form `From<arrow>To: text`,
 /// recognising the inline activation shorthand `+`/`-` on the target token.
 ///
@@ -436,8 +456,15 @@ fn try_parse_message(line: &str) -> Option<(Message, Option<bool>)> {
         if let Some((from, rest)) = line.split_once(arrow) {
             let from = from.trim().to_string();
             // Remaining text: `To: message text` or just `To`
+            // Message text collapses HTML `<br>` to a single space —
+            // same reasoning as `parse_participant_decl::strip_br_tags`.
+            // Sequence message labels render on one row above the arrow,
+            // so a `\n` would break the layout. Joining with a space
+            // produces a clean readable result. (Notes, by contrast, get
+            // their own multi-row box and convert `<br>` to `\n` —
+            // see the Note-handling branch above.)
             let (to_token, text) = if let Some((to_part, msg_part)) = rest.split_once(':') {
-                (to_part.trim().to_string(), msg_part.trim().to_string())
+                (to_part.trim().to_string(), strip_br_tags(msg_part.trim()))
             } else {
                 (rest.trim().to_string(), String::new())
             };
