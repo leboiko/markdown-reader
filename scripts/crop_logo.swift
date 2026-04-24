@@ -20,6 +20,27 @@ let width = rep.pixelsWide
 let height = rep.pixelsHigh
 let padding = 24
 let alphaThreshold: CGFloat = 0.05
+let alphaThresholdByte = UInt8(alphaThreshold * 255.0)
+
+// First pass: fully clear the faint low-alpha white veil carried by the source
+// image so dark-mode backgrounds do not show a tinted rectangle around the logo.
+guard let bitmapData = rep.bitmapData else {
+    fputs("failed to access bitmap data\n", stderr)
+    exit(1)
+}
+let bytesPerPixel = rep.bitsPerPixel / 8
+for y in 0..<height {
+    for x in 0..<width {
+        let offset = y * rep.bytesPerRow + x * bytesPerPixel
+        let alpha = bitmapData[offset + 3]
+        if alpha < alphaThresholdByte {
+            bitmapData[offset + 0] = 0
+            bitmapData[offset + 1] = 0
+            bitmapData[offset + 2] = 0
+            bitmapData[offset + 3] = 0
+        }
+    }
+}
 
 var minX = width
 var minY = height
@@ -38,7 +59,7 @@ for y in 0..<height {
     }
 }
 
-guard minX <= maxX, minY <= maxY, let cgImage = rep.cgImage else {
+guard minX <= maxX, minY <= maxY else {
     fputs("image appears fully transparent\n", stderr)
     exit(1)
 }
@@ -48,19 +69,28 @@ let cropY = max(minY - padding, 0)
 let cropWidth = min((maxX - minX + 1) + padding * 2, width - cropX)
 let cropHeight = min((maxY - minY + 1) + padding * 2, height - cropY)
 
-let cropRect = CGRect(
-    x: cropX,
-    y: cropY,
-    width: cropWidth,
-    height: cropHeight
-)
-
-guard let cropped = cgImage.cropping(to: cropRect) else {
-    fputs("failed to crop image\n", stderr)
+guard let outRep = NSBitmapImageRep(
+    bitmapDataPlanes: nil,
+    pixelsWide: cropWidth,
+    pixelsHigh: cropHeight,
+    bitsPerSample: rep.bitsPerSample,
+    samplesPerPixel: rep.samplesPerPixel,
+    hasAlpha: rep.hasAlpha,
+    isPlanar: false,
+    colorSpaceName: .deviceRGB,
+    bytesPerRow: cropWidth * bytesPerPixel,
+    bitsPerPixel: rep.bitsPerPixel
+), let outData = outRep.bitmapData else {
+    fputs("failed to allocate cropped bitmap\n", stderr)
     exit(1)
 }
 
-let outRep = NSBitmapImageRep(cgImage: cropped)
+for y in 0..<cropHeight {
+    let srcRow = (cropY + y) * rep.bytesPerRow + cropX * bytesPerPixel
+    let dstRow = y * outRep.bytesPerRow
+    memcpy(outData + dstRow, bitmapData + srcRow, cropWidth * bytesPerPixel)
+}
+
 guard let png = outRep.representation(using: .png, properties: [:]) else {
     fputs("failed to encode cropped PNG\n", stderr)
     exit(1)
