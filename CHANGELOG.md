@@ -5,6 +5,60 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.23.0] - 2026-04-24
+
+### Added — theme contrast / palette-invariant audit (Ship 1)
+
+New unit tests parameterised over all 8 themes catch two classes of
+defects automatically; CI fails if any new theme (or palette tweak)
+re-introduces them:
+
+- **Highlight invisibility.** `selection_bg` and `current_match_bg`
+  must differ from both `code_bg` and `background`. Three themes
+  shipped with `selection_bg == code_bg` — cursor highlight inside
+  code blocks was literally invisible (the 2026-04-24
+  solarized_light report).
+- **WCAG AA reading-text contrast (≥ 4.5:1).** Reading-text fg/bg
+  pairs (foreground/background, code, selection, on-accent,
+  search/current match, status bar) must meet AA. Decoration
+  (borders, gutters) is excluded — thin strokes tolerate lower
+  contrast and pinning them inflated rejections without visible
+  win. Named colours (terminal-defined RGB) skip the check
+  silently — only `Color::Rgb(...)` slots are asserted.
+
+### Fixed — palette adjustments (visible win, no API change)
+
+19 contrast misses + 3 selection collisions across 6 themes.
+Adjustments stay within each theme's canonical palette where
+possible (e.g. Solarized base01/base02, Gruvbox bg1/bg2/fg) and
+fall back to true black/white only when the canonical palette
+can't reach AA (typically text on a vivid accent colour).
+
+- **Dracula:** `on_accent_fg` 248,248,242 → 40,42,54 (was 2.26:1
+  on purple); `status_bar_fg` comment → foreground (was 3.03:1).
+- **Solarized Dark:** `selection_bg` base02 → base01 (was identical
+  to `code_bg`); `selection_fg` base1 → base3; `code_fg` base0 →
+  base1 (was 4.11:1); `on_accent_fg` base1 → black (was 1.38:1
+  on blue); `match_fg` base03 → black (was 3.26:1 on orange);
+  `status_bar_fg` base01 → base1 (was 2.42:1).
+- **Solarized Light:** `selection_bg` base2 → base1 (was identical
+  to `code_bg`); `foreground` and `code_fg` base00 → base02 (were
+  4.13:1 / 3.64:1 — Solarized's intentional "soft" contrast loses
+  to AA in a TUI markdown reader); `on_accent_fg` base3 → black
+  (was 3.41:1 on blue); `match_fg` base3 → black (was 2.98:1 on
+  yellow); `status_bar_fg` base00 → base02; `selection_fg`
+  base01 → base02.
+- **Nord:** `match_fg` nord0 → black (was 3.05:1 on red);
+  `status_bar_fg` nord2 → nord4 (was 1.36:1 — basically illegible).
+- **Gruvbox Dark:** `match_fg` 40,40,40 → black (was 4.29:1, just
+  under); `status_bar_fg` gray → fg (was 3.58:1).
+- **Gruvbox Light:** `selection_bg` bg1 → bg2 (was identical to
+  `code_bg`); `match_fg` bg → black (yellow 2.19:1, orange 3.41:1).
+
+Solarized purists may note the foreground/code text is now darker
+than spec — the original base00 ships sub-AA by design ("soft
+reading"). For a TUI markdown reader, AA wins.
+
 ## [1.22.5] - 2026-04-24
 
 ### Changed
