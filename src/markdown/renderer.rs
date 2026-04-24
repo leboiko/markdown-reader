@@ -13,7 +13,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::markdown::{
     CellSpans, DocBlock, HeadingAnchor, LinkInfo, MermaidBlockId, TableBlock, TableBlockId,
-    cell_display_width, cell_to_string, heading_to_anchor, highlight::highlight_code,
+    cell_to_string, heading_to_anchor, highlight::highlight_code,
 };
 use crate::mermaid::DEFAULT_MERMAID_HEIGHT;
 use crate::theme::{Palette, Theme};
@@ -874,12 +874,13 @@ impl MdRenderer {
 
         let mut natural_widths = vec![0usize; num_cols];
         for (i, cell) in headers.iter().enumerate() {
-            natural_widths[i] = natural_widths[i].max(cell_display_width(cell));
+            natural_widths[i] = natural_widths[i].max(crate::text_layout::measure(cell) as usize);
         }
         for row in &rows {
             for (i, cell) in row.iter().enumerate() {
                 if i < num_cols {
-                    natural_widths[i] = natural_widths[i].max(cell_display_width(cell));
+                    natural_widths[i] =
+                        natural_widths[i].max(crate::text_layout::measure(cell) as usize);
                 }
             }
         }

@@ -16,6 +16,7 @@ impl App {
             &tab.view.rendered,
             tab.view.cursor_line,
             tab.view.layout_width,
+            &tab.view.table_layouts,
         );
         // `content` is the raw markdown; we index into its lines.
         let content = tab.view.content.clone();
@@ -38,12 +39,17 @@ impl App {
             VisualMode::Line => {
                 // Line mode: yank whole source lines (existing behaviour).
                 let w = tab.view.layout_width;
-                let top_source =
-                    crate::markdown::source_line_at_width(&tab.view.rendered, range.top_line(), w);
+                let top_source = crate::markdown::source_line_at_width(
+                    &tab.view.rendered,
+                    range.top_line(),
+                    w,
+                    &tab.view.table_layouts,
+                );
                 let bottom_source = crate::markdown::source_line_at_width(
                     &tab.view.rendered,
                     range.bottom_line(),
                     w,
+                    &tab.view.table_layouts,
                 );
                 build_yank_text(&tab.view.content, top_source, bottom_source)
             }

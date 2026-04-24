@@ -1,0 +1,10 @@
+---
+source: src/ui/table_render.rs
+expression: "table_to_snapshot_str(&table, 40)"
+---
+┌────────┬─────────────────────────────┐
+│ Header │ Styled                      │
+├────────┼─────────────────────────────┤
+│ plain  │ Bold start italic           │
+│        │ continuation here and more  │
+└────────┴─────────────────────────────┘

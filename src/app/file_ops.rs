@@ -379,6 +379,7 @@ impl App {
             &tab.view.rendered,
             tab.view.cursor_line,
             tab.view.layout_width,
+            &tab.view.table_layouts,
         );
         let source_lines_total = content.split('\n').count();
         let target_row = (target_source_line as usize).min(source_lines_total.saturating_sub(1));

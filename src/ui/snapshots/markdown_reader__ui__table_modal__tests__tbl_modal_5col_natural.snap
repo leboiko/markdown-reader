@@ -1,0 +1,10 @@
+---
+source: src/ui/table_modal.rs
+expression: snap
+---
+┌────┬───────┬───────┬───────────────────────────────────────────┬──────────┐
+│ ID │ Name  │ Value │ Description                               │ Status   │
+├────┼───────┼───────┼───────────────────────────────────────────┼──────────┤
+│ 1  │ Alice │ 100   │ description with multiple words that wrap │ active   │
+│ 2  │ Bob   │ 200   │ short                                     │ inactive │
+└────┴───────┴───────┴───────────────────────────────────────────┴──────────┘

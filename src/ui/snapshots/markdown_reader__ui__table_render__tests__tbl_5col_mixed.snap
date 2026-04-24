@@ -1,0 +1,11 @@
+---
+source: src/ui/table_render.rs
+expression: "table_to_snapshot_str(&table, 60)"
+---
+┌───────┬───────────────────┬───┬─────────────────────┬───┐
+│ A     │ B                 │ C │ D                   │ E │
+├───────┼───────────────────┼───┼─────────────────────┼───┤
+│ short │ alpha beta gamma  │ x │ one two three four  │ y │
+│       │ delta epsilon     │   │ five six seven      │   │
+│       │ zeta eta          │   │ eight nine          │   │
+└───────┴───────────────────┴───┴─────────────────────┴───┘

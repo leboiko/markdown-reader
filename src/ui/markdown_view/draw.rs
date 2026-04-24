@@ -166,9 +166,13 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                     && let std::collections::hash_map::Entry::Vacant(e) =
                         tab.view.table_layouts.entry(table.id)
                 {
-                    let (text, height, _was_truncated) = layout_table(table, effective_width, &p);
+                    let (text, height, physical_to_source) =
+                        layout_table(table, effective_width, &p);
                     table.rendered_height = height;
-                    e.insert(super::state::TableLayout { text });
+                    e.insert(super::state::TableLayout {
+                        text,
+                        physical_to_source,
+                    });
                     layout_changed = true;
                 }
             }
@@ -203,11 +207,16 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
 
             for doc_block in &mut tab.view.rendered {
                 if let DocBlock::Table(table) = doc_block {
-                    let (text, height, _was_truncated) = layout_table(table, effective_width, &p);
+                    let (text, height, physical_to_source) =
+                        layout_table(table, effective_width, &p);
                     table.rendered_height = height;
-                    tab.view
-                        .table_layouts
-                        .insert(table.id, super::state::TableLayout { text });
+                    tab.view.table_layouts.insert(
+                        table.id,
+                        super::state::TableLayout {
+                            text,
+                            physical_to_source,
+                        },
+                    );
                 }
             }
 

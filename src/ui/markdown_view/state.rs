@@ -515,9 +515,16 @@ impl MarkdownViewState {
 }
 
 /// Cached rendering of a single table at a given layout width.
+///
+/// `physical_to_source[i]` is the 0-indexed source line for physical row `i`
+/// of the rendered table (counting from the top border). Its length always
+/// equals `text.lines.len()`. See [`crate::ui::table_render::layout_table`]
+/// for the mapping rules.
 #[derive(Debug)]
 pub struct TableLayout {
     pub text: Text<'static>,
+    /// Source-line mapping: one entry per rendered line in `text`.
+    pub physical_to_source: Vec<u32>,
 }
 
 /// Find the start of the next whitespace-separated word at or after

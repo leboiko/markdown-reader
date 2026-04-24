@@ -5,6 +5,64 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.20.5] - 2026-04-23
+
+### Changed — Phase 2 of the architecture cleanup: wrapped-cell tables
+
+Wide table cells now **wrap into extra physical rows** instead of
+truncating with an ellipsis. Closes the largest user-visible markdown
+gap surfaced by the research note (Suggestion 3). Both the inline
+viewer and the expanded modal switch in this single ship.
+
+User-visible:
+- A 200-character cell on a narrow terminal renders across multiple
+  rows with full content preserved, instead of `…`-truncated to fit.
+- Vertical bars stay column-aligned across every physical sub-row of a
+  given markdown row (top-aligned shorter cells; padded with blanks on
+  continuation rows).
+- The `[press ⏎ to expand]` hint disappears from inline tables that
+  previously truncated — there's nothing to expand to anymore, the
+  modal renders the same wrapped output.
+- Header/body separator (`├─┼─┤`) fires only after the *last* sub-row
+  of the header. No inter-body separators (matches GitHub / pandoc /
+  termimad convention).
+
+Internal:
+- New private `WrappedRow` + `wrap_table_rows` + `emit_row_lines` in
+  `src/ui/table_render.rs`. The expanded modal calls the same helpers
+  — modal and inline are one pipeline.
+- `state::TableLayout` gains `physical_to_source: Vec<u32>` so
+  jump-to-source still lands on the right markdown row when the cursor
+  sits on a wrapped sub-row. `source_line_at_width` takes the cache as
+  a 4th argument; pre-draw fallback math preserves no-wrap behavior.
+- `layout_table` returns `(Text, height, Vec<u32>)` instead of
+  `(Text, height, bool)` — `was_truncated` is gone because nothing
+  truncates any more.
+
+Deletions (per the plan's "no dead surface area" gate):
+- `src/ui/table_modal.rs::wrap_cell_spans` and its private helpers
+  (`emit_wrapped_hard_line`, `merge_char_style_pairs`, `StyledChar`)
+  + 7 unit tests — superseded by `text_layout::wrap_spans`.
+- `src/markdown/mod.rs::cell_display_width` — superseded by
+  `text_layout::measure`. Two callers in `markdown/renderer.rs`
+  migrated.
+- `src/ui/table_render.rs::truncate_spans` + 2 unit tests — wrapping
+  replaces truncation.
+- `was_truncated` flag in `layout_table` return tuple.
+
+Tests:
+- 5 new unit tests in `table_render.rs` covering wrap width-sweep,
+  mixed-height row alignment, header-separator placement, no
+  inter-body separators, `physical_to_source` mapping.
+- 5 new snapshot tests via `insta` (added as a dev-dependency)
+  covering 2-col / 5-col / styled / modal rendering.
+- 11 deleted (the `wrap_spans_*` and `truncate_spans_*` tests of the
+  retired helpers).
+- 267 binary + 351 mermaid-text tests pass; clippy + fmt clean.
+
+Net source-line delta: roughly **-180 lines**. Phase 2 is a deletion
+phase with a feature on top.
+
 ## [1.20.4] - 2026-04-23
 
 ### Internal — Phase 1 of the architecture cleanup

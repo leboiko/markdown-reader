@@ -61,8 +61,12 @@ fn make_cached_layout(lines: &[&str]) -> TableLayout {
         .iter()
         .map(|l| Line::from(Span::raw(l.to_string())))
         .collect();
+    // physical_to_source: stub with all zeros for test helpers that only care
+    // about text content (search), not source mapping.
+    let n = text_lines.len();
     TableLayout {
         text: Text::from(text_lines),
+        physical_to_source: vec![0u32; n],
     }
 }
 

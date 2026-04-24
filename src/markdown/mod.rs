@@ -203,51 +203,54 @@ pub fn update_mermaid_heights(
     changed
 }
 
-/// Map a cursor position inside a rendered table to the source line of the
-/// corresponding markdown row.
+/// Return the source line for physical rendered row `local` inside a table,
+/// consulting the cached `physical_to_source` mapping from `TableLayout`.
 ///
-/// The inline table renderer produces a fixed layout:
+/// Falls back to the table's `source_line` when the cached layout is absent or
+/// the index is out of range (race condition during first draw).
 ///
-/// ```text
-/// Row | Content
-/// ----+---------
-///   0 | ┌──┬──┐      top border
-///   1 | │ H │...│    header
-///   2 | ├──┼──┤      separator
-///   3 | │ a │...│    body[0]
-///   4 | │ b │...│    body[1]
-///  ...
-///   N | └──┴──┘      bottom border
-/// N+1 | [expand…]    optional truncation hint
-/// ```
+/// # Arguments
 ///
-/// `local` is the 0-based row within the block. Border rows fall back to the
-/// nearest content row (header or last body). If `row_source_lines` is shorter
-/// than expected (e.g. in tests with stub data), `source_line` is used as a
-/// safe fallback.
-fn table_row_source_line(t: &TableBlock, local: usize) -> u32 {
-    // Row indices of rendered elements.
-    let header_idx: usize = 1; // after top border
-    let first_body_idx: usize = 3; // after header + separator
+/// * `t`      – the `TableBlock` whose source lines are stored in
+///   `row_source_lines`.
+/// * `local`  – 0-based physical row index within the rendered table (same
+///   coordinate space as `local_visual` in [`source_line_at_width`]).
+/// * `layout` – optional cached layout from `MarkdownViewState::table_layouts`.
+///   When `None` (before first draw), falls back to the old position-based math
+///   using `row_source_lines` at fixed indices so behaviour is correct even
+///   before wrapping data is available.
+fn physical_row_source(
+    t: &TableBlock,
+    local: usize,
+    layout: Option<&crate::ui::markdown_view::TableLayout>,
+) -> u32 {
+    if let Some(l) = layout {
+        // Use the pre-computed mapping built by layout_table.
+        return l
+            .physical_to_source
+            .get(local)
+            .copied()
+            .unwrap_or(t.source_line);
+    }
+
+    // Fallback: no cached layout yet (before first draw). Use the fixed-index
+    // approximation with the pre-wrap layout (1 header row, 1 separator, 1 body
+    // row each). This matches the old `table_row_source_line` behaviour and is
+    // correct for tables that haven't been wrapped yet.
+    let header_source = t.row_source_lines.first().copied().unwrap_or(t.source_line);
+    let first_body_idx: usize = 3; // top-border + header + separator
     let last_body_idx: usize = first_body_idx + t.rows.len();
 
-    match local {
-        // Top border — fall back to header source line.
-        i if i < header_idx => t.row_source_lines.first().copied().unwrap_or(t.source_line),
-        // Header row.
-        i if i == header_idx => t.row_source_lines.first().copied().unwrap_or(t.source_line),
-        // Separator — header fallback.
-        i if i < first_body_idx => t.row_source_lines.first().copied().unwrap_or(t.source_line),
-        // Body row.
-        i if i < last_body_idx => {
-            let body_index = i - first_body_idx;
-            t.row_source_lines
-                .get(1 + body_index)
-                .copied()
-                .unwrap_or(t.source_line)
-        }
-        // Bottom border / truncation hint — last body row fallback.
-        _ => t.row_source_lines.last().copied().unwrap_or(t.source_line),
+    if local <= 2 {
+        header_source
+    } else if local < last_body_idx {
+        let body_index = local - first_body_idx;
+        t.row_source_lines
+            .get(1 + body_index)
+            .copied()
+            .unwrap_or(t.source_line)
+    } else {
+        t.row_source_lines.last().copied().unwrap_or(t.source_line)
     }
 }
 
@@ -265,16 +268,36 @@ fn table_row_source_line(t: &TableBlock, local: usize) -> u32 {
 /// = 0`, which short-circuits to "no wrap" (1 row per logical line).
 #[allow(dead_code)]
 pub fn source_line_at(blocks: &[DocBlock], visual_row: u32) -> u32 {
-    source_line_at_width(blocks, visual_row, 0)
+    source_line_at_width(blocks, visual_row, 0, &std::collections::HashMap::new())
 }
 
+/// Map a visual row to its 0-indexed markdown source line.
+///
 /// `visual_row` is in the same coordinate space as `MarkdownViewState`'s
 /// `cursor_line` and `scroll_offset` — visual rows after wrapping. For
 /// `Text` blocks, this walks `text.lines` summing per-line visual rows
 /// until the target row is reached, then looks up `source_lines[logical_idx]`.
 /// `content_width = 0` short-circuits to "no wrap" (1 row per logical line),
 /// matching the legacy pre-wrap behavior tests rely on.
-pub fn source_line_at_width(blocks: &[DocBlock], visual_row: u32, content_width: u16) -> u32 {
+///
+/// `table_layouts` must be the `MarkdownViewState::table_layouts` cache; it is
+/// used to look up `physical_to_source` for table blocks so wrapped-cell tables
+/// map physical sub-rows back to the correct markdown source line. Pass an empty
+/// `HashMap` (or use [`source_line_at`]) in contexts where the layout cache is
+/// unavailable (tests, pre-draw initialization).
+///
+/// # Arguments
+///
+/// * `blocks`        – rendered document block list.
+/// * `visual_row`    – absolute visual row to map (0-indexed, post-wrap).
+/// * `content_width` – viewport width for Text block visual-row counting.
+/// * `table_layouts` – cached table render output from `MarkdownViewState`.
+pub fn source_line_at_width(
+    blocks: &[DocBlock],
+    visual_row: u32,
+    content_width: u16,
+    table_layouts: &std::collections::HashMap<TableBlockId, crate::ui::markdown_view::TableLayout>,
+) -> u32 {
     use crate::ui::markdown_view::visual_rows::line_visual_rows;
     let mut offset = 0u32;
     for block in blocks {
@@ -328,7 +351,10 @@ pub fn source_line_at_width(blocks: &[DocBlock], visual_row: u32, content_width:
                         *source_line + 1 + content_offset
                     }
                 }
-                DocBlock::Table(t) => table_row_source_line(t, local_visual as usize),
+                DocBlock::Table(t) => {
+                    let layout = table_layouts.get(&t.id);
+                    physical_row_source(t, local_visual as usize, layout)
+                }
             };
         }
         offset += h;
@@ -505,14 +531,6 @@ pub fn heading_to_anchor(text: &str) -> String {
     let slug = filtered.replace(' ', "-");
     // Strip leading/trailing hyphens that may appear after filtering.
     slug.trim_matches('-').to_string()
-}
-
-/// Return the total display-column width of a cell's spans.
-pub fn cell_display_width(spans: &[Span<'static>]) -> usize {
-    spans
-        .iter()
-        .map(|s| unicode_width::UnicodeWidthStr::width(s.content.as_ref()))
-        .sum()
 }
 
 /// Flatten a cell's spans to a plain string (for search and modal wrapping).
@@ -1043,19 +1061,20 @@ mod tests {
         //   row 3: "yyyyyyyyyy"  (logical 1, source 20)
         //   row 4: "c"           (logical 2, source 30)
         update_text_visual_heights(&blocks, 10);
-        assert_eq!(source_line_at_width(&blocks, 0, 10), 10);
-        assert_eq!(source_line_at_width(&blocks, 1, 10), 20);
+        let no_layouts = std::collections::HashMap::new();
+        assert_eq!(source_line_at_width(&blocks, 0, 10, &no_layouts), 10);
+        assert_eq!(source_line_at_width(&blocks, 1, 10, &no_layouts), 20);
         assert_eq!(
-            source_line_at_width(&blocks, 2, 10),
+            source_line_at_width(&blocks, 2, 10, &no_layouts),
             20,
             "row 2 is wrap continuation"
         );
         assert_eq!(
-            source_line_at_width(&blocks, 3, 10),
+            source_line_at_width(&blocks, 3, 10, &no_layouts),
             20,
             "row 3 is wrap continuation"
         );
-        assert_eq!(source_line_at_width(&blocks, 4, 10), 30);
+        assert_eq!(source_line_at_width(&blocks, 4, 10, &no_layouts), 30);
     }
 
     #[test]
