@@ -124,7 +124,8 @@ mermaid-text --width 80 my_diagram.mmd
 | `sequenceDiagram` (incl. `autonumber`, notes, activation bars, block statements `loop`/`alt`/`opt`/`par`/`critical`/`break`) | yes (separate pipeline) |
 | `pie` (with optional `showData`, `title`) | yes (renders as horizontal bar chart) |
 | `erDiagram` (entities + attributes + cardinality) | yes (attribute tables, 1/?/+/* glyphs, identifying vs non-identifying) |
-| `gantt`, `journey`, `classDiagram`, etc. | not supported |
+| `classDiagram` (class boxes + members + relationships) | yes (see below) |
+| `gantt`, `journey`, etc. | not supported |
 
 ---
 
@@ -450,6 +451,55 @@ pie showData title Pet Counts
 
 Bar columns auto-scale to the `--width` budget (default 80). Without
 `showData` the value column is omitted.
+
+### Class diagram
+
+```mermaid
+classDiagram
+class Animal {
+    +String name
+    +speak() void
+}
+class Dog {
+    +String breed
+    +fetch() void
+}
+Animal <|-- Dog : inherits
+```
+
+Class boxes render with visibility glyphs (`+`, `-`, `#`, `~`), typed
+attributes and methods, and optional static (`$`) and abstract (`*`)
+suffixes. All seven relationship kinds are supported:
+
+| Mermaid syntax | Kind | Endpoint glyph |
+|---|---|---|
+| `A <\|-- B` | Inheritance | `△` at parent (open triangle) |
+| `A *-- B` | Composition | `◆` at whole (filled diamond) |
+| `A o-- B` | Aggregation | `◇` at whole (open diamond) |
+| `A --> B` | Directed association | `▸` arrow |
+| `A -- B` | Plain association | plain line |
+| `A <\|.. B` | Realization | `△` at interface (dashed line) |
+| `A ..> B` | Dependency | `▸` arrow (dashed line) |
+
+**Supported subset (v1):**
+
+| Feature | Supported |
+|---|---|
+| Class declarations (`class X { … }` and bare `class X`) | yes |
+| Attributes: `+Type name` and `+name Type` | yes |
+| Methods: `+method(params) ReturnType` | yes |
+| Visibility: `+` public, `-` private, `#` protected, `~` package | yes |
+| Static suffix `$` | yes |
+| Abstract suffix `*` | yes |
+| Stereotypes `<<interface>>`, `<<abstract>>`, etc. | yes (rendered above name) |
+| All 7 relationship types | yes |
+| Relationship labels `: label` | yes |
+| Multiplicity `"1"` / `"*"` | yes (parsed, label-rendered) |
+| Default direction TB | yes |
+| Generics `~T~`, `direction`, `note`, `link`, `click`, namespaces | not supported (rejected with error) |
+| Colon shorthand `ClassName : member` | not supported (rejected with error) |
+
+In ASCII mode: `△ → ^`, `◆ → #`, `◇ → *`.
 
 ---
 

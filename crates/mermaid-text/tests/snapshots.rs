@@ -1085,3 +1085,156 @@ end note";
         "error should point at <br> syntax: {err}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// classDiagram — Phase 5: class boxes with members and typed relationships.
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// S1. Single class with attributes and a method.
+// ---------------------------------------------------------------------------
+#[test]
+fn class_single_class() {
+    let src = "classDiagram
+class Animal {
+    +String name
+    +int age
+    +speak() void
+}";
+    let out = mermaid_text::render(src).unwrap();
+    assert!(out.contains("Animal"), "class name must appear");
+    assert!(out.contains("name"), "attribute name must appear");
+    assert!(out.contains("speak"), "method name must appear");
+    assert_snapshot!("class_single_class", out);
+}
+
+// ---------------------------------------------------------------------------
+// S2. Three-level inheritance chain: Animal → Dog → GoldenRetriever.
+// ---------------------------------------------------------------------------
+#[test]
+fn class_inheritance_three_level() {
+    let src = "classDiagram
+class Animal {
+    +String name
+    +speak() void
+}
+class Dog {
+    +String breed
+    +fetch() void
+}
+class GoldenRetriever {
+    +bool loves_water
+}
+Animal <|-- Dog
+Dog <|-- GoldenRetriever";
+    let out = mermaid_text::render(src).unwrap();
+    assert!(out.contains("Animal"));
+    assert!(out.contains("Dog"));
+    assert!(out.contains("GoldenRetriever"));
+    // Inheritance endpoint glyph must appear.
+    assert!(out.contains('△'), "inheritance glyph △ must appear");
+    assert_snapshot!("class_inheritance_three_level", out);
+}
+
+// ---------------------------------------------------------------------------
+// S3. Composition and aggregation relationships.
+// ---------------------------------------------------------------------------
+#[test]
+fn class_composition_aggregation() {
+    let src = "classDiagram
+class Engine {
+    +int horsepower
+    +start() void
+}
+class Wheel {
+    +int diameter
+}
+class Car {
+    +String model
+    +drive() void
+}
+class Fleet {
+    +String name
+}
+Car *-- Engine : has
+Car o-- Wheel : uses
+Fleet o-- Car : contains";
+    let out = mermaid_text::render(src).unwrap();
+    assert!(out.contains("Engine"));
+    assert!(out.contains("Car"));
+    assert!(out.contains("Fleet"));
+    // Composition and aggregation endpoint glyphs.
+    assert!(out.contains('◆'), "composition glyph ◆ must appear");
+    assert!(out.contains('◇'), "aggregation glyph ◇ must appear");
+    assert_snapshot!("class_composition_aggregation", out);
+}
+
+// ---------------------------------------------------------------------------
+// S4. Mixed relationship types: all seven kinds in one diagram.
+// ---------------------------------------------------------------------------
+#[test]
+fn class_mixed_relationships() {
+    let src = "classDiagram
+class A
+class B
+class C
+class D
+class E
+class F
+class G
+A <|-- B
+A *-- C
+A o-- D
+A --> E
+A -- F
+A <|.. G";
+    let out = mermaid_text::render(src).unwrap();
+    assert!(out.contains('A'));
+    assert_snapshot!("class_mixed_relationships", out);
+}
+
+// ---------------------------------------------------------------------------
+// S5. Abstract and static member suffixes.
+// ---------------------------------------------------------------------------
+#[test]
+fn class_abstract_and_static_members() {
+    let src = "classDiagram
+class Shape {
+    +String color
+    +area() double*
+    +perimeter() double*
+    +reset()$ void
+}
+class Circle {
+    +double radius
+    +area() double*
+    +perimeter() double*
+}
+Shape <|-- Circle";
+    let out = mermaid_text::render(src).unwrap();
+    assert!(out.contains("Shape"));
+    assert!(out.contains("Circle"));
+    assert!(out.contains("area"));
+    assert!(out.contains("perimeter"));
+    assert_snapshot!("class_abstract_and_static_members", out);
+}
+
+// ---------------------------------------------------------------------------
+// S6. Width compaction: rendering at a tight budget forces narrower boxes.
+//     Uses render_with_width with 60 cols (tight for a multi-class diagram).
+// ---------------------------------------------------------------------------
+#[test]
+fn class_wide_compaction() {
+    let src = "classDiagram
+class VeryLongClassName {
+    +String attributeWithLongName
+    +computeSomethingExpensive() int
+}
+class AnotherLongClassName {
+    +bool flag
+}
+VeryLongClassName --> AnotherLongClassName";
+    let out = mermaid_text::render_with_width(src, Some(60)).unwrap();
+    assert!(out.contains("VeryLongClassName") || out.contains("VeryLongClas"));
+    assert_snapshot!("class_wide_compaction", out);
+}

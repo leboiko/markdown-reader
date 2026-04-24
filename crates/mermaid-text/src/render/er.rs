@@ -17,16 +17,12 @@
 use unicode_width::UnicodeWidthStr;
 
 use crate::er::{AttributeKey, Cardinality, ErDiagram, Relationship};
+use crate::render::box_table::{NAME_PAD, grid_to_string, pad_right, put, put_str};
 
 /// Minimum cells of horizontal padding between adjacent entity boxes
 /// when no relationship runs between them. Just wide enough that
 /// boxes don't visually merge.
 const MIN_ENTITY_GAP: usize = 4;
-
-/// Cells of padding inside the entity box on each side of content
-/// (the entity name in the header, the type/name/keys columns in
-/// attribute rows).
-const NAME_PAD: usize = 2;
 
 pub fn render(chart: &ErDiagram, _max_width: Option<usize>) -> String {
     if chart.entities.is_empty() {
@@ -286,21 +282,6 @@ fn draw_entity_box(
     put(grid, bottom, right, '┘');
 }
 
-/// Pad `s` with trailing spaces to exactly `width` cells of display
-/// width. Used for attribute-table column alignment.
-fn pad_right(s: &str, width: usize) -> String {
-    let current = s.width();
-    if current >= width {
-        return s.to_string();
-    }
-    let mut out = String::with_capacity(s.len() + (width - current));
-    out.push_str(s);
-    for _ in current..width {
-        out.push(' ');
-    }
-    out
-}
-
 /// Compact keys-column rendering: `PK`, `FK`, `UK`, comma-separated
 /// when multiple. Matches Mermaid's web notation.
 fn format_keys(keys: &[AttributeKey]) -> String {
@@ -438,37 +419,6 @@ fn cardinality_glyph(c: Cardinality) -> char {
         Cardinality::OneOrMany => '+',
         Cardinality::ZeroOrMany => '*',
     }
-}
-
-// ---------------------------------------------------------------------------
-// Tiny grid helpers
-// ---------------------------------------------------------------------------
-
-fn put(grid: &mut [Vec<char>], row: usize, col: usize, ch: char) {
-    if let Some(line) = grid.get_mut(row)
-        && let Some(cell) = line.get_mut(col)
-    {
-        *cell = ch;
-    }
-}
-
-fn put_str(grid: &mut [Vec<char>], row: usize, col: usize, s: &str) {
-    for (c, ch) in (col..).zip(s.chars()) {
-        put(grid, row, c, ch);
-    }
-}
-
-fn grid_to_string(grid: &[Vec<char>]) -> String {
-    let mut out = String::with_capacity(grid.iter().map(|r| r.len() + 1).sum());
-    for row in grid {
-        let line: String = row.iter().collect();
-        out.push_str(line.trim_end());
-        out.push('\n');
-    }
-    while out.ends_with('\n') {
-        out.pop();
-    }
-    out
 }
 
 // ---------------------------------------------------------------------------

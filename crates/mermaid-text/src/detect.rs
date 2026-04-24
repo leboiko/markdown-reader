@@ -17,6 +17,9 @@ pub enum DiagramKind {
     /// `erDiagram` (entity-relationship). Render as labelled entity
     /// boxes joined by cardinality-tagged relationship lines.
     Er,
+    /// `classDiagram` (UML class diagram). Render as a layered box-table
+    /// diagram with boxes per class and labelled relationship lines.
+    Class,
 }
 
 /// Detect the kind of Mermaid diagram described by `input`.
@@ -65,6 +68,7 @@ pub fn detect(input: &str) -> Result<DiagramKind, Error> {
         "statediagram" | "statediagram-v2" => Ok(DiagramKind::State),
         "pie" => Ok(DiagramKind::Pie),
         "erdiagram" => Ok(DiagramKind::Er),
+        "classdiagram" => Ok(DiagramKind::Class),
         other => Err(Error::UnsupportedDiagram(other.to_string())),
     }
 }
@@ -140,5 +144,15 @@ mod tests {
             detect("StateDiagram-V2\n[*] --> A").unwrap(),
             DiagramKind::State
         );
+    }
+
+    #[test]
+    fn detects_class_diagram_keyword() {
+        assert_eq!(
+            detect("classDiagram\nclass Animal").unwrap(),
+            DiagramKind::Class
+        );
+        // Case-insensitive.
+        assert_eq!(detect("ClassDiagram").unwrap(), DiagramKind::Class);
     }
 }

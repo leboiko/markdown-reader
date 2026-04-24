@@ -98,6 +98,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod class;
 pub mod detect;
 pub mod er;
 pub mod layout;
@@ -107,6 +108,10 @@ pub mod render;
 pub mod sequence;
 pub mod types;
 
+pub use class::{
+    Attribute as ClassAttribute, Class, ClassDiagram, Member, Method, RelKind, Relation,
+    Stereotype, Visibility,
+};
 pub use er::{Attribute, AttributeKey, Cardinality, Entity, ErDiagram, LineStyle, Relationship};
 pub use pie::{PieChart, PieSlice};
 pub use sequence::{Message, MessageStyle, Participant, SequenceDiagram};
@@ -243,6 +248,12 @@ pub fn render_with_width(input: &str, max_width: Option<usize>) -> Result<String
             // pipeline (no Sugiyama, no edge router).
             let chart = parser::er::parse(input)?;
             return Ok(render::er::render(&chart, max_width));
+        }
+        DiagramKind::Class => {
+            // Class diagrams use the layered layout with direct L-route edge
+            // painting — no Sugiyama, no shared A* grid.
+            let chart = parser::class::parse(input)?;
+            return Ok(render::class::render(&chart, max_width));
         }
         DiagramKind::Flowchart => parser::parse(input)?,
         DiagramKind::State => {
@@ -444,6 +455,13 @@ pub fn render_with_options(input: &str, opts: &RenderOptions) -> Result<String, 
             let chart = parser::er::parse(input)?;
             render::er::render(&chart, opts.max_width)
         }
+        DiagramKind::Class => {
+            // Class diagrams use their own layout pipeline (layered + direct
+            // L-route painting). Color and compaction knobs from RenderOptions
+            // are silently ignored in v1.
+            let chart = parser::class::parse(input)?;
+            render::class::render(&chart, opts.max_width)
+        }
         DiagramKind::Flowchart => {
             let graph = parser::parse(input)?;
             render_flowchart_with_color(
@@ -564,6 +582,8 @@ fn render_flowchart_with_color(
 /// assert_eq!(to_ascii("▸"), ">");
 /// assert_eq!(to_ascii("▾"), "v");
 /// assert_eq!(to_ascii("◇"), "*");
+/// assert_eq!(to_ascii("◆"), "#");
+/// assert_eq!(to_ascii("△"), "^");
 /// ```
 pub fn to_ascii(s: &str) -> String {
     // Pre-allocate with the same byte length as the input. Because every
@@ -598,6 +618,8 @@ pub fn to_ascii(s: &str) -> String {
             '▴' => '^',
             // ---- Endpoint / decorator glyphs ----
             '◇' => '*',
+            '◆' => '#',
+            '△' => '^',
             '●' => '*',
             '○' | '◯' => 'o',
             '×' => 'x',

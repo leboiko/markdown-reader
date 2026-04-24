@@ -3,6 +3,64 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.16.0 — 2026-04-23 — Phase 5: `classDiagram` support
+
+### Added
+
+- **`classDiagram` diagram type** — full parse + render pipeline for UML
+  class diagrams.
+
+  **Parser** (`parser/class.rs`):
+  - Class declarations (`class X { … }` and bare `class X`).
+  - Member visibility (`+` public, `-` private, `#` protected, `~` package).
+  - Typed attributes in both orderings: `+Type name` and `+name Type`.
+  - Methods with parameter lists and return types, both `+ret method()` and
+    `+method() ret` orderings.
+  - Static (`$`) and abstract (`*`) suffixes.
+  - Stereotypes: `<<interface>>`, `<<abstract>>`, `<<service>>`, etc.
+  - All 7 relationship types: inheritance, composition, aggregation,
+    directed/plain association, realization, dependency.
+  - Relationship labels (`: label`) and multiplicity (`"1"` / `"*"`).
+  - Unsupported features rejected with descriptive errors: generics (`~T~`),
+    `direction`, `note`, `link`, `click`, namespaces, colon shorthand.
+  - 37 unit tests.
+
+  **Renderer** (`render/class.rs`):
+  - Box geometry computed per-class (stereotype + name + divider + members).
+  - Layered layout via synthesised `Graph` nodes so existing layout pipeline
+    (longest-path + barycenter) drives class positioning.
+  - Vertical-first Manhattan L-route for relation edges with `┼` junction
+    detection for crossings.
+  - Class-specific endpoint glyphs: `△` (inheritance / realization at
+    parent/interface), `◆` (composition, filled diamond), `◇` (aggregation,
+    open diamond). Standard `▸` arrow for directed association/dependency.
+  - Dashed `┄` lines for realization and dependency (`.` in Mermaid syntax).
+  - ASCII substitution: `△ → ^`, `◆ → #` (joins existing `◇ → *`).
+  - 11 unit tests.
+
+- **`box_table` shared primitive** (`render/box_table.rs`) — `put`, `put_str`,
+  `pad_right`, `grid_to_string`, `hline`, `draw_box` extracted from
+  `render/er.rs` so both ER and class renderers share one implementation.
+  9 unit tests.
+
+- **`DiagramKind::Class`** — detection and dispatch in `detect.rs` and
+  `lib.rs`.
+
+- **Public re-exports** in `lib.rs`: `ClassAttribute`, `Class`, `ClassDiagram`,
+  `Member`, `Method`, `RelKind`, `Relation`, `Stereotype`, `Visibility`.
+
+### Tests
+
+- 6 snapshot tests in `tests/snapshots.rs`:
+  `class_single_class`, `class_inheritance_three_level`,
+  `class_composition_aggregation`, `class_mixed_relationships`,
+  `class_abstract_and_static_members`, `class_wide_compaction`.
+- New `tests/class_robustness.rs`:
+  - `width_sweep_invariants` — renders the same fixture at widths [40, 60, 80,
+    120, 200] and asserts structural invariants at every width.
+  - `fuzz_no_panic_on_mangled_input` — 50 fixed-seed pseudo-random mutations
+    of a class diagram; asserts `render()` never panics.
+
 ## 0.15.0 — 2026-04-23
 
 ### Layout

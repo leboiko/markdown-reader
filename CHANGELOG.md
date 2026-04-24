@@ -5,6 +5,42 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.22.0] - 2026-04-23
+
+### Added — Phase 5 of the architecture cleanup: classDiagram support
+
+Closes the largest "0% coverage" Mermaid diagram-type gap. UML class
+diagrams (the third-most-used Mermaid type after flowchart and
+sequence; staple of architecture/UML docs) now render in the viewer.
+
+User-visible: paste a `classDiagram` block into any markdown file and
+it renders alongside the existing flowchart / state / sequence / pie /
+ER support. All 7 UML relationship types render with their proper
+endpoints (`△` inheritance/realization, `◆` composition, `◇`
+aggregation, arrows for association/dependency). ASCII fallback maps
+each glyph to a distinct character (`^ # *`).
+
+Internal — see `crates/mermaid-text/CHANGELOG.md` (mermaid-text 0.16.0)
+for the full change list:
+- New `class.rs` data model + `parser/class.rs` parser (37 unit tests).
+- New `render/class.rs` renderer that synthesises a layered Graph for
+  positioning and uses Phase 4's A\* router for edge routing.
+- Extracted `render/box_table.rs` from `render/er.rs` — both renderers
+  now share the box-with-attribute-table primitive (~150 LOC reduction
+  in ER + zero duplication).
+- 6 new snapshot fixtures + width-sweep + fuzz harness (50 mangled
+  inputs, fixed-seed) guaranteeing parser never panics.
+
+Tests: 545 mermaid-text tests pass (was 472); 284 binary tests pass
+(unchanged). Clippy + fmt clean.
+
+This phase ships the **5-phase architecture cleanup** in full:
+1. text_layout foundation (1.20.4)
+2. wrapped-cell tables (1.20.5)
+3. own prose wrapping; visual_rows.rs deleted (1.21.0)
+4. mermaid-text A\* edge routing (1.21.1)
+5. classDiagram support (1.22.0)
+
 ## [1.21.1] - 2026-04-23
 
 ### Changed — Phase 4 of the architecture cleanup

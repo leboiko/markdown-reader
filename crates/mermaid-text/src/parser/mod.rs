@@ -1,8 +1,9 @@
 //! Mermaid diagram parsers.
 //!
-//! Supports `graph`/`flowchart`, `sequenceDiagram`, and `stateDiagram` /
-//! `stateDiagram-v2` syntax.
+//! Supports `graph`/`flowchart`, `sequenceDiagram`, `stateDiagram` /
+//! `stateDiagram-v2`, `erDiagram`, and `classDiagram` syntax.
 
+pub mod class;
 pub(crate) mod common;
 pub mod er;
 pub mod flowchart;
