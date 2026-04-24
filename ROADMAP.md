@@ -22,30 +22,17 @@ _Nothing actively in progress._
 ### Mermaid rendering bugs found in 2026-04-24 gallery audit (remaining)
 
 Audit of 43 charts surfaced 12 bugs + 3 missing-test patterns.
-Phase 1 (B1+B2+S1) and Phase 2 (B4+B6+B10) shipped in
-mermaid-text 0.16.4 / parent 1.26.1. Remaining items in priority
-order:
+Phases 1, 2, 3 shipped (8 of 12 bugs fixed across mermaid-text
+0.16.4 and 0.16.5 + parents 1.26.1 and 1.26.2). Remaining:
 
-**Subgraph-border + edge-label cluster (likely shared root cause):**
-
-- **B8** `crates/mermaid-text/src/layout/grid.rs` — Edge labels in
-  the README Supervisor chart bleed through subgraph walls
-  (`│└─────creates`, `│┌────panics┼┘`, `│▸│ Worker ││      beat│`).
-  Cells adjacent to subgraph borders aren't cleared/padded.
-- **B11** `…/grid.rs` — Wrapped multi-line edge labels escape the
-  subgraph right border (Personal_05). Likely same root cause as B8.
-- **B5** `…/grid.rs` — Cross-subgraph edge label writes into the
-  closing `╰─╯` of a subgraph. No guard for "this cell is a
-  subgraph border."
-
-One careful pass may fix all three. Add snapshots for S3
-(cross-subgraph label placement) afterwards.
-
-**Subgraph layout (its own design pass):**
+**Subgraph layout — separate design problem:**
 
 - **B7** `…/render/flowchart.rs` or `…/layout/grid.rs` — Adjacent
   sibling subgraphs in TB layout collide on the same `y` row when
   combined width approaches terminal width (Personal_01, Personal_10).
+  Phase 3 confirmed this is a different mechanism from the
+  border/label cluster — it's a layout-pass packing decision, not
+  a label-placement issue. Needs its own scoping pass.
   Add snapshot for S2 once fixed.
 
 **Route-attach issues (defer — high regression risk):**
@@ -61,12 +48,6 @@ One careful pass may fix all three. Add snapshots for S3
 iterations to stabilize in 1.22.x.** Defer until someone can carefully
 review against past iterations + add a focused regression-test plan
 before touching the routing code.
-
-**Suggested attack order for remaining work:**
-
-1. **B8+B11+B5** (label-vs-subgraph-border cluster).
-2. **B7** (subgraph crowding).
-3. **B3+B9+B12** (route-attach trio — careful review needed).
 
 ### Pie chart slice colours
 

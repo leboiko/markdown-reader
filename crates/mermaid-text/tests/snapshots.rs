@@ -1331,3 +1331,95 @@ VeryLongClassName --> AnotherLongClassName";
     assert!(out.contains("VeryLongClassName") || out.contains("VeryLongClas"));
     assert_snapshot!("class_wide_compaction", out);
 }
+
+// ---------------------------------------------------------------------------
+// B8. Edge label must not abut the subgraph right wall (`beat│` artifact).
+//     Regression guard: placing a label whose last character is immediately
+//     before the `│` right wall makes it look clipped by the border.
+//     `label_abuts_subgraph_right_wall` rejects such positions in Pass A so
+//     a better-positioned column anchor is tried first.
+// ---------------------------------------------------------------------------
+#[test]
+fn edge_label_does_not_abut_subgraph_right_wall() {
+    // The `beat` label on the Worker→Heartbeat edge used to render as
+    // `beat│` — the last char immediately before the subgraph right wall.
+    let src = "graph LR
+    subgraph Supervisor
+        direction TB
+        F[Factory] -->|creates| W[Worker]
+        W -->|panics| F
+    end
+    W -->|beat| HB[Heartbeat]
+    HB --> WD[Watchdog]";
+    let out = mermaid_text::render(src).unwrap();
+    // Every line that contains "beat" must NOT have the `│` wall character
+    // immediately after it (which would indicate the `beat│` artifact).
+    for line in out.lines() {
+        if let Some(pos) = line.find("beat") {
+            let after = &line[pos + "beat".len()..];
+            let first = after.chars().next().unwrap_or(' ');
+            assert_ne!(first, '│', "beat label abuts right wall: {line:?}");
+        }
+    }
+    assert_snapshot!("edge_label_does_not_abut_subgraph_right_wall", out);
+}
+
+// ---------------------------------------------------------------------------
+// B11. Wrapped (multi-line) edge labels must stay inside the subgraph border.
+//      Regression guard: `<br/>` in an edge label normalises to `\n`.
+//      Both the width guard and the line-by-line write pass must handle the
+//      multi-line case so neither line escapes the subgraph outline.
+// ---------------------------------------------------------------------------
+#[test]
+fn wrapped_edge_label_stays_inside_subgraph() {
+    let src = "graph LR
+subgraph SG[Group]
+  A -->|\"emitOutboxEvent<br/>(fire-and-forget)\"| B
+end
+C --> D";
+    let out = mermaid_text::render(src).unwrap();
+    // Both lines of the label must be present.
+    assert!(
+        out.contains("emitOutboxEvent"),
+        "first label line missing:\n{out}"
+    );
+    assert!(
+        out.contains("(fire-and-forget)"),
+        "second label line missing:\n{out}"
+    );
+    // The subgraph border must be intact — top and bottom rows of `╭─╮` / `╰─╯`
+    // must not be corrupted by label text. Check that every line containing
+    // the label text also contains the subgraph left border `│`.
+    let sg_lines: Vec<&str> = out.lines().filter(|l| l.contains("│")).collect();
+    assert!(!sg_lines.is_empty(), "subgraph border lines missing");
+    assert_snapshot!("wrapped_edge_label_stays_inside_subgraph", out);
+}
+
+// ---------------------------------------------------------------------------
+// B5. Cross-subgraph edge label must not overwrite the subgraph bottom border.
+//     Regression guard: when Pass A rejects all positions and Pass B falls back,
+//     `label_spans_subgraph_border_cell` prevents writing label text into
+//     `╰─╯` border cells even as a last resort.
+// ---------------------------------------------------------------------------
+#[test]
+fn cross_subgraph_edge_label_avoids_bottom_border() {
+    let src = "graph LR
+subgraph SG[Group]
+  A --> B
+end
+B -->|\"not wired to\"| C";
+    let out = mermaid_text::render(src).unwrap();
+    // The label must be present.
+    assert!(out.contains("not wired to"), "label missing:\n{out}");
+    // The subgraph bottom border `╰─╯` must be intact — no label character
+    // should appear inside a line that starts with `╰`.
+    for line in out.lines() {
+        if line.trim_start().starts_with('╰') {
+            assert!(
+                !line.contains("not wired to"),
+                "label corrupts subgraph bottom border: {line:?}"
+            );
+        }
+    }
+    assert_snapshot!("cross_subgraph_edge_label_avoids_bottom_border", out);
+}

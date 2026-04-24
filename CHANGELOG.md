@@ -5,6 +5,23 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.26.2] - 2026-04-24
+
+### Changed
+
+- **Bumped `mermaid-text` from 0.16.4 → 0.16.5.** Picks up audit
+  Phase 3 (subgraph border + edge label cluster, B5+B8+B11):
+  - **B8** edge labels no longer abut a subgraph's right wall
+    (`│      beat│` artifact in the Supervisor chart gone).
+  - **B11** wrapped multi-line edge labels stay inside the
+    subgraph border (multi-line measurement + write bugs fixed).
+  - **B5** cross-subgraph edge labels no longer overwrite the
+    closing `╰─╯` of a subgraph (Pass B cell-level guard).
+
+  Each shipped with a regression test pinning the symptom by name.
+  Remaining audit work: B7 (subgraph crowding, separate design
+  problem) and the deferred route-attach trio (B3+B9+B12).
+
 ## [1.26.1] - 2026-04-24
 
 ### Changed

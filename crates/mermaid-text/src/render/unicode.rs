@@ -870,11 +870,20 @@ fn render_inner(
     // Pass 2b: Write all edge labels after node boxes so that node box
     // drawing (which uses `set()` unconditionally) cannot overwrite labels.
     // Labels are protected so that node labels in pass 3 cannot erase them.
+    //
+    // Multi-line edge labels (containing `\n` from `<br/>` normalisation in
+    // the parser) are written line-by-line on successive rows starting at
+    // `lbl_row`.  Writing the full string in one call would embed a literal
+    // `\n` character into a grid cell, which the Display impl renders as an
+    // actual newline mid-row — corrupting the output (B11).
     for (lbl_col, lbl_row, lbl, lbl_color) in &pending_labels {
-        grid.write_text_protected(*lbl_col, *lbl_row, lbl);
-        if let Some(c) = lbl_color {
-            let lbl_w = UnicodeWidthStr::width(lbl.as_str());
-            grid.paint_fg_rect(*lbl_col, *lbl_row, lbl_w, 1, *c);
+        for (i, line) in lbl.lines().enumerate() {
+            let row = lbl_row + i;
+            grid.write_text_protected(*lbl_col, row, line);
+            if let Some(c) = lbl_color {
+                let line_w = UnicodeWidthStr::width(line);
+                grid.paint_fg_rect(*lbl_col, row, line_w, 1, *c);
+            }
         }
     }
 
@@ -1447,7 +1456,17 @@ fn label_position(
     if path.len() < 2 {
         return None;
     }
-    let lbl_w = UnicodeWidthStr::width(label);
+
+    // For multi-line labels (containing `\n` from `<br/>` normalisation), the
+    // placement width must be the *widest line*, not the full string width.
+    // The full string would include the newline character (counted as 1 cell by
+    // unicode-width) and the second line's text in the same "width" budget,
+    // making the computed width larger than any single rendered line and causing
+    // bad candidate-position offsets.  The height is the number of lines — used
+    // to guard each row against subgraph borders.
+    let lbl_w = label.lines().map(UnicodeWidthStr::width).max().unwrap_or(0);
+    let lbl_h = label.lines().count().max(1);
+
     if lbl_w == 0 {
         return None;
     }
@@ -1458,6 +1477,7 @@ fn label_position(
         lbl_w,
         context.edge_is_back,
         context.has_sibling_outgoing,
+        context.sg_bounds,
     );
     if candidates.is_empty() {
         return None;
@@ -1465,32 +1485,62 @@ fn label_position(
 
     // Pass A: avoid every visually-protected region — other labels,
     // node interiors, node border rows (the `┌──┐` / `└──┘` rows),
-    // subgraph border cells (`╭╮╰╯─│`), and positions where the label
-    // immediately abuts a path corner/junction glyph on either side.
+    // subgraph border cells (`╭╮╰╯─│`), positions where the label
+    // immediately abuts a path corner/junction glyph on either side,
+    // and positions where the label immediately abuts a subgraph wall
+    // (`│` at the left/right border column of any interior row).
     //
     // The corner-adjacency guard prevents `timeout reached─┘` and
     // `─│ label text` artifacts where a path corner merges visually
     // into the label text, making it hard to read where the label ends
     // and the route begins.
+    //
+    // The wall-adjacency guard (B8) prevents labels from abutting the
+    // subgraph's interior `│` wall — `beat│` at the right edge reads
+    // as the label being cut off by the border.
+    //
+    // For multi-line labels each subsequent row (r+1, r+2, …) must also
+    // clear the subgraph border (B11): the second wrapped line must not
+    // fall on the subgraph bottom border or outside the subgraph.
     for &(c, r) in &candidates {
-        if !collides(c, r, lbl_w, placed)
+        // Check the first (and only, for single-line) row.
+        let row_ok = !collides(c, r, lbl_w, placed)
             && !overlaps_prior_path(c, r, lbl_w, context.prior_path_cells)
             && !overlaps_node_interior(c, r, lbl_w, context.node_rects)
             && !overlaps_node_border_row(c, r, lbl_w, context.node_rects)
             && !overlaps_subgraph_border(c, r, lbl_w, context.sg_bounds)
-            && !label_touches_path_corner(c, r, lbl_w, context.grid)
-        {
-            placed.push((c, r, lbl_w, 1));
+            && !label_abuts_subgraph_right_wall(c, r, lbl_w, context.sg_bounds)
+            && !label_touches_path_corner(c, r, lbl_w, context.grid);
+        if !row_ok {
+            continue;
+        }
+        // For multi-line labels, guard every additional line row.
+        let extra_rows_ok = (1..lbl_h).all(|dr| {
+            let rr = r + dr;
+            !overlaps_subgraph_border(c, rr, lbl_w, context.sg_bounds)
+        });
+        if extra_rows_ok {
+            // Record height = lbl_h so the collision registry covers all rows.
+            placed.push((c, r, lbl_w, lbl_h));
             return Some((c, r));
         }
     }
-    // Pass B: relax the structural-overlap constraints as a last resort.
-    // Two labels on top of each other is unreadable, so we still respect
-    // `placed`; a label sitting on a node border row or a subgraph edge
-    // is awkward but strictly better than dropping the label entirely.
+
+    // Pass B: relax the structural-overlap constraints as a last resort so
+    // that labels are never silently dropped.  Two labels on top of each other
+    // is unreadable, so `placed` (label–label collisions) is still respected.
+    // However, we keep one hard constraint even here: the label must not write
+    // OVER an actual subgraph border cell.  Writing text into `╰─╯` or `│`
+    // border glyphs destroys the subgraph outline (B5) — a broken box is worse
+    // than a slightly misplaced label.  `label_spans_subgraph_border_cell`
+    // performs the cell-level test; `overlaps_subgraph_border` (bounds-based)
+    // is NOT repeated here so that labels can sit immediately adjacent to a
+    // border when there is no other option.
     for &(c, r) in &candidates {
-        if !collides(c, r, lbl_w, placed) {
-            placed.push((c, r, lbl_w, 1));
+        if !collides(c, r, lbl_w, placed)
+            && !label_spans_subgraph_border_cell(c, r, lbl_w, context.sg_bounds)
+        {
+            placed.push((c, r, lbl_w, lbl_h));
             return Some((c, r));
         }
     }
@@ -1557,6 +1607,7 @@ fn candidate_positions(
     lbl_w: usize,
     edge_is_back: bool,
     has_sibling_outgoing: bool,
+    sg_bounds: &[SubgraphBounds],
 ) -> Vec<(usize, usize)> {
     const MIN_DOGLEG_SIDE_LABEL_WIDTH: usize = 8;
 
@@ -1596,11 +1647,56 @@ fn candidate_positions(
                 let col_anchors = [mid_col, lo_col + third, lo_col + 2 * third];
                 // Row offsets: alternate above/below, growing in distance.
                 let row_offsets: [isize; 8] = [-1, 1, -2, 2, -3, 3, -4, 4];
-                out.reserve(col_anchors.len() * row_offsets.len());
+                // Two-phase candidate ordering:
+                //
+                // Phase 1 (column-first × interior rows): For each column anchor
+                // try all 8 row offsets; but ONLY emit rows that fall within the
+                // bounding box of any subgraph that the segment row lies inside.
+                // This ensures that (mid_col, row_inside) is tried before
+                // (secondary_col, row_outside), keeping labels inside the
+                // subgraph.  For `panics`, mid_col=6 at dr=-4→row1 (inside) is
+                // tried before any outside row.
+                //
+                // Phase 2 (all remaining positions): all col × row combinations
+                // not emitted in phase 1, i.e. rows outside any enclosing
+                // subgraph.  These are the last-resort positions.
+                //
+                // Within each column the row offsets are tried in the [-1,1,-2,2…]
+                // order so nearby rows are preferred over distant ones.  Across
+                // columns, mid_col is tried before the secondary anchors so that
+                // labels stay visually centred on the segment.
+                //
+                // B8: col 19 (wall-adjacent) is blocked at interior rows by
+                // `label_abuts_subgraph_right_wall` but passes at exterior row 12.
+                // With phase separation, the exterior (19, 12) appears in phase 2,
+                // AFTER the interior (17, 8) in phase 1 — so (17, 8) wins.
+                out.reserve(col_anchors.len() * row_offsets.len() * 2);
+                // Phase 1: inside any enclosing subgraph.
                 for &c in &col_anchors {
                     for &dr in &row_offsets {
                         let r = (seg_row as isize + dr).max(0) as usize;
-                        out.push((c, r));
+                        // Include if the row falls inside any subgraph bounding box
+                        // (strictly interior: between top and bottom border rows).
+                        let inside_sg = sg_bounds.iter().any(|sg| {
+                            let bottom = sg.row + sg.height;
+                            r > sg.row && r < bottom.saturating_sub(1)
+                        });
+                        if inside_sg {
+                            out.push((c, r));
+                        }
+                    }
+                }
+                // Phase 2: outside (or on the border of) all subgraphs.
+                for &c in &col_anchors {
+                    for &dr in &row_offsets {
+                        let r = (seg_row as isize + dr).max(0) as usize;
+                        let inside_sg = sg_bounds.iter().any(|sg| {
+                            let bottom = sg.row + sg.height;
+                            r > sg.row && r < bottom.saturating_sub(1)
+                        });
+                        if !inside_sg {
+                            out.push((c, r));
+                        }
                     }
                 }
             } else {
@@ -1822,8 +1918,12 @@ fn overlaps_node_interior(
         if nw < 2 || nh < 2 {
             continue;
         }
-        let int_left = nc + 1;
-        let int_right = nc + nw - 1; // exclusive
+        // Include the border columns (nc and nc+nw-1) in the blocked range
+        // so that labels cannot end at the left border or start at the right
+        // border, which would produce artifacts like `solid quoted│ B │`
+        // where the label appears to be inside the node (left border overlap).
+        let int_left = nc; // inclusive of left border column
+        let int_right = nc + nw; // exclusive (includes right border at nc+nw-1)
         let int_top = nr + 1;
         let int_bottom = nr + nh - 1; // exclusive
         let row_in_interior = row >= int_top && row < int_bottom;
@@ -1884,7 +1984,8 @@ fn overlaps_node_border_row(
 
 /// Test whether the 1-row label rect at `(col, row)` of width `w`
 /// would overlap any cell of any subgraph border perimeter
-/// (`╭╮╰╯─│`).
+/// (`╭╮╰╯─│`), or land immediately adjacent to the interior right
+/// wall in a way that reads as visually clipped.
 ///
 /// Subgraph borders are drawn early (pass 0a) and protected against
 /// edge routing, but the label-placement pass had no awareness of
@@ -1896,11 +1997,13 @@ fn overlaps_node_border_row(
 /// row, left column, right column. Interior cells are fine — those
 /// belong to nodes/edges inside the subgraph.
 ///
-/// This guard uses tight cell-level overlap (no padding) so labels
-/// can sit *immediately* adjacent to a subgraph border when no other
-/// position fits — the alternative (padding) pushes labels too far
-/// from their edges in tight diagrams, detaching them from the line
-/// they label.
+/// For interior rows, the right wall also carries a 1-cell outward
+/// padding: a label whose rightmost character falls at `right - 1`
+/// (one cell before the `│` wall) reads as `label│`, which the eye
+/// interprets as the label being cut off by the border (B8: `beat│`).
+/// Pass B omits this padding (to avoid silently dropping labels)
+/// but `label_spans_subgraph_border_cell` still guards Pass B against
+/// labels actually written ON a border cell.
 fn overlaps_subgraph_border(
     col: usize,
     row: usize,
@@ -1925,8 +2028,9 @@ fn overlaps_subgraph_border(
             continue;
         }
 
-        // Interior rows of the subgraph: only the left and right
-        // border columns are protected.
+        // Interior rows of the subgraph: the left and right border columns
+        // are protected.  Adjacent-to-wall artifacts (`beat│`) are handled
+        // separately by `label_abuts_subgraph_right_wall`.
         let row_in_height = row > sg.row && row < bottom;
         if !row_in_height {
             continue;
@@ -1934,6 +2038,95 @@ fn overlaps_subgraph_border(
         let hits_left = col <= sg.col && sg.col < label_end;
         let hits_right = col <= right && right < label_end;
         if hits_left || hits_right {
+            return true;
+        }
+    }
+    false
+}
+
+/// Return `true` if placing a label of width `w` at `(col, row)` would leave
+/// the label's last character immediately before the right `│` wall of any
+/// subgraph interior row — producing the `beat│` artifact (B8).
+///
+/// Concretely, this fires when `col + w == right`, where `right` is the
+/// right border column of the subgraph.  At that position the label occupies
+/// `[col .. right - 1]` and the very next cell is the `│` wall, which reads
+/// visually as the label being clipped by the border.
+///
+/// Only interior rows are checked; top/bottom rows are handled by
+/// [`overlaps_subgraph_border`].
+///
+/// Applied only in **Pass A**.  Pass B may still use such positions as a last
+/// resort — a slightly clipped label is better than a missing one.
+fn label_abuts_subgraph_right_wall(
+    col: usize,
+    row: usize,
+    w: usize,
+    sg_bounds: &[SubgraphBounds],
+) -> bool {
+    for sg in sg_bounds {
+        if sg.width == 0 || sg.height == 0 {
+            continue;
+        }
+        let right = sg.col + sg.width - 1;
+        let bottom = sg.row + sg.height - 1;
+
+        // Only interior rows have a plain `│` right wall.
+        if row <= sg.row || row >= bottom {
+            continue;
+        }
+
+        // `col + w == right` → rightmost label char at `right - 1`, wall at `right`.
+        if col + w == right {
+            return true;
+        }
+    }
+    false
+}
+
+/// Return `true` if placing a label of width `w` at `(col, row)` would cause
+/// any character of the label to land on an actual subgraph border cell.
+///
+/// Unlike [`overlaps_subgraph_border`] (which uses bounding-box geometry and
+/// is meant for Pass A's broad avoidance), this check is cell-level and is
+/// applied even in **Pass B** (last-resort placement).  Pass B relaxes most
+/// structural guards so that labels are never silently dropped, but writing
+/// label characters *onto* subgraph border cells destroys the outline glyph —
+/// e.g., `╰─╯` becomes `╰te╯` when `te` lands on the `─` cells (B5).  A
+/// broken border is worse than a misplaced label, so this guard is always on.
+///
+/// "Border cell" means: any cell in the subgraph's top/bottom rows or
+/// left/right column within the border height.
+fn label_spans_subgraph_border_cell(
+    col: usize,
+    row: usize,
+    w: usize,
+    sg_bounds: &[SubgraphBounds],
+) -> bool {
+    let label_end = col + w; // exclusive
+    for sg in sg_bounds {
+        if sg.width == 0 || sg.height == 0 {
+            continue;
+        }
+        let right = sg.col + sg.width - 1;
+        let bottom = sg.row + sg.height - 1;
+
+        // Top or bottom border row: any column overlap hits a border cell.
+        if row == sg.row || row == bottom {
+            let col_overlaps = !(label_end <= sg.col || right < col);
+            if col_overlaps {
+                return true;
+            }
+            continue;
+        }
+
+        // Interior rows: the left column (sg.col) and right column (right)
+        // are the border cells.
+        if row <= sg.row || row >= bottom {
+            continue;
+        }
+        // Does the label's column range [col, label_end) contain sg.col or right?
+        if (col <= sg.col && sg.col < label_end) || (col <= right && right < label_end) {
             return true;
         }
     }
@@ -2117,12 +2310,24 @@ mod tests {
 
     #[test]
     fn label_immediately_outside_subgraph_border_is_allowed() {
-        // The CI/CD `pass` case: label at col 41 (immediately right of
-        // CI's `│` at col 40). We accept this — pad=0 keeps labels
-        // close to their edges. Cosmetic margin would push them too
-        // far in tight diagrams.
+        // Label at col 41 is OUTSIDE the subgraph (right border at col 40) —
+        // no overlap. The CI/CD `pass` case: labels that sit just outside
+        // the border are always accepted by `overlaps_subgraph_border`.
         let w = 4;
         assert!(!overlaps_subgraph_border(41, 3, w, &ci_subgraph()));
+    }
+
+    #[test]
+    fn label_ending_one_before_right_wall_is_protected() {
+        // B8: a label whose last character lands at `right - 1` reads as
+        // `beat│` — the `│` wall visually clips the label.
+        // `label_abuts_subgraph_right_wall` fires when `col + w == right`.
+        // Here right = 40; col=36, w=4 → col+w=40=right.
+        let w = 4; // label at [36..40); rightmost char at 39, wall at 40
+        assert!(label_abuts_subgraph_right_wall(36, 3, w, &ci_subgraph()));
+        // `overlaps_subgraph_border` itself does NOT fire for this position
+        // (it only fires when the label actually spans or touches the wall cell).
+        assert!(!overlaps_subgraph_border(36, 3, w, &ci_subgraph()));
     }
 
     #[test]

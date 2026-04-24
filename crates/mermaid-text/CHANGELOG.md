@@ -3,6 +3,55 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.16.5 — 2026-04-24
+
+### Fixed — subgraph border + edge label cluster (audit Phase 3)
+
+Three bugs from the 2026-04-24 rendering audit, all touching the
+interaction between edge labels and subgraph border cells. Shared
+hypothesis ("no guard for subgraph border cells") held up partially
+— B5 needed a Pass B cell-level guard, B8 needed a width-1 abuts
+check, B11 was an unrelated multi-line measurement bug — but the
+fixes share a module and the same `LabelPlacementContext` machinery
+that B10 extended in 0.16.4.
+
+- **B8** Edge labels no longer abut a subgraph's right wall. Labels
+  ending at column `right - 1` (one before the wall `│`) produced
+  artifacts like `│      beat│` in the README Supervisor chart.
+  New `label_abuts_subgraph_right_wall()` Pass A guard rejects any
+  candidate whose `col + w == right`. Pinned via
+  `edge_label_does_not_abut_subgraph_right_wall`.
+- **B11** Wrapped multi-line edge labels stay inside the subgraph
+  right border. Two underlying bugs: width was measured on the full
+  multi-line string (with `\n`) producing oversize estimates, and
+  `write_text_protected` stored `\n` as a grid cell that emitted a
+  spurious newline mid-row. Width is now `lines().map(width).max()`,
+  and writes iterate `lbl.lines().enumerate()` so each wrapped row
+  lands at `lbl_row + i`. Multi-line label height is also tracked
+  for collision-registry coverage. Pinned via
+  `wrapped_edge_label_stays_inside_subgraph`.
+- **B5** Cross-subgraph edge labels no longer overwrite a subgraph's
+  closing `╰─╯` border. Pass B (last-resort) had no guard against
+  writing onto actual border cells. New
+  `label_spans_subgraph_border_cell()` cell-level check applied as
+  a hard constraint in Pass B (top/bottom rows AND left/right border
+  columns). Pinned via `cross_subgraph_edge_label_avoids_bottom_border`.
+
+### Internal
+
+- `overlaps_node_interior` extended to include border columns
+  (`int_left = nc` instead of `nc + 1`) — prevents labels from
+  ending exactly at a node's left border (`label│ B │` artifacts).
+- LR-direction candidate ordering now runs in two phases: Phase 1
+  exhausts all `col_anchor × row_offset` combinations *inside* any
+  enclosing subgraph; Phase 2 tries outside rows. This restores the
+  preference for staying-inside without sacrificing the close-row
+  `mid_col` preference that 0.16.4 introduced for B10.
+
+The supervisor chart's `panics`/`creates`/`beat` labels all relocate
+to clear positions; `state_self_loop_multi_outgoing` snapshot
+updated to reflect the cleaner placement (visual improvement).
+
 ## 0.16.4 — 2026-04-24
 
 ### Added
