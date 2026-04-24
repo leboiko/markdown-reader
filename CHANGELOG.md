@@ -5,6 +5,23 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.22.5] - 2026-04-24
+
+### Changed
+
+- **Bumped `mermaid-rs-renderer` from 0.2.1 → 0.2.2.** Picks up the
+  state-diagram-v2 fix we reported as
+  [1jehuang/mermaid-rs-renderer#67](https://github.com/1jehuang/mermaid-rs-renderer/issues/67)
+  ("missing state names and clipped transition labels"). Image-mode
+  state diagrams now keep state titles and accumulate descriptions
+  correctly. Bonus fixes inherited from the upstream release:
+  sequence-diagram `alt` frame geometry (no more layout panic on
+  wide section labels), compact-flowchart label decorations, dotted
+  edges visually distinct from solid, class diagram stereotypes
+  rendered above (not as) members, class arrowheads no longer hidden
+  under node boxes, empty-subgraph layout panic, non-ASCII hex color
+  panics, and a new compact Gantt display mode.
+
 ## [1.22.4] - 2026-04-24
 
 ### Fixed — code-block ASCII art alignment
