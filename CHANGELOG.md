@@ -5,6 +5,29 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.26.1] - 2026-04-24
+
+### Changed
+
+- **Bumped `mermaid-text` from 0.16.3 → 0.16.4.** Picks up three
+  fixes from the 2026-04-24 rendering audit:
+  - **B1+B2 (parser, new feature):** inline-quoted edge labels now
+    work for all three arrow styles (`A -- "x" --> B`,
+    `A -. "x" .-> B`, `A == "x" ==> B`). Previously silently
+    produced ghost nodes for dashed/thick variants.
+  - **B4 (state self-loop):** self-loops on a node with other
+    outgoing edges no longer deposit stray `┌┐ / ├┼ / ││` glyphs
+    into adjacent box borders.
+  - **B10 (edge labels vs corners):** edge labels no longer cling
+    to route corner glyphs; the supervisor chart's `panics` label
+    cleanly clears the `┼` junction.
+
+  Each shipped with a regression test pinning the symptom by name.
+  Audit bug B6 turned out to be the same root cause as B4 (no
+  separate fix needed). The remaining audit bugs (B3, B5, B7, B8,
+  B9, B11, B12) are still parked in the ROADMAP per the suggested
+  attack order.
+
 ## [1.26.0] - 2026-04-24
 
 ### Internal — Palette → Tokens migration completed (Ship 2 follow-up D)

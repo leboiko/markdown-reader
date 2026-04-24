@@ -308,10 +308,16 @@ fn parse_subgraph_header(stmt: &str) -> (String, String) {
 
 /// Return `true` if the statement appears to contain at least one edge arrow.
 fn looks_like_edge_chain(s: &str) -> bool {
-    // Quick scan: any known arrow token
+    // Quick scan: any known arrow token.
+    //
+    // Note: the inline-quoted dashed form `-. "label" .->` does NOT contain
+    // the substring `-.->` as a contiguous run (the label splits the two
+    // halves), so we check for `-. "` explicitly.  The thick form `== "label"
+    // ==>` does contain `==>`, so no extra check is needed there.
     s.contains("-->")
         || s.contains("---")
         || s.contains("-.->")
+        || s.contains("-. \"") // inline-quoted dashed: `-. "label" .->`
         || s.contains("==>")
         || s.contains("<-->")
         || s.contains("--o")
@@ -465,8 +471,30 @@ fn is_arrow_start(chars: &[char], i: usize) -> bool {
         || remaining.starts_with("<-->")
         || remaining.starts_with("--o")
         || remaining.starts_with("--x")
-        || remaining.starts_with("-- ") // "-- label -->"
+        || remaining.starts_with("-- ") // "-- label -->" and "-- \"label\" -->"
         || remaining.starts_with("--")
+        // Inline-quoted label forms: `-. "label" .->` and `== "label" ==>`
+        // These don't start with the bare arrow token, so they need explicit
+        // detection here so the tokeniser fires an arrow-consumption pass
+        // instead of swallowing the `-`/`=` into the node token.
+        || inline_quoted_arrow_matches(&remaining)
+}
+
+/// Return `true` if `s` starts with an inline-quoted-label arrow prefix.
+///
+/// Mermaid allows `A -. "label" .-> B` and `A == "label" ==> B` in addition
+/// to the pipe-label form (`A -.->|"label"| B`). The inline-quoted form puts
+/// the label *between* the two halves of the arrow, which means neither half
+/// alone is a complete arrow token — we must detect the opening half here.
+///
+/// We check for `-. ` (dashed inline) and `== ` (thick inline) followed by
+/// an opening double-quote. Single-quoted variants are not part of the
+/// Mermaid spec and are intentionally not supported.
+fn inline_quoted_arrow_matches(s: &str) -> bool {
+    // Dashed: -. "label" .->
+    (s.starts_with("-. \"") && s.contains(".->"))
+        // Thick: == "label" ==>
+        || (s.starts_with("== \"") && s.contains("==>"))
 }
 
 /// Classify an arrow token into `(style, start_endpoint, end_endpoint)`.
@@ -535,10 +563,12 @@ fn classify_arrow(arrow: &str) -> (EdgeStyle, EdgeEndpoint, EdgeEndpoint) {
 /// - `-->` / `-->|label|`
 /// - `---`
 /// - `-.->` / `-.->|label|`
+/// - `-. "label" .->` (inline-quoted dashed; normalised to `-.->|label|` internally)
 /// - `==>`
+/// - `== "label" ==>` (inline-quoted thick; normalised to `==>|label|` internally)
 /// - `<-->`
 /// - `--o` / `--x`
-/// - `-- label -->`
+/// - `-- label -->` / `-- "label" -->`
 fn consume_arrow(chars: &[char], start: usize) -> (String, usize) {
     let remaining: String = chars[start..].iter().collect();
 
@@ -549,10 +579,20 @@ fn consume_arrow(chars: &[char], start: usize) -> (String, usize) {
         return (tok, 4 + extra);
     }
 
-    // "-- label -->" form  (must check before plain "--")
+    // "-- label -->" and "-- \"label\" -->" forms (must check before plain "--")
     if let Some(arrow) = try_consume_labeled_dash_arrow(&remaining) {
         let len = arrow.chars().count();
         return (arrow, len);
+    }
+
+    // Inline-quoted dashed:  `-. "label" .->` → normalise to `-.->|label|`
+    // Inline-quoted thick:   `== "label" ==>` → normalise to `==>|label|`
+    //
+    // We normalise to the pipe-label form so that `classify_arrow` and
+    // `extract_arrow_label` require no changes: both code paths share the
+    // same downstream label handling.
+    if let Some((tok, consumed)) = try_consume_inline_quoted_arrow(&remaining) {
+        return (tok, consumed);
     }
 
     // "-.->"|label|? (also handles "-..->")
@@ -604,6 +644,60 @@ fn consume_arrow(chars: &[char], start: usize) -> (String, usize) {
     }
     // Fallback: consume "--"
     (remaining[..2].to_string(), 2)
+}
+
+/// Try to parse inline-quoted-label arrow forms, returning `(normalised_token, chars_consumed)`.
+///
+/// Recognised patterns and their normalised output (pipe-label form):
+///
+/// | Source syntax        | Normalised token |
+/// |----------------------|------------------|
+/// | `-. "label" .->`     | `-.->|"label"|`  |
+/// | `== "label" ==>`     | `==>|"label"|`   |
+///
+/// Normalising to pipe-label keeps `classify_arrow` and `extract_arrow_label`
+/// unchanged — all three inline-quoted styles (solid handled by
+/// `try_consume_labeled_dash_arrow`, dashed and thick handled here) share the
+/// same downstream normalization path via `extract_arrow_label`'s pipe-label branch.
+///
+/// Returns `None` when `s` does not start with a recognised inline-quoted prefix.
+fn try_consume_inline_quoted_arrow(s: &str) -> Option<(String, usize)> {
+    // All characters in the arrow tokens and ASCII quotes are single-byte UTF-8,
+    // so byte length == char count for consumption purposes. The label text
+    // itself may contain multi-byte chars, but we don't need to count it
+    // separately — we measure the whole consumed slice as `s.len() - tail.len()`.
+
+    // Dashed: `-. "label" .->`  →  normalised as `-.->|"label"|`
+    // `strip_prefix` enforces the opening `-. "` in one step (avoids the
+    // clippy::manual_strip lint that fires on `starts_with` + index-slice).
+    if let Some(after_open) = s.strip_prefix("-. \"")
+        && let Some(close_q) = after_open.find('"')
+    {
+        // after_open[..close_q] is the label text; after_open[close_q+1..] is
+        // everything after the closing quote.
+        let label = &after_open[..close_q];
+        let tail_start = after_open[close_q + 1..].trim_start_matches(' ');
+        if let Some(tail) = tail_start.strip_prefix(".->") {
+            let pipe_tok = format!("-.->|\"{label}\"|");
+            let consumed = s.len() - tail.len();
+            return Some((pipe_tok, consumed));
+        }
+    }
+
+    // Thick: `== "label" ==>`  →  normalised as `==>|"label"|`
+    if let Some(after_open) = s.strip_prefix("== \"")
+        && let Some(close_q) = after_open.find('"')
+    {
+        let label = &after_open[..close_q];
+        let tail_start = after_open[close_q + 1..].trim_start_matches(' ');
+        if let Some(tail) = tail_start.strip_prefix("==>") {
+            let pipe_tok = format!("==>|\"{label}\"|");
+            let consumed = s.len() - tail.len();
+            return Some((pipe_tok, consumed));
+        }
+    }
+
+    None
 }
 
 /// Try to parse `-- label -->` form. Returns the full token string if matched.
@@ -1249,6 +1343,103 @@ classDef overlay stroke:#999,color:#fff";
         let src = "graph LR\nA-->B\nclass A undefined";
         let g = parse(src).unwrap();
         assert!(!g.node_styles.contains_key("A"));
+    }
+
+    // ---- Inline-quoted edge label tests (B1/B2 regression) ----------------
+
+    /// B1: dashed edge with inline-quoted label.
+    ///
+    /// `A -. "label" .-> B` must produce a single dotted edge labelled "label",
+    /// not a ghost node containing the literal text `-. "label"`.
+    #[test]
+    fn inline_quoted_label_dashed_edge() {
+        let g = parse("graph LR\nA -. \"my label\" .-> B").unwrap();
+        // Must be exactly one edge — not zero (label consumed as node) and not two.
+        assert_eq!(g.edges.len(), 1, "expected 1 edge, got {}", g.edges.len());
+        let e = &g.edges[0];
+        assert_eq!(e.from, "A");
+        assert_eq!(e.to, "B");
+        assert_eq!(e.style, EdgeStyle::Dotted);
+        assert_eq!(e.end, EdgeEndpoint::Arrow);
+        assert_eq!(
+            e.label.as_deref(),
+            Some("my label"),
+            "label should be extracted without surrounding quotes"
+        );
+    }
+
+    /// B2: thick edge with inline-quoted label.
+    ///
+    /// `A == "label" ==> B` must produce a single thick edge labelled "label".
+    #[test]
+    fn inline_quoted_label_thick_edge() {
+        let g = parse("graph LR\nA == \"my label\" ==> B").unwrap();
+        assert_eq!(g.edges.len(), 1, "expected 1 edge, got {}", g.edges.len());
+        let e = &g.edges[0];
+        assert_eq!(e.from, "A");
+        assert_eq!(e.to, "B");
+        assert_eq!(e.style, EdgeStyle::Thick);
+        assert_eq!(e.end, EdgeEndpoint::Arrow);
+        assert_eq!(e.label.as_deref(), Some("my label"));
+    }
+
+    /// Solid inline-quoted form (`-- "label" -->`) — this worked before the
+    /// fix via `try_consume_labeled_dash_arrow`. Verify it still works and
+    /// that quotes are stripped from the label.
+    #[test]
+    fn inline_quoted_label_solid_edge() {
+        let g = parse("graph LR\nA -- \"my label\" --> B").unwrap();
+        assert_eq!(g.edges.len(), 1, "expected 1 edge, got {}", g.edges.len());
+        let e = &g.edges[0];
+        assert_eq!(e.from, "A");
+        assert_eq!(e.to, "B");
+        assert_eq!(e.style, EdgeStyle::Solid);
+        assert_eq!(e.end, EdgeEndpoint::Arrow);
+        assert_eq!(e.label.as_deref(), Some("my label"));
+    }
+
+    /// Pipe-label forms must continue to work identically after the fix.
+    /// Regression guard: B1/B2 fix must not break the pre-existing pipe path.
+    #[test]
+    fn pipe_label_dashed_and_thick_unaffected() {
+        let g = parse("graph LR\nA -.->|pipe dashed| B\nA ==>|pipe thick| C").unwrap();
+        assert_eq!(g.edges.len(), 2);
+        let dashed = g.edges.iter().find(|e| e.to == "B").unwrap();
+        assert_eq!(dashed.style, EdgeStyle::Dotted);
+        assert_eq!(dashed.label.as_deref(), Some("pipe dashed"));
+        let thick = g.edges.iter().find(|e| e.to == "C").unwrap();
+        assert_eq!(thick.style, EdgeStyle::Thick);
+        assert_eq!(thick.label.as_deref(), Some("pipe thick"));
+    }
+
+    /// Inline-quoted labels with spaces in the label text.
+    #[test]
+    fn inline_quoted_label_with_spaces() {
+        let g = parse("graph LR\nA -. \"sends event to\" .-> B").unwrap();
+        assert_eq!(g.edges.len(), 1);
+        assert_eq!(g.edges[0].label.as_deref(), Some("sends event to"));
+    }
+
+    /// Inline-quoted label in a chain: `A -. "x" .-> B ==> C`.
+    /// Both edges must parse correctly within the same chain statement.
+    #[test]
+    fn inline_quoted_label_in_chain() {
+        let g = parse("graph LR\nA -. \"step one\" .-> B ==> C").unwrap();
+        assert_eq!(g.edges.len(), 2, "expected 2 edges in chain");
+        let ab = g
+            .edges
+            .iter()
+            .find(|e| e.from == "A" && e.to == "B")
+            .unwrap();
+        assert_eq!(ab.style, EdgeStyle::Dotted);
+        assert_eq!(ab.label.as_deref(), Some("step one"));
+        let bc = g
+            .edges
+            .iter()
+            .find(|e| e.from == "B" && e.to == "C")
+            .unwrap();
+        assert_eq!(bc.style, EdgeStyle::Thick);
+        assert!(bc.label.is_none());
     }
 
     #[test]

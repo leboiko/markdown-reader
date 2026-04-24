@@ -69,7 +69,7 @@ fn all_node_shapes() {
 }
 
 // ---------------------------------------------------------------------------
-// 5. All supported edge styles
+// 5. All supported edge styles — pipe-label form (regression baseline)
 // ---------------------------------------------------------------------------
 #[test]
 fn all_edge_styles() {
@@ -83,6 +83,40 @@ fn all_edge_styles() {
         A--xH"#;
     let out = mermaid_text::render(src).unwrap();
     assert_snapshot!("all_edge_styles", out);
+}
+
+// ---------------------------------------------------------------------------
+// 5b. Inline-quoted label syntax for all three arrow styles (B1/B2 regression)
+//
+//     Mermaid supports two label syntaxes: pipe-form (`-->|"label"|`) and
+//     inline-quoted form (`-- "label" -->`). The inline-quoted form for
+//     dashed (`-. "x" .->`) and thick (`== "x" ==>`) arrows was silently
+//     broken: the lexer consumed the opening arrow half as part of the
+//     preceding node token, producing a ghost node instead of a labelled edge.
+//     This snapshot pins the correct output after the fix.
+// ---------------------------------------------------------------------------
+#[test]
+fn all_edge_styles_inline_quoted_labels() {
+    let src = r#"graph LR
+        A -- "solid quoted" --> B
+        A -. "dashed quoted" .-> C
+        A == "thick quoted" ==> D"#;
+    let out = mermaid_text::render(src).unwrap();
+    // Each edge must carry its label — verify the label text appears in the
+    // rendered output as a basic sanity check before the full snapshot.
+    assert!(
+        out.contains("solid quoted"),
+        "solid inline-quoted label missing from output:\n{out}"
+    );
+    assert!(
+        out.contains("dashed quoted"),
+        "dashed inline-quoted label missing from output:\n{out}"
+    );
+    assert!(
+        out.contains("thick quoted"),
+        "thick inline-quoted label missing from output:\n{out}"
+    );
+    assert_snapshot!("all_edge_styles_inline_quoted_labels", out);
 }
 
 // ---------------------------------------------------------------------------
@@ -509,6 +543,27 @@ fn state_self_transition() {
 }
 
 #[test]
+fn state_self_loop_multi_outgoing_no_artifacts() {
+    // Regression test for B4: a self-loop on a node that also has other
+    // outgoing edges must not produce stray ├/┼/│ glyphs that merge into
+    // adjacent box borders. The self-loop must route around the bottom of
+    // the node (back-edge path) instead of the right side (forward-edge
+    // path), so its A* path never crosses the exit column of the other edges.
+    let src = "stateDiagram-v2\n[*] --> pending\npending --> pending : retry\npending --> sent";
+    let out = mermaid_text::render(src).unwrap();
+    // The self-loop must NOT leave a dangling ┌┐ / ├┼ above the sent box.
+    assert!(
+        !out.contains("││"),
+        "stray double-bar from self-loop routing"
+    );
+    assert!(
+        !out.contains("┌─"),
+        "stray box-corner from self-loop routing"
+    );
+    assert_snapshot!("state_self_loop_multi_outgoing", out);
+}
+
+#[test]
 fn state_multi_line_description() {
     let src = "stateDiagram-v2
 direction LR
@@ -659,6 +714,44 @@ end note";
     assert!(out.contains("worker pool size"));
     assert!(out.contains("shared with retry queue"));
     assert_snapshot!("state_diagram_with_multiline_note", out);
+}
+
+#[test]
+fn edge_label_not_adjacent_to_corner_glyph() {
+    // Regression test for B10: edge labels must not be placed immediately
+    // adjacent to path corner/junction glyphs (┘ └ ┐ ┌ ┤ ├ ┬ ┴ ┼).
+    // Such adjacency produces artifacts like `label─┘` or `└─label` where
+    // the label text merges visually with the route corner.
+    //
+    // The supervisor test previously showed `┌────panics┼┘` — "panics"
+    // placed immediately left of `┼`. The guard in `label_touches_path_corner`
+    // now moves such labels to a position where no corner glyph is adjacent.
+    let src = "graph LR
+subgraph SG[Supervisor]
+  A-->B
+  B-->|panics|A
+  C-->|creates|B
+end";
+    let out = mermaid_text::render(src).unwrap();
+    // Labels must be present.
+    assert!(out.contains("panics"), "panics label missing");
+    assert!(out.contains("creates"), "creates label missing");
+    // The label 'panics' must not be immediately followed by a junction glyph.
+    for line in out.lines() {
+        if let Some(pos) = line.find("panics") {
+            let after = &line[pos + "panics".len()..];
+            let first_char = after.chars().next().unwrap_or(' ');
+            assert!(
+                !matches!(
+                    first_char,
+                    '┘' | '└' | '┐' | '┌' | '┤' | '├' | '┬' | '┴' | '┼'
+                ),
+                "label 'panics' immediately followed by corner glyph: {:?}",
+                first_char
+            );
+        }
+    }
+    assert_snapshot!("edge_label_not_adjacent_to_corner_glyph", out);
 }
 
 #[test]

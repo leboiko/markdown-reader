@@ -1,0 +1,10 @@
+---
+source: crates/mermaid-text/tests/snapshots.rs
+expression: out
+---
+╭─────╮      ╭─────────╮      ╭──────╮
+│( ● )│─────▸│ pending │─────▸│ sent │
+╰─────╯      ╰────▴────╯      ╰──────╯
+                  │
+                   retry
+

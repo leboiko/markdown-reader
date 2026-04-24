@@ -3,6 +3,55 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.16.4 — 2026-04-24
+
+### Added
+
+- **Inline-quoted edge labels** for all three arrow styles
+  (`A -- "label" --> B`, `A -. "label" .-> B`, `A == "label" ==> B`).
+  The pipe-label form (`A -->|"label"| B`) already worked; the
+  inline form silently produced ghost nodes because the lexer
+  consumed `A -. "label"` as a bare node definition before the
+  arrow was recognised. Audit bug B1+B2 from the 2026-04-24
+  rendering audit. Snapshot pinned via
+  `all_edge_styles_inline_quoted_labels`.
+
+### Fixed
+
+- **State diagram self-loops on a node with other outgoing edges**
+  no longer leak `┌┐` / `├┼` / `││` glyphs into adjacent box
+  borders. Self-loops (`edge.from == edge.to`) are now classified
+  as back-edges so they route via the bottom-attach path instead of
+  sharing the right-side forward-edge column. Audit bug B4.
+  Pinned via `state_self_loop_multi_outgoing_no_artifacts`.
+- **Edge labels no longer touch route corner glyphs**
+  (`┘ └ ┐ ┌ ┤ ├ ┬ ┴ ┼`). The label-placement Pass A now defers any
+  candidate position whose immediate left or right neighbour is a
+  corner cell, so artifacts like `label─┘` or `┼label` don't form
+  any more. Audit bug B10. Pinned via
+  `edge_label_not_adjacent_to_corner_glyph`.
+
+  Visible improvement on existing snapshots: the supervisor chart's
+  `panics` label moved from `┌────panics┼┘` (touching `┼`) to a
+  clear row above. Three existing snapshots updated with cleaner
+  output: `state_self_transition`, `state_nested_composites`,
+  `supervisor_bidirectional_in_subgraph`.
+
+### Internal
+
+- `looks_like_edge_chain` now also matches `-. "` (dashed inline
+  quoted), and `is_arrow_start` / `consume_arrow` add an
+  `inline_quoted_arrow_matches` predicate. The new
+  `try_consume_inline_quoted_arrow` normalises inline-quoted tokens
+  to pipe-label form so `classify_arrow` and `extract_arrow_label`
+  needed no changes — labels are always in `|…|` form by the time
+  they reach the downstream processors.
+
+Audit bug B6 (stray `└─┘` fragment below subgraph border) turned
+out to be the same self-loop routing artifact addressed by B4 in
+the chart that exhibited it; no separate fix needed once self-loops
+were re-classified as back-edges.
+
 ## 0.16.3 — 2026-04-24
 
 ### Fixed

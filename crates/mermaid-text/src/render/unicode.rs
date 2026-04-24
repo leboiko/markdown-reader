@@ -393,7 +393,12 @@ fn grid_size(
     // below (or to the right of) the last node row/column, A* runs out of
     // bounds and falls back to Manhattan routing that cuts through the middle.
     // Four cells is enough for the corridor + arrow tip.
+    // Self-loops (`from == to`) are treated as back-edges for routing
+    // purposes, so they count toward the corridor requirement.
     let has_back_edge = graph.edges.iter().any(|e| {
+        if e.from == e.to {
+            return true;
+        }
         let Some(&fp) = positions.get(&e.from) else {
             return false;
         };
@@ -567,10 +572,22 @@ fn render_inner(
     // still producing visually distinct dotted/thick lines.
 
     // Pre-compute per-edge flags needed by the router and post-processing loop.
+    //
+    // Self-loops (`from == to`) are treated as back-edges so they use the
+    // perpendicular-attach routing path (exit/enter at the bottom of the box
+    // for LR, right for TD). Without this, the self-loop uses the normal
+    // forward-edge right-side exit and its A*-routed path crosses the same
+    // column as other outgoing edges, producing stray ├ / ┼ junction glyphs
+    // where the direction bits merge.
     let edge_is_back_flags: Vec<bool> = graph
         .edges
         .iter()
         .map(|e| {
+            // Self-loop: always treat as a back-edge so it routes around
+            // the bottom/right perimeter of the node rather than right side.
+            if e.from == e.to {
+                return true;
+            }
             let fp = positions.get(&e.from).copied();
             let tp = positions.get(&e.to).copied();
             match (fp, tp) {
@@ -618,6 +635,15 @@ fn render_inner(
             positions.get(&edge.to).copied(),
             geoms.get(&edge.to).copied(),
         ) {
+            // For self-loops the source and destination are the same node, so
+            // `sb == db`. The router places `▴` at the entry cell (which equals
+            // `sb`) and protects it. Stamping `┬` on top of that arrowhead via
+            // `grid.set()` (unconditional) would erase the arrowhead, so we skip
+            // junction stamping entirely for self-loops. The arrow tip already
+            // makes the connection visually clear.
+            if edge.from == edge.to {
+                continue;
+            }
             let (sb, sp) = back_edge_border_cells(fp, fg, graph.direction);
             let (db, _) = back_edge_border_cells(tp, tg, graph.direction);
             back_edge_border_joins.push((sb.0, sb.1, false));
@@ -749,6 +775,7 @@ fn render_inner(
                     dir: graph.direction,
                     node_rects: &node_rects,
                     sg_bounds,
+                    grid: &grid,
                     edge_is_back,
                     has_sibling_outgoing,
                     prior_path_cells,
@@ -958,7 +985,10 @@ fn compute_spread_attaches(
             let to_pos = *positions.get(&edge.to)?;
             let from_geom = *geoms.get(&edge.from)?;
             let to_geom = *geoms.get(&edge.to)?;
-            if is_back_edge(from_pos, to_pos, graph.direction) {
+            // Self-loops and true back-edges both use the perpendicular-side
+            // attach points. Self-loops have `from_pos == to_pos` so
+            // `is_back_edge` returns false for them; check explicitly first.
+            if edge.from == edge.to || is_back_edge(from_pos, to_pos, graph.direction) {
                 let src = exit_point_back_edge(from_pos, from_geom, graph.direction);
                 let dst = entry_point_back_edge(to_pos, to_geom, graph.direction);
                 Some((src, dst))
@@ -1383,6 +1413,9 @@ struct LabelPlacementContext<'a> {
     dir: Direction,
     node_rects: &'a [(usize, usize, usize, usize)],
     sg_bounds: &'a [SubgraphBounds],
+    /// Reference to the rendered grid, used to check for adjacent path
+    /// corner/junction glyphs when scoring candidate label positions.
+    grid: &'a Grid,
     edge_is_back: bool,
     has_sibling_outgoing: bool,
     prior_path_cells: Option<&'a HashSet<(usize, usize)>>,
@@ -1431,19 +1464,21 @@ fn label_position(
     }
 
     // Pass A: avoid every visually-protected region — other labels,
-    // node interiors, node border rows (the `┌──┐` / `└──┘` rows), and
-    // subgraph border cells (`╭╮╰╯─│`). Border rows and subgraph
-    // borders are protected because labels there read as part of the
-    // box outline — the Supervisor pattern's `panics` label inside
-    // Factory's bottom border (`└──panics──┘`) and the CI/CD pipeline's
-    // `pass` label puncturing CI's right `│` are the visible bugs this
-    // guard prevents.
+    // node interiors, node border rows (the `┌──┐` / `└──┘` rows),
+    // subgraph border cells (`╭╮╰╯─│`), and positions where the label
+    // immediately abuts a path corner/junction glyph on either side.
+    //
+    // The corner-adjacency guard prevents `timeout reached─┘` and
+    // `─│ label text` artifacts where a path corner merges visually
+    // into the label text, making it hard to read where the label ends
+    // and the route begins.
     for &(c, r) in &candidates {
         if !collides(c, r, lbl_w, placed)
             && !overlaps_prior_path(c, r, lbl_w, context.prior_path_cells)
             && !overlaps_node_interior(c, r, lbl_w, context.node_rects)
             && !overlaps_node_border_row(c, r, lbl_w, context.node_rects)
             && !overlaps_subgraph_border(c, r, lbl_w, context.sg_bounds)
+            && !label_touches_path_corner(c, r, lbl_w, context.grid)
         {
             placed.push((c, r, lbl_w, 1));
             return Some((c, r));
@@ -1472,6 +1507,39 @@ fn overlaps_prior_path(
         return false;
     };
     (col..col + w).any(|c| prior_path_cells.contains(&(c, row)))
+}
+
+/// Return `true` if placing a label of display width `w` at `(col, row)`
+/// would leave a path corner or junction glyph immediately adjacent to
+/// either end of the label.
+///
+/// The guard checks the cell one column **before** the label start and one
+/// column **after** the label end on the same row. Corner/junction glyphs —
+/// `┘ └ ┐ ┌ ┤ ├ ┬ ┴ ┼` — where a path changes direction are the problem:
+/// they merge visually with adjacent label text, producing artifacts like
+/// `timeout reached─┘` or `─│ label text`.
+///
+/// Straight-line glyphs (`─`, `│`) are intentionally excluded because labels
+/// running alongside a path channel (`label─────▸node`) are common and
+/// readable.
+fn label_touches_path_corner(col: usize, row: usize, w: usize, grid: &Grid) -> bool {
+    // Characters that mark a path direction change (corner or junction).
+    // Straight-line glyphs are excluded — touching `─` or `│` is fine.
+    const CORNERS: &[char] = &[
+        '┘', '└', '┐', '┌', '┤', '├', '┬', '┴', '┼',
+        // Thick/double variants used by some edges or borders.
+        '╯', '╰', '╮', '╭', // T-junctions that appear in back-edge routing.
+        '▴', '▾', '▸', '◂',
+    ];
+    // Cell one column before the label start.
+    if col > 0 && CORNERS.contains(&grid.get(col - 1, row)) {
+        return true;
+    }
+    // Cell one column after the label end.
+    if CORNERS.contains(&grid.get(col + w, row)) {
+        return true;
+    }
+    false
 }
 
 /// Generate the ordered list of `(col, row)` candidates to try for an edge
@@ -1520,20 +1588,44 @@ fn candidate_positions(
                 }
             }
 
-            let Some((mid_col, seg_row, lo_col, hi_col)) = last_horizontal_segment_with_range(path)
-            else {
-                return out;
-            };
-            // Three column anchors along the segment.
-            let third = (hi_col - lo_col) / 3;
-            let col_anchors = [mid_col, lo_col + third, lo_col + 2 * third];
-            // Row offsets: alternate above/below, growing in distance.
-            let row_offsets: [isize; 8] = [-1, 1, -2, 2, -3, 3, -4, 4];
-            out.reserve(col_anchors.len() * row_offsets.len());
-            for &c in &col_anchors {
-                for &dr in &row_offsets {
-                    let r = (seg_row as isize + dr).max(0) as usize;
-                    out.push((c, r));
+            if let Some((mid_col, seg_row, lo_col, hi_col)) =
+                last_horizontal_segment_with_range(path)
+            {
+                // Three column anchors along the segment.
+                let third = (hi_col - lo_col) / 3;
+                let col_anchors = [mid_col, lo_col + third, lo_col + 2 * third];
+                // Row offsets: alternate above/below, growing in distance.
+                let row_offsets: [isize; 8] = [-1, 1, -2, 2, -3, 3, -4, 4];
+                out.reserve(col_anchors.len() * row_offsets.len());
+                for &c in &col_anchors {
+                    for &dr in &row_offsets {
+                        let r = (seg_row as isize + dr).max(0) as usize;
+                        out.push((c, r));
+                    }
+                }
+            } else {
+                // Fallback for purely-vertical or very-short paths (e.g.
+                // self-loops in LR graphs produce a 2-cell vertical path with
+                // no horizontal segment). Use the path's last cell as an anchor
+                // and place the label to the right or left.
+                //
+                // `last_vertical_segment_with_len` requires a run of ≥2, so
+                // a 2-cell path fails it. Instead fall back to the path tip.
+                let (seg_col, seg_row) =
+                    last_vertical_segment(path).unwrap_or_else(|| *path.last().unwrap_or(&path[0]));
+                let col_anchors = [seg_col + 1, seg_col.saturating_sub(lbl_w + 1)];
+                // Prefer placing the label two rows below the path tip (row+2),
+                // then one below (row+1), then adjacent to, then above. For
+                // self-loops in LR graphs `seg_row` is the bottom border of the
+                // box; row+1 is the exit-point cell (│), row+2 is the free
+                // corridor beneath, which reads most cleanly.
+                let row_offsets: [isize; 4] = [2, 1, 3, 0];
+                out.reserve(col_anchors.len() * row_offsets.len());
+                for &c in &col_anchors {
+                    for &dr in &row_offsets {
+                        let r = (seg_row as isize + dr).max(0) as usize;
+                        out.push((c, r));
+                    }
                 }
             }
             out
