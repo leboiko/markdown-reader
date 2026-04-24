@@ -23,7 +23,7 @@
 //! `paths[edge_idx]` without any remapping.
 
 use crate::layout::Grid;
-use crate::layout::grid::{Attach, DIR_DOWN, DIR_LEFT, DIR_RIGHT, DIR_UP};
+use crate::layout::grid::{Attach, DIR_DOWN, DIR_UP};
 use crate::types::{Direction, Graph};
 
 // ---------------------------------------------------------------------------
@@ -89,33 +89,48 @@ pub(crate) fn route_all(
             grid.route_edge(src.col, src.row, dst.col, dst.row, horizontal_first, tip)
         };
 
-        // Source-attach: when the route's first step is *perpendicular*
-        // to the layout's natural flow axis, the source cell would
-        // otherwise render as a single half-line in the step direction
-        // (e.g., `─` from a `└` cell). Add the "back into box" direction
-        // bit so the cell renders as a proper corner glyph (└ ┘ ┌ ┐),
-        // visually anchoring the edge to the source box border.
+        // Source-attach: only for TD/BT layouts whose route turns
+        // sideways at the source cell.
         //
-        // When the first step is parallel to the natural axis (a clean
-        // straight start, including back-edges that go anti-parallel),
-        // the cell already renders correctly as `│` or `─`; adding the
-        // anchor would produce spurious corner glyphs. The 1.22.1 fix
-        // applied the anchor unconditionally and broke those cases.
+        // The cell at the route's first position renders from its
+        // direction bits. For TD/BT layouts the source attach sits
+        // immediately below/above the box (against a horizontal `─`
+        // border). When the route's first step is also horizontal, the
+        // single-bit cell renders as `─`, which stacks confusingly
+        // beside the box's `─` border — both look like horizontal
+        // segments at adjacent rows. Adding the "back into box" UP/DOWN
+        // bit converts the cell to a corner glyph (`└ ┘ ┌ ┐`) that
+        // visibly exits the box border.
+        //
+        // Skipped for:
+        //   - vertical first steps (cell is `│`, sits cleanly next to
+        //     any box wall — no anchor needed)
+        //   - LR/RL layouts (the back-into-box bit would land on the
+        //     same axis as the route's first step, OR-ing into a
+        //     visual no-op `─` while still polluting the cell's
+        //     direction bits, which subtly increases edge_occupied
+        //     weight for downstream L-route cost calculations and
+        //     measurably worsens crossings on dense LR graphs)
+        //
+        // The 1.22.1 release added the anchor unconditionally, which
+        // produced spurious corners (`│┐` `│┘`) on every edge with a
+        // vertical first step (back-edges, mid-side attach points in
+        // LR layouts containing internal TB subgraphs).
         if let Some(p) = &path
             && p.len() >= 2
         {
             let (c0, r0) = p[0];
             let (_, r1) = p[1];
             let route_first_step_horizontal = r0 == r1;
-            let natural_horizontal = graph.direction.is_horizontal();
-            if route_first_step_horizontal != natural_horizontal {
+            if route_first_step_horizontal {
                 let anchor = match graph.direction {
-                    Direction::TopToBottom => DIR_UP,
-                    Direction::BottomToTop => DIR_DOWN,
-                    Direction::LeftToRight => DIR_LEFT,
-                    Direction::RightToLeft => DIR_RIGHT,
+                    Direction::TopToBottom => Some(DIR_UP),
+                    Direction::BottomToTop => Some(DIR_DOWN),
+                    Direction::LeftToRight | Direction::RightToLeft => None,
                 };
-                grid.add_dirs(c0, r0, anchor);
+                if let Some(bits) = anchor {
+                    grid.add_dirs(c0, r0, bits);
+                }
             }
         }
 

@@ -5,6 +5,27 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.22.3] - 2026-04-24
+
+### Fixed — mermaid-text 0.16.3 source-attach (final form)
+
+The 1.22.2 perpendicular-axis heuristic still over-anchored LR
+layouts with vertical first steps (back-edges, mid-side attach
+points in LR-with-internal-TB subgraphs). The new rule applies the
+anchor only to TD/BT layouts whose route turns sideways at the
+source — the only case where the cell would otherwise render as a
+stub `─` adjacent to a horizontal box border. Supervisor-style
+charts now render `││` cleanly (was `│┐`/`│┘` in 1.22.1 and 1.22.2).
+
+### Docs
+
+- **README static text examples regenerated.** The "Unicode" version
+  of the Build/Test/Deploy ASCII-fallback example used `+---+`
+  ASCII-style corners (a copy-paste leftover from the ASCII variant
+  beneath it). Now uses proper `┌───┐`. The Sugiyama-backend
+  dependency-graph example had stray vertical lines below the
+  diagram from a stale render; regenerated against current code.
+
 ## [1.22.2] - 2026-04-22
 
 ### Fixed — mermaid-text 0.16.2 source-attach correction

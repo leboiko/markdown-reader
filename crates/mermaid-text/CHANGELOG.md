@@ -3,6 +3,26 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.16.3 — 2026-04-24
+
+### Fixed
+
+- **Source-attach simplified to "TD/BT with horizontal first step".**
+  The 0.16.2 perpendicular-axis heuristic still over-anchored LR
+  back-edges and any LR route with a vertical first step (e.g. mid-side
+  attach points in LR layouts containing internal TB subgraphs — the
+  Supervisor pattern). The new rule only adds the anchor when the
+  source cell would otherwise render as a stub `─` adjacent to a
+  horizontal box border — i.e. TD/BT layouts whose route turns
+  sideways at the source. LR/RL anchors are skipped entirely (they
+  would land on the same axis as the route's first step, OR-ing into
+  a visual no-op `─` while still polluting the cell's direction bits
+  and measurably worsening crossings on dense LR graphs).
+
+  After this change, supervisor-style charts render `││` cleanly
+  (was `│┐`/`│┘` in 0.16.1/0.16.2) and dense LR fan-outs lose 1
+  more crossing.
+
 ## 0.16.2 — 2026-04-22
 
 ### Fixed

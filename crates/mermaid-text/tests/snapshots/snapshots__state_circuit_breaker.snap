@@ -1,10 +1,11 @@
 ---
 source: crates/mermaid-text/tests/snapshots.rs
+assertion_line: 680
 expression: out
 ---
 ╭─────╮      ╭────────────────────────────────╮                                probe succeeds                    ╭───────────────────────────────╮
 │( ● )│─────┐│ One probe call allowed through │─────────────────────────────────────────────────────────────────┐│   All DB calls pass through   │
-╰─────╯     │╰────────────────▴───────────────╯┐                                                               ┌▸│ Counting consecutive failures │┐
+╰─────╯     │╰────────────────▴───────────────╯│                                                               ┌▸│ Counting consecutive failures ││
             └─────────────────┼────────────────┼───────────────────────────────────────────────────────────────┘▸╰───────────────────────────────╯│
                               │                │                                                                                 5 consecutive failures
                probe fails (increased backoff) │                                                                ┌─────────────────────────────────┘
