@@ -3,6 +3,30 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.16.2 — 2026-04-22
+
+### Fixed
+
+- **Source-attach anchor is now applied conditionally.** The 0.16.1
+  release added the anchor bit to every edge's first cell, which
+  produced spurious corner glyphs (`┐ ┘ ┌ └`) on edges whose first
+  step was already in the layout's natural flow direction (straight
+  starts, back-edges, multi-edge fan-outs, mid-side attach points
+  in LR layouts with internal TB subgraphs). The anchor is now
+  added only when the route's first step is *perpendicular* to the
+  natural axis — i.e., when the cell would otherwise render as a
+  detached half-line. Straight starts and parallel back-edges now
+  render as clean `│`/`─` again.
+
+- **L-route bend prefers the target side on cost ties.** When both
+  H-first and V-first L-shapes have the same obstacle weight, the
+  router now picks the orientation that puts the bend close to the
+  target (V-first for TB/BT, H-first for LR/RL). This keeps the
+  source side of the edge as a clean straight segment, which
+  reduces visual clutter and lowers crossing counts on dense
+  graphs (e.g. `dense_bipartite` 8→5, `dense_td_crossing` 6→3
+  after the combined revert + smart anchor; `dense_fan_out` 7→6).
+
 ## 0.16.1 — 2026-04-23
 
 ### Fixed

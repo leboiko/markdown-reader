@@ -5,6 +5,21 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.22.2] - 2026-04-22
+
+### Fixed — mermaid-text 0.16.2 source-attach correction
+
+The 1.22.1 release applied the source-attach anchor unconditionally,
+which produced spurious corner glyphs (`┐ ┘ ┌ └`) on edges whose
+first step already ran in the layout's natural flow direction —
+breaking back-edges, multi-edge fan-outs, and LR layouts containing
+internal TB subgraphs (Supervisor pattern). The 1.22.2 release
+applies the anchor only when the route's first step is
+*perpendicular* to the natural axis, restoring clean `│`/`─` for
+parallel starts while keeping the corner anchor for true L-turns
+out of source boxes. L-route bend now also prefers the target side
+on cost ties, reducing crossings on dense graphs.
+
 ## [1.22.1] - 2026-04-23
 
 ### Fixed — mermaid-text 0.16.1 polish from real-doc testing

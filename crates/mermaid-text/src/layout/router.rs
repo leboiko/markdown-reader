@@ -89,27 +89,34 @@ pub(crate) fn route_all(
             grid.route_edge(src.col, src.row, dst.col, dst.row, horizontal_first, tip)
         };
 
-        // Anchor the route's first cell to the source box border. Without
-        // this, an edge that immediately turns sideways (because the
-        // source-target columns differ by one, common when boxes have
-        // different widths) shows only its turn glyph at the attach cell
-        // — the visual connection to the source box is missing. Adding
-        // the "back into the box" direction bit produces the right corner
-        // glyph (└ ┘ ┐ ┌) and the edge looks attached.
+        // Source-attach: when the route's first step is *perpendicular*
+        // to the layout's natural flow axis, the source cell would
+        // otherwise render as a single half-line in the step direction
+        // (e.g., `─` from a `└` cell). Add the "back into box" direction
+        // bit so the cell renders as a proper corner glyph (└ ┘ ┌ ┐),
+        // visually anchoring the edge to the source box border.
         //
-        // The arrow tip on the target side is already drawn ON the target
-        // box border for vertical flow (entry_point puts it on the border
-        // row), so the target side is already visually anchored. For
-        // horizontal flow the tip lands one column outside; A*'s
-        // protection on the tip cell suppresses any extra bits.
-        if path.is_some() {
-            let anchor = match graph.direction {
-                Direction::TopToBottom => DIR_UP,
-                Direction::BottomToTop => DIR_DOWN,
-                Direction::LeftToRight => DIR_LEFT,
-                Direction::RightToLeft => DIR_RIGHT,
-            };
-            grid.add_dirs(src.col, src.row, anchor);
+        // When the first step is parallel to the natural axis (a clean
+        // straight start, including back-edges that go anti-parallel),
+        // the cell already renders correctly as `│` or `─`; adding the
+        // anchor would produce spurious corner glyphs. The 1.22.1 fix
+        // applied the anchor unconditionally and broke those cases.
+        if let Some(p) = &path
+            && p.len() >= 2
+        {
+            let (c0, r0) = p[0];
+            let (_, r1) = p[1];
+            let route_first_step_horizontal = r0 == r1;
+            let natural_horizontal = graph.direction.is_horizontal();
+            if route_first_step_horizontal != natural_horizontal {
+                let anchor = match graph.direction {
+                    Direction::TopToBottom => DIR_UP,
+                    Direction::BottomToTop => DIR_DOWN,
+                    Direction::LeftToRight => DIR_LEFT,
+                    Direction::RightToLeft => DIR_RIGHT,
+                };
+                grid.add_dirs(c0, r0, anchor);
+            }
         }
 
         paths[edge_idx] = path;
@@ -189,7 +196,7 @@ fn try_l_route(
     grid: &mut Grid,
     src: Attach,
     dst: Attach,
-    _horizontal_first: bool,
+    horizontal_first: bool,
     tip: char,
 ) -> Option<Vec<(usize, usize)>> {
     if src.col == dst.col || src.row == dst.row {
@@ -197,37 +204,33 @@ fn try_l_route(
         return None;
     }
 
-    // Cost for the horizontal-first bend: go along src.row to dst.col, then
-    // along dst.col to dst.row. The corner cell is (dst.col, src.row).
+    // Two L-shape options. The corner cell of each:
+    //   H-first (horizontal-then-vertical) → corner at (dst.col, src.row)
+    //                                        → bend NEAR the SOURCE row.
+    //   V-first (vertical-then-horizontal) → corner at (src.col, dst.row)
+    //                                        → bend NEAR the TARGET row.
+    //
+    // For TB/BT flow we want the bend near the target so the source side
+    // is a clean straight `│`, which makes the edge visibly continuous
+    // out of the source box. Symmetrically for LR/RL we want the bend
+    // near the target column, i.e. H-first. The `horizontal_first` flag
+    // already captures this — it's `true` for LR/RL, `false` for TB/BT.
     let cost_hv = l_cost(grid, src, dst, true);
-    // Cost for the vertical-first bend: go along src.col to dst.row, then
-    // along dst.row to dst.col. The corner cell is (src.col, dst.row).
     let cost_vh = l_cost(grid, src, dst, false);
 
-    match (cost_hv, cost_vh) {
-        (None, None) => None, // both blocked by hard obstacles
-        (Some(_), None) => {
-            // Only V-bend is clear — take it.
-            grid.route_edge(src.col, src.row, dst.col, dst.row, true, tip)
+    let prefer_hv = match (cost_hv, cost_vh) {
+        (None, None) => return None, // both blocked by hard obstacles
+        (Some(_), None) => true,     // only H-bend clear
+        (None, Some(_)) => false,    // only V-bend clear
+        (Some(ch), Some(cv)) if ch != cv => ch < cv, // strictly cheaper wins
+        (Some(_), Some(_)) => {
+            // Tie — bend near the target. For TB/BT (`horizontal_first =
+            // false`) that's V-first; for LR/RL (`horizontal_first = true`)
+            // that's H-first. Either way `prefer_hv = horizontal_first`.
+            horizontal_first
         }
-        (None, Some(_)) => {
-            // Only H-bend is clear — take it.
-            grid.route_edge(src.col, src.row, dst.col, dst.row, false, tip)
-        }
-        (Some(ch), Some(cv)) if ch == cv => {
-            // Both orientations cost the same — fall through to A* so its
-            // obstacle-map and start-direction preference break the tie.
-            // This is important for edges in direction-overridden subgraphs
-            // where the layout hint (`horizontal_first`) reflects the outer
-            // graph direction, not the subgraph's actual flow axis.
-            None
-        }
-        (Some(ch), Some(cv)) => {
-            // One is strictly cheaper — take the better orientation.
-            let prefer_hv = ch < cv;
-            grid.route_edge(src.col, src.row, dst.col, dst.row, prefer_hv, tip)
-        }
-    }
+    };
+    grid.route_edge(src.col, src.row, dst.col, dst.row, prefer_hv, tip)
 }
 
 /// Compute the soft-obstacle weight of an L-shaped path.
