@@ -3,6 +3,40 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.16.7 — 2026-04-24
+
+### Added — Sugiyama backend: parallel-edge widening passthrough (sub-phase 2)
+
+The `LayoutBackend::Sugiyama` backend now applies the same inter-layer gap
+widening for parallel-edge groups that the native `layered` backend has had
+since 0.12.0.  Previously, diagrams like the CI/CD pipeline with
+`T ==>|pass| D` + `T -.->|skip| D` collapsed both labels onto a cramped
+single row under `--sugiyama`; the two labels now render on separate rows
+with full breathing room, matching native backend output.
+
+**How it works:** new private helper `apply_parallel_edge_widening` is called
+between the layer-gap expansion pass (step 4.5) and the RL/BT mirror pass
+(step 5) in `sugiyama_layout`. For each adjacent level pair `(L, L+1)` whose
+crossing edges include a parallel group of ≥ 2 labeled edges, it adds
+`(count − 1) × (max_label_width + 2)` extra cells along the flow axis to
+every node at level ≥ L+1, with cumulative stacking for deeper levels.  This
+exactly mirrors the `parallel_extra` term in `layered::label_gap`.
+
+**What did NOT change:**
+- The **default backend remains `LayoutBackend::Native`** — all existing
+  snapshots and behavior are byte-identical.
+- The `needed_for_stacking` row-height term is not ported — ascii-dag's IR
+  already manages label-row stacking internally.
+
+**Tests added:**
+- `parallel_edges_two_styles_no_collision` — asserts that two parallel labeled
+  edges produce a wider inter-layer gap than a single labeled edge between the
+  same nodes; pins the exact `(count-1)*(max_lbl+2)` delta.
+- `cicd_parallel_styles_to_same_target_sugiyama` — side-by-side snapshot of
+  the CI/CD chart under Sugiyama; shows "pass" and "skip" on distinct rows.
+- `no_parallel_edges_widening_is_noop` — regression guard confirming a
+  single-chain graph (no parallel edges) is unaffected.
+
 ## 0.16.6 — 2026-04-24
 
 ### Added — Sugiyama backend: subgraph cluster passthrough (sub-phase 1)

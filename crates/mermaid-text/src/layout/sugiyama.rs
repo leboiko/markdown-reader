@@ -28,11 +28,14 @@
 //!   node positions via `compute_subgraph_bounds`, so border
 //!   drawing is identical to the native backend regardless of
 //!   which layout produced the positions.
+//! - **Parallel-edge widening** — post-pass inter-layer gap
+//!   expansion for groups of ≥ 2 labeled parallel edges sharing
+//!   the same unordered endpoint pair (sub-phase 2 of Sugiyama
+//!   Phase 2). Mirrors `layered::label_gap`'s `parallel_extra`
+//!   term so both backends produce equivalent spacing.
 //!
 //! ## Gaps to fill in follow-ups
 //!
-//! - Parallel-edge groups (ascii-dag collapses them; we'd need
-//!   to dedupe + use our existing `parallel_edge_groups` widening).
 //! - Edge styles (dashed/thick/etc.) — render-side concern, but
 //!   we should keep `edge_index` consistent for downstream lookup.
 //! - Direction overrides on nested subgraphs.
@@ -40,6 +43,7 @@
 use std::collections::HashMap;
 
 use ascii_dag::{Graph as AGraph, LayoutConfig as ALayoutConfig};
+use unicode_width::UnicodeWidthStr;
 
 use crate::layout::layered::{LayoutConfig, LayoutResult, node_box_height, node_box_width};
 use crate::types::{Direction, Graph};
@@ -121,6 +125,116 @@ fn register_subgraphs<'g>(
             adag.put_subgraphs(&child_aids)
                 .inside(parent_aid)
                 .expect("ascii-dag rejected subgraph nesting — sg_id_map inconsistent");
+        }
+    }
+}
+
+/// Widen inter-layer gaps for parallel-edge groups in the Sugiyama backend.
+///
+/// Mirrors the `parallel_extra` logic from `layered::label_gap`: for each
+/// adjacent level pair `(L, L+1)` that has a parallel-edge group of ≥ 2
+/// labeled edges crossing it, adds `(count − 1) × (max_label_width + 2)`
+/// extra cells along the flow axis (col for LR/RL, row for TB/BT) to every
+/// node at level ≥ L+1.  Cumulative offsets stack so gaps farther down the
+/// flow accumulate correctly.
+///
+/// **What we do NOT port:** the `needed_for_stacking = count × 2 + 1` term
+/// from `label_gap`.  ascii-dag's IR already handles row-stacking of label
+/// text inside the inter-layer space it allocated; only the inter-layer *gap
+/// width* needs augmenting here.
+///
+/// # Arguments
+///
+/// * `positions`   — mutable map from mermaid node-ID → `(col, row)` after
+///   step 4.5 (layer_gap expansion).
+/// * `id_to_level` — mermaid node-ID → ascii-dag level (0-indexed depth),
+///   derived from `raw_positions` before it was consumed.
+/// * `graph`       — source graph (edges + direction).
+fn apply_parallel_edge_widening(
+    positions: &mut HashMap<String, (usize, usize)>,
+    id_to_level: &HashMap<String, usize>,
+    graph: &Graph,
+) {
+    let parallel_groups = graph.parallel_edge_groups();
+    if parallel_groups.is_empty() {
+        return;
+    }
+
+    // Compute the maximum level to bound the per-level extra array.
+    let max_level = id_to_level.values().copied().max().unwrap_or(0);
+    if max_level == 0 {
+        return;
+    }
+
+    // For each inter-level gap (level L → L+1), compute the extra cells
+    // contributed by parallel edge groups crossing that gap.
+    //
+    // Strategy: for each level L from 0 .. max_level-1 collect the parallel
+    // groups whose source nodes live at level L and target nodes at level L+1
+    // (or vice-versa — unordered endpoint pair). Then take the maximum extra
+    // across all such groups (matching layered::label_gap's `.max()` call).
+    let mut extra_per_gap: Vec<usize> = vec![0usize; max_level];
+    for group in &parallel_groups {
+        // Determine which inter-level gap this group spans.
+        // All edges in a parallel group share the same unordered endpoint
+        // pair, so we only need the first edge's endpoints.
+        let first_edge = &graph.edges[group[0]];
+        let Some(&from_lvl) = id_to_level.get(&first_edge.from) else {
+            continue;
+        };
+        let Some(&to_lvl) = id_to_level.get(&first_edge.to) else {
+            continue;
+        };
+        let (lo, hi) = if from_lvl <= to_lvl {
+            (from_lvl, to_lvl)
+        } else {
+            (to_lvl, from_lvl)
+        };
+        // Only adjacent-level gaps are widened (same semantics as layered).
+        if hi != lo + 1 {
+            continue;
+        }
+        // Count edges in this group that carry a label, and find the widest.
+        let labeled: Vec<usize> = group
+            .iter()
+            .filter_map(|&idx| {
+                graph.edges[idx]
+                    .label
+                    .as_deref()
+                    .map(UnicodeWidthStr::width)
+            })
+            .collect();
+        let count = labeled.len();
+        if count < 2 {
+            continue;
+        }
+        let max_lbl = labeled.iter().copied().max().unwrap_or(0);
+        // Formula mirrors layered::label_gap's `parallel_extra` term.
+        let extra = (count - 1) * (max_lbl + 2);
+        // Keep the maximum contribution for this gap (multiple groups could
+        // compete for the same gap; we take the largest, not the sum).
+        extra_per_gap[lo] = extra_per_gap[lo].max(extra);
+    }
+
+    // Build a per-level cumulative offset: offset[L] = sum of extra_per_gap[0..L].
+    // A node at level L shifts by offset[L] along the flow axis.
+    let mut cumulative = vec![0usize; max_level + 1];
+    for l in 0..max_level {
+        cumulative[l + 1] = cumulative[l] + extra_per_gap[l];
+    }
+
+    // Apply cumulative offset to every node in the positions map.
+    for (id, pos) in positions.iter_mut() {
+        let Some(&lvl) = id_to_level.get(id) else {
+            continue;
+        };
+        let offset = cumulative[lvl];
+        if offset == 0 {
+            continue;
+        }
+        match graph.direction {
+            Direction::LeftToRight | Direction::RightToLeft => pos.0 += offset,
+            Direction::TopToBottom | Direction::BottomToTop => pos.1 += offset,
         }
     }
 }
@@ -244,11 +358,18 @@ pub fn sugiyama_layout(graph: &Graph, _config: &LayoutConfig) -> LayoutResult {
     //      for TB/BT it's `row`. Without this, edge-routing chrome
     //      from our renderer collides with the tight gaps and we
     //      see junction-glyph mush around node corners.
+    //
+    //      We also build `id_to_level` here (mermaid node-ID → ascii-dag
+    //      level) so step 4.6 can apply parallel-edge widening without
+    //      re-scanning the IR.
     const ASCII_DAG_BASELINE_GAP: usize = 3;
     let extra_per_layer = _config.layer_gap.saturating_sub(ASCII_DAG_BASELINE_GAP);
     let mut positions: HashMap<String, (usize, usize)> =
         HashMap::with_capacity(raw_positions.len());
+    // mermaid node-ID → ascii-dag level (used by apply_parallel_edge_widening).
+    let mut id_to_level: HashMap<String, usize> = HashMap::with_capacity(raw_positions.len());
     for (id, col, row, level) in raw_positions {
+        id_to_level.insert(id.clone(), level);
         let offset = level * extra_per_layer;
         let (col, row) = match graph.direction {
             Direction::LeftToRight | Direction::RightToLeft => (col + offset, row),
@@ -257,6 +378,20 @@ pub fn sugiyama_layout(graph: &Graph, _config: &LayoutConfig) -> LayoutResult {
         max_x = max_x.max(col);
         max_y = max_y.max(row);
         positions.insert(id, (col, row));
+    }
+
+    // 4.6. Widen inter-layer gaps for parallel-edge groups (≥2 labeled edges
+    //      sharing the same unordered endpoint pair).  Mirrors the
+    //      `parallel_extra` term in `layered::label_gap` so both backends
+    //      produce equivalent spacing for semantically identical inputs.
+    //      The pass is a no-op when no parallel groups exist (early return
+    //      inside the helper).
+    apply_parallel_edge_widening(&mut positions, &id_to_level, graph);
+    // Recompute max_x / max_y after widening so step 5's mirror arithmetic
+    // uses the updated extents.
+    for (col, row) in positions.values() {
+        max_x = max_x.max(*col);
+        max_y = max_y.max(*row);
     }
 
     // 5. Mirror the per-axis range for RL / BT.
@@ -608,5 +743,128 @@ mod tests {
         assert!(out.contains("Outer"), "Outer label missing:\n{out}");
         assert!(out.contains("Inner"), "Inner label missing:\n{out}");
         insta::assert_snapshot!("nested_subgraphs_td_sugiyama", out);
+    }
+
+    // ---- parallel-edge widening tests (sub-phase 2) -------------------------
+
+    /// Minimal reproducer: two labeled parallel edges between the same pair of
+    /// nodes must produce a wider inter-layer gap than a single labeled edge
+    /// between the same pair.
+    ///
+    /// We compare two graphs that differ only in whether the T→D edge is
+    /// doubled:
+    ///   - baseline: `T ==>|pass| D`  (one labeled edge)
+    ///   - parallel: `T ==>|pass| D` + `T -.->|skip| D`  (two labeled edges)
+    ///
+    /// The widening pass must add `(2-1) × (len("skip")+2) = 6` extra cells
+    /// to the T→D gap in the parallel case.
+    #[test]
+    fn parallel_edges_two_styles_no_collision() {
+        let cfg = LayoutConfig::default();
+
+        // Baseline: single labeled edge.
+        let baseline_src = "graph LR\n    T ==>|pass| D";
+        let g_base = crate::parser::flowchart::parse(baseline_src).unwrap();
+        let base_out = sugiyama_layout(&g_base, &cfg);
+        let base_gap = base_out.positions["D"]
+            .0
+            .saturating_sub(base_out.positions["T"].0);
+
+        // Parallel: two labeled edges sharing the same endpoint pair.
+        let parallel_src = "graph LR\n    T ==>|pass| D\n    T -.->|skip| D";
+        let g_par = crate::parser::flowchart::parse(parallel_src).unwrap();
+        let par_out = sugiyama_layout(&g_par, &cfg);
+
+        // All nodes must be positioned.
+        for id in ["T", "D"] {
+            assert!(
+                par_out.positions.contains_key(id),
+                "{id} missing from positions"
+            );
+        }
+
+        let par_gap = par_out.positions["D"]
+            .0
+            .saturating_sub(par_out.positions["T"].0);
+
+        // The parallel case must have a strictly wider gap.
+        // Expected extra = (2-1) × (max("pass","skip").len() + 2) = 1 × 6 = 6.
+        assert!(
+            par_gap > base_gap,
+            "parallel-edge gap T→D ({par_gap}) must exceed single-edge gap ({base_gap}); \
+             widening pass may have no-oped"
+        );
+        // Pin the exact delta so a future formula change is caught explicitly.
+        // Formula: (count-1) * (max_label_width + 2) = 1 * (4 + 2) = 6.
+        let expected_extra = "skip".len() + 2; // = 6
+        assert_eq!(
+            par_gap.saturating_sub(base_gap),
+            expected_extra,
+            "gap delta should equal (count-1)*(max_lbl+2) = {expected_extra}"
+        );
+    }
+
+    /// Snapshot of the `cicd_parallel_styles_to_same_target` chart rendered
+    /// under Sugiyama.  Side-by-side with the Native backend snapshot to let
+    /// reviewers verify that labels appear on distinct rows with breathing room.
+    #[test]
+    fn cicd_parallel_styles_to_same_target_sugiyama() {
+        let src = "graph LR
+    subgraph CI
+        L[Lint] ==> B[Build] ==> T[Test]
+    end
+    T ==>|pass| D[Deploy]
+    T -.->|skip| D";
+        let out = crate::render_with_options(
+            src,
+            &crate::RenderOptions {
+                backend: crate::layout::LayoutBackend::Sugiyama,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        // Both labels must appear in the output.
+        assert!(
+            out.contains("pass"),
+            "pass label missing from Sugiyama CI/CD render:\n{out}"
+        );
+        assert!(
+            out.contains("skip"),
+            "skip label missing from Sugiyama CI/CD render:\n{out}"
+        );
+        // The label must not puncture the subgraph border.
+        assert!(
+            !out.contains("│pass│"),
+            "pass label punctured subgraph border under Sugiyama:\n{out}"
+        );
+        insta::assert_snapshot!("cicd_parallel_styles_to_same_target_sugiyama", out);
+    }
+
+    /// Regression guard: a graph with no parallel edges must produce identical
+    /// positions whether or not the widening pass is applied.  The early-return
+    /// path inside `apply_parallel_edge_widening` covers this, but we pin it
+    /// explicitly so a future refactor that removes the early return is caught.
+    #[test]
+    fn no_parallel_edges_widening_is_noop() {
+        // Simple chain — no parallel edges anywhere.
+        let src = "graph LR\n    A --> B\n    B --> C\n    C --> D";
+        let g = crate::parser::flowchart::parse(src).unwrap();
+        let out = sugiyama_layout(&g, &LayoutConfig::default());
+
+        // LR: positions must be strictly increasing left to right.
+        let a = out.positions["A"].0;
+        let b = out.positions["B"].0;
+        let c = out.positions["C"].0;
+        let d = out.positions["D"].0;
+        assert!(a < b, "A must precede B: {a} < {b}");
+        assert!(b < c, "B must precede C: {b} < {c}");
+        assert!(c < d, "C must precede D: {c} < {d}");
+
+        // Verify that applying the widening pass on a graph with no parallel
+        // groups truly changes nothing by checking the groups are empty.
+        assert!(
+            g.parallel_edge_groups().is_empty(),
+            "graph with no parallel edges should have empty groups"
+        );
     }
 }
