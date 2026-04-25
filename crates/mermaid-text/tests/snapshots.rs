@@ -596,8 +596,8 @@ Sync --> [*]";
     let out = mermaid_text::render(src).unwrap();
     assert!(out.contains('◇'), "missing diamond marker for <<choice>>");
     assert!(
-        out.contains('┃'),
-        "missing vertical bar glyph for <<fork>>/<<join>> in default LR layout"
+        out.contains('█'),
+        "missing filled-block glyph for <<fork>>/<<join>> in default LR layout"
     );
     assert_snapshot!("state_diagram_special_shapes", out);
 }
@@ -615,8 +615,8 @@ F --> A
 F --> B";
     let out = mermaid_text::render(src).unwrap();
     assert!(
-        out.contains('━'),
-        "missing horizontal bar glyph for <<fork>> in TB layout"
+        out.contains('█'),
+        "missing filled-block glyph for <<fork>> in TB layout"
     );
     assert_snapshot!("state_diagram_fork_in_tb_uses_horizontal_bar", out);
 }
@@ -1165,6 +1165,30 @@ fn pie_many_slices_with_decimals() {
 }
 
 #[test]
+fn pie_color_mode_emits_ansi_per_slice() {
+    // Verifies that enabling `color` wraps each slice's filled-block run in a
+    // distinct ANSI 24-bit SGR sequence and resets after each one.
+    let src = "pie title Planets\n\"Mercury\" : 10\n\"Venus\" : 20\n\"Earth\" : 30";
+    let opts = mermaid_text::RenderOptions {
+        color: true,
+        max_width: Some(80),
+        ..Default::default()
+    };
+    let out = mermaid_text::render_with_options(src, &opts).unwrap();
+    // At least one 24-bit foreground escape must be present.
+    assert!(
+        out.contains("\x1b[38;2;"),
+        "expected ANSI color escape in: {out:?}"
+    );
+    // Each colored run must be closed by a reset.
+    assert!(out.contains("\x1b[0m"), "expected ANSI reset in: {out:?}");
+    // Monochrome content still present.
+    assert!(out.contains("Planets"));
+    assert!(out.contains("Mercury"));
+    assert_snapshot!("pie_color_mode", out);
+}
+
+#[test]
 fn sequence_end_note_returns_helpful_error() {
     // Mermaid's sequence grammar has no `end note` form (state diagrams
     // do; sequence uses `<br>`). Make sure the parser flags this with a
@@ -1422,4 +1446,63 @@ B -->|\"not wired to\"| C";
         }
     }
     assert_snapshot!("cross_subgraph_edge_label_avoids_bottom_border", out);
+}
+
+// ---------------------------------------------------------------------------
+// click directive / OSC 8 hyperlink
+// ---------------------------------------------------------------------------
+
+/// Snapshot test: a `click` directive on a flowchart node wraps that node's
+/// label with OSC 8 hyperlink escape sequences in the rendered output. Nodes
+/// without a `click` directive are unaffected — their labels remain plain text.
+#[test]
+fn click_directive_osc8_hyperlink() {
+    let src = "graph LR
+A[Home] --> B[Docs] --> C[API]
+click A \"https://example.com\"
+click C \"https://api.example.com\" \"API reference\"";
+    let out = mermaid_text::render(src).unwrap();
+
+    // Node A: OSC 8 open sequence with the correct URL must be present.
+    assert!(
+        out.contains("\x1b]8;;https://example.com\x1b\\"),
+        "OSC 8 open for node A missing:\n{out:?}"
+    );
+    // Node C: OSC 8 open sequence for the second URL must be present.
+    assert!(
+        out.contains("\x1b]8;;https://api.example.com\x1b\\"),
+        "OSC 8 open for node C missing:\n{out:?}"
+    );
+    // At least one OSC 8 close sequence must be present.
+    assert!(
+        out.contains("\x1b]8;;\x1b\\"),
+        "OSC 8 close sequence missing:\n{out:?}"
+    );
+    // All labels must still be visible.
+    assert!(out.contains("Home"), "label 'Home' missing");
+    assert!(out.contains("Docs"), "label 'Docs' missing");
+    assert!(out.contains("API"), "label 'API' missing");
+
+    // Snapshot captures the exact byte-level output including OSC 8 sequences
+    // so any future change to the wrapping logic is detected immediately.
+    assert_snapshot!("click_directive_osc8_hyperlink", out);
+}
+
+/// A `click` directive in a state diagram wraps the target state's label with
+/// OSC 8 just like in a flowchart.
+#[test]
+fn click_directive_state_diagram_osc8() {
+    let src = "stateDiagram-v2
+[*] --> Idle
+Idle --> Active
+Active --> [*]
+click Idle \"https://state.example.com\"";
+    let out = mermaid_text::render(src).unwrap();
+
+    assert!(
+        out.contains("\x1b]8;;https://state.example.com\x1b\\"),
+        "OSC 8 missing for state 'Idle':\n{out:?}"
+    );
+    assert!(out.contains("Idle"), "label 'Idle' missing");
+    assert_snapshot!("click_directive_state_diagram_osc8", out);
 }

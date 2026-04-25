@@ -19,7 +19,9 @@ use crate::{
         apply_pending_classes, extract_class_modifier, parse_class_def_directive,
         parse_class_directive, parse_link_style_directive, parse_style_directive,
     },
-    types::{Direction, Edge, EdgeEndpoint, EdgeStyle, Graph, Node, NodeShape, Subgraph},
+    types::{
+        ClickTarget, Direction, Edge, EdgeEndpoint, EdgeStyle, Graph, Node, NodeShape, Subgraph,
+    },
 };
 
 // ---------------------------------------------------------------------------
@@ -206,8 +208,12 @@ fn parse_statements(
                 parse_class_directive(stmt, pending_classes);
                 i += 1;
             }
-            // Remaining style-adjacent directives — silently skip for now.
-            "click" | "accTitle" | "accDescr" => {
+            "click" => {
+                parse_click_directive(stmt, graph);
+                i += 1;
+            }
+            // Accessibility directives — no visual representation.
+            "accTitle" | "accDescr" => {
                 i += 1;
             }
             _ => {
@@ -970,6 +976,85 @@ fn soft_wrap_into(line: &str, out: &mut String) {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
+// Click directive parsing
+// ---------------------------------------------------------------------------
+
+/// Parse a `click` directive and record it on `graph.click_targets`.
+///
+/// Recognised syntaxes:
+///
+/// | Source                                     | Result                             |
+/// |--------------------------------------------|------------------------------------|
+/// | `click NodeId "url"`                       | URL, no tooltip                    |
+/// | `click NodeId "url" "tooltip"`             | URL + tooltip                      |
+/// | `click NodeId href "url"`                  | URL (alternate `href` keyword)     |
+/// | `click NodeId href "url" "tooltip"`        | URL + tooltip                      |
+/// | `click NodeId callbackFn`                  | silently ignored (JS callback)     |
+/// | `click NodeId callbackFn "tooltip"`        | silently ignored                   |
+///
+/// The JS-callback forms have no renderable equivalent in a text terminal, so
+/// they are silently dropped — matching Mermaid's own silent-fail behaviour
+/// when a callback is undefined in the browser.
+///
+/// # Arguments
+///
+/// * `stmt`  — the raw statement string (already trimmed, `"click …"`)
+/// * `graph` — the [`Graph`] to insert the result into
+pub(crate) fn parse_click_directive(stmt: &str, graph: &mut Graph) {
+    // Strip the "click " keyword prefix. The statement is guaranteed to start
+    // with "click" because the parser dispatched on that first word.
+    let rest = stmt.strip_prefix("click").unwrap_or("").trim();
+    if rest.is_empty() {
+        return;
+    }
+
+    // Extract the node ID — it's the first whitespace-delimited token.
+    let mut parts = rest.splitn(2, |c: char| c.is_whitespace());
+    let node_id = parts.next().unwrap_or("").trim();
+    if node_id.is_empty() {
+        return;
+    }
+    let after_id = parts.next().unwrap_or("").trim();
+
+    // Check for the optional `href` keyword (alternate Mermaid syntax).
+    // `click NodeId href "url" ["tooltip"]`
+    let url_part = if let Some(stripped) = after_id.strip_prefix("href") {
+        stripped.trim()
+    } else {
+        after_id
+    };
+
+    // The URL must start with a double-quote. If it doesn't, this is a
+    // JS-callback form — silently ignore.
+    let Some(url_rest) = url_part.strip_prefix('"') else {
+        return;
+    };
+
+    // Find the closing double-quote for the URL.
+    let Some(url_end) = url_rest.find('"') else {
+        return;
+    };
+    let url = url_rest[..url_end].to_string();
+
+    // Everything after the closing URL quote may contain an optional tooltip.
+    let after_url = url_rest[url_end + 1..].trim();
+    let tooltip = parse_quoted_string(after_url);
+
+    graph
+        .click_targets
+        .insert(node_id.to_string(), ClickTarget { url, tooltip });
+}
+
+/// Extract a double-quoted string from the start of `s`, if present.
+///
+/// Returns `Some(inner)` when `s` starts with `"…"`, `None` otherwise.
+fn parse_quoted_string(s: &str) -> Option<String> {
+    let inner = s.strip_prefix('"')?;
+    let end = inner.find('"')?;
+    Some(inner[..end].to_string())
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1460,5 +1545,80 @@ class A cls";
         assert_eq!(s.fill, Some(Rgb(0xbb, 0xbb, 0xbb)));
         // class also supplies stroke that wasn't in the style — stacks.
         assert_eq!(s.stroke, Some(Rgb(0xcc, 0xcc, 0xcc)));
+    }
+
+    // ---- click directive parser tests ----------------------------------------
+
+    #[test]
+    fn click_basic_url() {
+        let src = "graph LR\nA-->B\nclick A \"https://example.com\"";
+        let g = parse(src).unwrap();
+        let ct = g.click_targets.get("A").expect("click target for A");
+        assert_eq!(ct.url, "https://example.com");
+        assert!(ct.tooltip.is_none());
+        // B has no click directive.
+        assert!(!g.click_targets.contains_key("B"));
+    }
+
+    #[test]
+    fn click_with_tooltip() {
+        let src = "graph LR\nA-->B\nclick A \"https://example.com\" \"Go to example\"";
+        let g = parse(src).unwrap();
+        let ct = g.click_targets.get("A").expect("click target for A");
+        assert_eq!(ct.url, "https://example.com");
+        assert_eq!(ct.tooltip.as_deref(), Some("Go to example"));
+    }
+
+    #[test]
+    fn click_href_keyword_form() {
+        // `click NodeId href "url"` is an alternate Mermaid syntax.
+        let src = "graph LR\nA-->B\nclick A href \"https://example.com\"";
+        let g = parse(src).unwrap();
+        let ct = g.click_targets.get("A").expect("click target for A");
+        assert_eq!(ct.url, "https://example.com");
+        assert!(ct.tooltip.is_none());
+    }
+
+    #[test]
+    fn click_href_keyword_with_tooltip() {
+        let src = "graph LR\nA-->B\nclick A href \"https://example.com\" \"tooltip text\"";
+        let g = parse(src).unwrap();
+        let ct = g.click_targets.get("A").expect("click target");
+        assert_eq!(ct.url, "https://example.com");
+        assert_eq!(ct.tooltip.as_deref(), Some("tooltip text"));
+    }
+
+    #[test]
+    fn click_js_callback_silently_ignored() {
+        // JS callback forms have no URL quote — should produce zero click targets.
+        let src = "graph LR\nA-->B\nclick A myCallback\nclick B myCallback \"tooltip\"";
+        let g = parse(src).unwrap();
+        assert!(
+            g.click_targets.is_empty(),
+            "JS callbacks must be silently ignored"
+        );
+    }
+
+    #[test]
+    fn click_does_not_affect_nodes_without_directive() {
+        let src = "graph LR\nA-->B-->C\nclick B \"https://b.example\"";
+        let g = parse(src).unwrap();
+        assert!(!g.click_targets.contains_key("A"));
+        assert!(g.click_targets.contains_key("B"));
+        assert!(!g.click_targets.contains_key("C"));
+    }
+
+    #[test]
+    fn click_multiple_nodes() {
+        let src = "graph LR\nA-->B\nclick A \"https://a.example\"\nclick B \"https://b.example\"";
+        let g = parse(src).unwrap();
+        assert_eq!(
+            g.click_targets.get("A").map(|c| c.url.as_str()),
+            Some("https://a.example")
+        );
+        assert_eq!(
+            g.click_targets.get("B").map(|c| c.url.as_str()),
+            Some("https://b.example")
+        );
     }
 }

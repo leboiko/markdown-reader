@@ -5,6 +5,24 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.29.0] - 2026-04-24
+
+### Changed
+
+- **Bumped `mermaid-text` from 0.17.0 → 0.18.0.** Three ROADMAP
+  polish features:
+  - **Pie chart slice colours** — per-slice 24-bit ANSI colour from
+    a 12-entry colorblind-safe palette in colour mode. Mono and
+    ASCII modes byte-identical.
+  - **Wider fork/join bars** — UML `<<fork>>` / `<<join>>` bars
+    now render as 3-cell-thick `█` rectangles instead of single-cell
+    `━`/`┃`. Matches Mermaid's SVG visual weight.
+  - **`click` directive + OSC 8 hyperlinks** — Mermaid's
+    `click NodeId "url"` now parses (flowchart + state diagrams).
+    Node labels with a click target emit OSC 8 escape sequences,
+    making them clickable in iTerm2, kitty, WezTerm, foot, etc.
+    Charts without `click` produce byte-identical output via fast path.
+
 ## [1.28.0] - 2026-04-24
 
 ### Changed

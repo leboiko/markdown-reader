@@ -34,6 +34,7 @@ use crate::{
         parse_class_def_directive, parse_class_directive, parse_link_style_directive,
         parse_note_anchor, parse_style_directive, strip_inline_comment, strip_keyword_prefix,
     },
+    parser::flowchart::parse_click_directive,
     types::{
         BarOrientation, Direction, Edge, EdgeEndpoint, EdgeStyle, Graph, Node, NodeShape, Subgraph,
     },
@@ -296,9 +297,17 @@ impl Walker {
                 continue;
             }
 
-            // Other directives still silently skipped — orthogonal to color.
-            if matches_keyword(stmt, "click")
-                || matches_keyword(stmt, "accTitle")
+            // `click` directives — record hyperlink targets on the style scratch
+            // graph (same pattern as classDef / style). Carried into the final
+            // graph at materialise time via the scratch merge.
+            if matches_keyword(stmt, "click") {
+                parse_click_directive(stmt, &mut self.style_scratch);
+                i += 1;
+                continue;
+            }
+
+            // Other directives still silently skipped.
+            if matches_keyword(stmt, "accTitle")
                 || matches_keyword(stmt, "accDescr")
                 || matches_keyword(stmt, "scale")
                 || stmt == "hide empty description"
@@ -733,6 +742,7 @@ impl Walker {
         graph.edge_styles = self.style_scratch.edge_styles;
         graph.class_defs = self.style_scratch.class_defs;
         graph.subgraph_styles = self.style_scratch.subgraph_styles;
+        graph.click_targets = self.style_scratch.click_targets;
         apply_pending_classes(&mut graph, &self.pending_classes);
 
         Ok(graph)

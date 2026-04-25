@@ -67,6 +67,13 @@ mod dotted {
     pub const V: char = '┆';
 }
 
+/// Thickness (in cells) of a UML fork/join synchronisation bar.
+///
+/// A horizontal bar is `BAR_THICKNESS` rows tall; a vertical bar is
+/// `BAR_THICKNESS` columns wide. The value 3 matches Mermaid's visual
+/// weight for SVG-rendered fork/join bars.
+pub const BAR_THICKNESS: usize = 3;
+
 /// Lookup table for thick line junctions: same 4-bit direction mask as
 /// `DIR_TO_CHAR` but using thick Unicode glyphs.
 const THICK_DIR_TO_CHAR: [char; 16] = [
@@ -284,6 +291,17 @@ pub struct Grid {
     fg: Vec<Vec<Option<Rgb>>>,
     /// Optional background color per cell — see [`Grid::fg`].
     bg: Vec<Vec<Option<Rgb>>>,
+    /// Hyperlink URL index per cell. `None` means no hyperlink on this cell;
+    /// `Some(idx)` indexes into [`Grid::hyperlink_urls`].
+    ///
+    /// Populated by [`Grid::paint_hyperlink`] when a `click` directive is
+    /// present. Consumed by [`Grid::render`] and [`Grid::render_with_colors`]
+    /// to emit OSC 8 escape sequences around the linked text runs.
+    hyperlink: Vec<Vec<Option<u32>>>,
+    /// Deduplicated URL strings for hyperlinks. Indexed by the values in
+    /// [`Grid::hyperlink`]. Grows lazily as URLs are interned via
+    /// [`Grid::paint_hyperlink`].
+    hyperlink_urls: Vec<String>,
     /// Total columns.
     width: usize,
     /// Total rows.
@@ -305,6 +323,8 @@ impl Grid {
             protected: vec![vec![false; width]; height],
             fg: vec![vec![None; width]; height],
             bg: vec![vec![None; width]; height],
+            hyperlink: vec![vec![None; width]; height],
+            hyperlink_urls: Vec::new(),
             width,
             height,
         }
@@ -554,6 +574,39 @@ impl Grid {
         }
     }
 
+    /// Record `url` as the hyperlink for all cells in the rectangle anchored at
+    /// `(col, row)` with size `w × h`. Cells outside the grid are skipped.
+    ///
+    /// Identical URLs are interned: if the same URL string was already painted
+    /// somewhere else on the grid, the existing index is reused so the
+    /// `hyperlink_urls` table stays compact.
+    ///
+    /// Consumed by [`Grid::render`] and [`Grid::render_with_colors`] to emit
+    /// OSC 8 hyperlink escape sequences around the linked cell runs.
+    pub fn paint_hyperlink(&mut self, col: usize, row: usize, w: usize, h: usize, url: &str) {
+        // Intern the URL: find or insert.
+        let idx = self
+            .hyperlink_urls
+            .iter()
+            .position(|u| u == url)
+            .map(|i| i as u32)
+            .unwrap_or_else(|| {
+                let i = self.hyperlink_urls.len() as u32;
+                self.hyperlink_urls.push(url.to_string());
+                i
+            });
+
+        for dy in 0..h {
+            for dx in 0..w {
+                let r = row + dy;
+                let c = col + dx;
+                if r < self.height && c < self.width {
+                    self.hyperlink[r][c] = Some(idx);
+                }
+            }
+        }
+    }
+
     /// Render the grid as a string with embedded ANSI 24-bit truecolor SGR
     /// sequences for any cells with non-`None` `fg`/`bg`.
     ///
@@ -562,65 +615,133 @@ impl Grid {
     /// cells emit an escape sequence — and every row ends with `\x1b[0m` so
     /// the trim and the colors do not interfere.
     ///
-    /// If no cell carries a color (the default), the output is byte-for-byte
-    /// identical to [`std::fmt::Display`]. Callers that want a hard guarantee
-    /// of zero ANSI bytes should use [`Grid::render`] instead.
+    /// If a `click` directive painted hyperlink URLs onto this grid via
+    /// [`Grid::paint_hyperlink`], OSC 8 hyperlink escape sequences are also
+    /// emitted around the linked cell runs — compatible with iTerm2, kitty,
+    /// WezTerm, foot, and other modern terminals. In terminals without OSC 8
+    /// support the sequences are harmlessly ignored.
+    ///
+    /// If no cell carries a color or hyperlink (the default), the output is
+    /// byte-for-byte identical to [`std::fmt::Display`]. Callers that want a
+    /// hard guarantee of zero ANSI bytes should use [`Grid::render`] instead.
     pub fn render_with_colors(&self) -> String {
-        let mut out = String::with_capacity(self.height * (self.width + 16));
-        let mut row_buf = String::with_capacity(self.width + 32);
+        self.render_inner(true)
+    }
+
+    /// Convert the grid to a `String`, stripping trailing spaces from each row.
+    ///
+    /// When `click` directives have painted hyperlink URLs via
+    /// [`Grid::paint_hyperlink`], OSC 8 escape sequences are emitted around the
+    /// linked label runs so they become clickable in OSC-8-capable terminals.
+    ///
+    /// Charts with **no** `click` directives produce output that is
+    /// byte-for-byte identical to the pre-hyperlink renderer — all existing
+    /// snapshot tests continue to pass unchanged.
+    pub fn render(&self) -> String {
+        if self.hyperlink_urls.is_empty() {
+            // Fast path: no hyperlinks — preserve the historical byte-exact
+            // output without going through the inner render loop.
+            self.to_string()
+        } else {
+            self.render_inner(false)
+        }
+    }
+
+    /// Shared rendering loop for [`Grid::render`] and [`Grid::render_with_colors`].
+    ///
+    /// When `with_color` is `true`, ANSI SGR 24-bit truecolor sequences are
+    /// emitted for cells with non-`None` `fg`/`bg`.  Regardless of
+    /// `with_color`, OSC 8 hyperlink sequences are emitted whenever the
+    /// hyperlink index changes between adjacent cells on the same row — each
+    /// row starts with no active hyperlink and the open sequence is always
+    /// closed before a newline so that hyperlinks never bleed across rows.
+    fn render_inner(&self, with_color: bool) -> String {
+        use std::fmt::Write as FmtWrite;
+
+        let has_hyperlinks = !self.hyperlink_urls.is_empty();
+        let mut out = String::with_capacity(self.height * (self.width + 32));
+        let mut row_buf = String::with_capacity(self.width + 64);
+
         for row in 0..self.height {
             row_buf.clear();
             let mut current_fg: Option<Rgb> = None;
             let mut current_bg: Option<Rgb> = None;
             let mut any_sgr_in_row = false;
+            // `current_hl` tracks the active hyperlink index. `None` means no
+            // OSC 8 link is open; `Some(u32::MAX)` is a sentinel for "we
+            // explicitly closed a link and are between links on the same row".
+            let mut current_hl: Option<u32> = None;
+
             for col in 0..self.width {
-                let fg = self.fg[row][col];
-                let bg = self.bg[row][col];
-                if fg != current_fg || bg != current_bg {
-                    // Reset before emitting a new combo so transitions from
-                    // colored back to uncolored cleanly drop attributes.
-                    if any_sgr_in_row {
-                        row_buf.push_str("\x1b[0m");
+                // --- OSC 8 hyperlink transition ---
+                // Emit the close/open sequence whenever the hyperlink changes.
+                // We compare `Option<u32>` indices rather than raw URL strings
+                // to avoid a string lookup in the hot path.
+                if has_hyperlinks {
+                    let cell_hl = self.hyperlink[row][col];
+                    if cell_hl != current_hl {
+                        if current_hl.is_some() {
+                            // Close the previous hyperlink.
+                            row_buf.push_str("\x1b]8;;\x1b\\");
+                        }
+                        if let Some(idx) = cell_hl {
+                            // Open the new hyperlink.
+                            let url = &self.hyperlink_urls[idx as usize];
+                            let _ = write!(row_buf, "\x1b]8;;{url}\x1b\\");
+                        }
+                        current_hl = cell_hl;
                     }
-                    if let Some(Rgb(r, g, b)) = fg {
-                        use std::fmt::Write;
-                        let _ = write!(row_buf, "\x1b[38;2;{r};{g};{b}m");
-                        any_sgr_in_row = true;
-                    }
-                    if let Some(Rgb(r, g, b)) = bg {
-                        use std::fmt::Write;
-                        let _ = write!(row_buf, "\x1b[48;2;{r};{g};{b}m");
-                        any_sgr_in_row = true;
-                    }
-                    current_fg = fg;
-                    current_bg = bg;
                 }
+
+                // --- ANSI SGR color ---
+                if with_color {
+                    let fg = self.fg[row][col];
+                    let bg = self.bg[row][col];
+                    if fg != current_fg || bg != current_bg {
+                        // Reset before emitting a new combo so transitions from
+                        // colored back to uncolored cleanly drop attributes.
+                        if any_sgr_in_row {
+                            row_buf.push_str("\x1b[0m");
+                        }
+                        if let Some(Rgb(r, g, b)) = fg {
+                            let _ = write!(row_buf, "\x1b[38;2;{r};{g};{b}m");
+                            any_sgr_in_row = true;
+                        }
+                        if let Some(Rgb(r, g, b)) = bg {
+                            let _ = write!(row_buf, "\x1b[48;2;{r};{g};{b}m");
+                            any_sgr_in_row = true;
+                        }
+                        current_fg = fg;
+                        current_bg = bg;
+                    }
+                }
+
                 row_buf.push(self.cells[row][col]);
             }
+
+            // Close any open hyperlink before trimming and the row-end reset.
+            if has_hyperlinks && current_hl.is_some() {
+                row_buf.push_str("\x1b]8;;\x1b\\");
+            }
+
             // Trim trailing ASCII spaces *before* the optional final reset, so
             // padding that the no-color renderer would have stripped does not
             // leak through as visible whitespace once the SGR is stripped.
             while row_buf.ends_with(' ') {
                 row_buf.pop();
             }
-            if any_sgr_in_row {
+            if with_color && any_sgr_in_row {
                 row_buf.push_str("\x1b[0m");
             }
             out.push_str(&row_buf);
             out.push('\n');
         }
+
         // Strip the same trailing-blank-line pattern as `Display`.
         while out.ends_with("\n\n") {
             out.pop();
         }
         out
-    }
-
-    /// Convert the grid to a `String`, stripping trailing spaces from each row.
-    ///
-    /// This is a convenience wrapper around the [`std::fmt::Display`] impl.
-    pub fn render(&self) -> String {
-        self.to_string()
     }
 
     // -----------------------------------------------------------------------
@@ -698,27 +819,33 @@ impl Grid {
         self.set(cx, row + h - 1, '◇');
     }
 
-    /// Draw a single-row thick horizontal bar (`━━━`) at `(col, row)` of
-    /// length `w` cells. Used for UML fork / join synchronisation bars in
-    /// TD/BT-flow state diagrams (`state X <<fork>>` / `<<join>>`).
-    ///
-    /// Bars are simple character runs and don't participate in the
-    /// direction-bit canvas — they're not connectable orthogonal lines.
-    pub fn draw_horizontal_bar(&mut self, col: usize, row: usize, w: usize) {
-        for x in col..(col + w) {
-            self.set(x, row, '━');
+    /// Fill a `w × h` rectangular block at `(col, row)` with full-block `█`
+    /// glyphs. Internal helper for the multi-cell fork/join synchronisation
+    /// bars — gives the same visual weight as Mermaid's SVG `rect` fill
+    /// without needing a separate border primitive.
+    fn fill_block(&mut self, col: usize, row: usize, w: usize, h: usize) {
+        for y in row..(row + h) {
+            for x in col..(col + w) {
+                self.set(x, y, '█');
+            }
         }
     }
 
-    /// Draw a single-column thick vertical bar (`┃` stacked) at `(col, row)`
-    /// of length `h` cells. Used for UML fork / join synchronisation bars
-    /// in LR/RL-flow state diagrams (`state X <<fork>>` / `<<join>>`).
+    /// Draw a multi-row filled horizontal bar at `(col, row)` of length `w`
+    /// cells and thickness [`BAR_THICKNESS`] rows. Used for UML fork/join
+    /// synchronisation bars in TD/BT-flow state diagrams.
     ///
-    /// Sibling of [`Grid::draw_horizontal_bar`].
+    /// Bars don't participate in the direction-bit canvas — they're static
+    /// character fills, not connectable orthogonal lines.
+    pub fn draw_horizontal_bar(&mut self, col: usize, row: usize, w: usize) {
+        self.fill_block(col, row, w, BAR_THICKNESS);
+    }
+
+    /// Draw a multi-column filled vertical bar at `(col, row)` of length `h`
+    /// cells and thickness [`BAR_THICKNESS`] columns. Used for UML fork/join
+    /// synchronisation bars in LR/RL-flow state diagrams.
     pub fn draw_vertical_bar(&mut self, col: usize, row: usize, h: usize) {
-        for y in row..(row + h) {
-            self.set(col, y, '┃');
-        }
+        self.fill_block(col, row, BAR_THICKNESS, h);
     }
 
     /// Draw a stadium (capsule/pill) node: rounded box with `(` / `)` markers

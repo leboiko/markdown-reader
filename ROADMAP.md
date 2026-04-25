@@ -49,14 +49,6 @@ iterations to stabilize in 1.22.x.** Defer until someone can carefully
 review against past iterations + add a focused regression-test plan
 before touching the routing code.
 
-### Pie chart slice colours
-
-`pie` charts ship monochrome in 0.9.4. Wiring the existing 24-bit
-ANSI colour pipeline through `render::pie::render` would let users
-`--color` their pies (auto-assign distinct colours per slice, or
-honour an explicit `pieDef <name> fill:#…` directive if Mermaid
-adopts one). Small extension once someone asks.
-
 ### Sequence-polish follow-ups (deferred)
 
 The four-part sequence-diagram polish series shipped over 0.9.0–
@@ -399,14 +391,6 @@ each fork/join's enclosing composite path and resolve orientation
 from the relevant composite's direction (or fall back to the
 top-level). Small change, low priority unless someone hits it.
 
-### Wider fork/join bars
-
-Real Mermaid renders fork/join bars as filled rectangles several
-cells thick. v1 uses single-cell-thick `━` / `┃`. A real "filled
-thick bar" would need a new primitive (multi-row block fills) and
-edge-routing changes to attach edges along the bar's long edge
-rather than its midpoint.
-
 ### `<<choice>>` rendering without label for unnamed choices
 
 Mermaid hides labels for unnamed choices; we still render the
@@ -429,12 +413,6 @@ Today only `stroke` is honoured for subgraph styles (border colour);
 real "fill the composite interior with a tint" pass would conflict
 with inner node backgrounds — needs a layered-paint design (paint
 subgraph fill first, then node fills overlay). Defer.
-
-### `click` / hyperlink directives — `mermaid-text`
-
-Mermaid `click NodeId "https://…"` makes the node clickable. In a
-text terminal we'd render a footnote-style link reference, or use
-OSC 8 hyperlinks where supported. Separate ticket.
 
 ### Real dashed-border note shape — `mermaid-text`
 

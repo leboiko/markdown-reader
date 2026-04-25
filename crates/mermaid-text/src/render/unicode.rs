@@ -11,7 +11,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::{
     layout::{
         Grid, SubgraphBounds,
-        grid::{Attach, EdgeLineStyle, arrow, endpoint},
+        grid::{Attach, BAR_THICKNESS, EdgeLineStyle, arrow, endpoint},
         layered::GridPos,
         router,
     },
@@ -101,11 +101,11 @@ impl NodeGeom {
             // renderer skips `draw_label_centred` for `Bar(_)` shapes.
             NodeShape::Bar(BarOrientation::Horizontal) => NodeGeom {
                 width: 5,
-                height: 1,
+                height: BAR_THICKNESS,
                 text_row: 0,
             },
             NodeShape::Bar(BarOrientation::Vertical) => NodeGeom {
-                width: 1,
+                width: BAR_THICKNESS,
                 height: 5,
                 text_row: 0,
             },
@@ -888,6 +888,9 @@ fn render_inner(
     }
 
     // Pass 3: Draw node labels last so they are never overwritten.
+    // Also paint any OSC 8 hyperlink rectangles when a `click` directive
+    // targets this node — the hyperlink layer is orthogonal to the char layer
+    // so it can be written in the same pass without ordering concerns.
     for node in &graph.nodes {
         let Some(&pos) = positions.get(&node.id) else {
             continue;
@@ -895,7 +898,8 @@ fn render_inner(
         let Some(&geom) = geoms.get(&node.id) else {
             continue;
         };
-        draw_label_centred(&mut grid, node, pos, geom);
+        let click_url = graph.click_targets.get(&node.id).map(|ct| ct.url.as_str());
+        draw_label_centred(&mut grid, node, pos, geom, click_url);
     }
 
     if with_color {
@@ -1391,7 +1395,30 @@ fn truncate_to_width(s: &str, max_width: usize) -> String {
 /// Multi-line labels (containing `\n`) are drawn line-by-line on successive
 /// rows starting at `geom.text_row`. Each line is centred independently so
 /// short lines in a mixed-width label still sit in the visual middle.
-fn draw_label_centred(grid: &mut Grid, node: &Node, pos: GridPos, geom: NodeGeom) {
+/// Draw the node label centred inside its bounding box.
+///
+/// When `click_url` is `Some(url)`, every label cell is also painted with the
+/// URL in the grid's hyperlink layer so that [`Grid::render`] and
+/// [`Grid::render_with_colors`] emit OSC 8 escape sequences around the label
+/// text, making it a clickable hyperlink in supporting terminals.
+///
+/// In ASCII mode (`to_ascii`) the OSC 8 bytes are stripped alongside all other
+/// non-ASCII characters, so ASCII output is unaffected.
+///
+/// # Arguments
+///
+/// * `grid`      — the mutable rendering canvas
+/// * `node`      — the node whose label to render
+/// * `pos`       — top-left `(col, row)` of the node's bounding box
+/// * `geom`      — precomputed box geometry (width, height, text_row)
+/// * `click_url` — optional hyperlink URL from a `click` directive
+fn draw_label_centred(
+    grid: &mut Grid,
+    node: &Node,
+    pos: GridPos,
+    geom: NodeGeom,
+    click_url: Option<&str>,
+) {
     // Bars (fork/join) are connection points, not labelled states —
     // drawing the auto-generated state ID on top of a single `┃` column
     // or `━` row would be visually confusing. Skip silently; matches
@@ -1410,7 +1437,16 @@ fn draw_label_centred(grid: &mut Grid, node: &Node, pos: GridPos, geom: NodeGeom
         } else {
             col + 1
         };
-        grid.write_text(text_col, row + geom.text_row + i, line);
+        let text_row = row + geom.text_row + i;
+        grid.write_text(text_col, text_row, line);
+
+        // Paint the hyperlink over the written text cells.
+        // We use `line_w` columns (the display width of this label line)
+        // so the clickable region matches exactly what the user sees.
+        if let Some(url) = click_url {
+            let link_w = line_w.max(1); // at least 1 cell even for empty lines
+            grid.paint_hyperlink(text_col, text_row, link_w, 1, url);
+        }
     }
 }
 
@@ -2134,6 +2170,43 @@ fn label_spans_subgraph_border_cell(
 }
 
 // ---------------------------------------------------------------------------
+// OSC 8 hyperlink helper
+// ---------------------------------------------------------------------------
+
+/// Wrap `text` with OSC 8 hyperlink escape sequences for `url`.
+///
+/// The resulting string is recognised as a clickable hyperlink by modern
+/// terminals that support OSC 8 (iTerm2, kitty, WezTerm, foot, recent
+/// GNOME Terminal). Terminals without OSC 8 support silently ignore the
+/// escape sequences, displaying `text` as plain text.
+///
+/// This helper is used in snapshot tests to build the expected escape
+/// sequence inline without hard-coding the raw bytes.
+///
+/// # Arguments
+///
+/// * `url`  — the target URL (must not contain `\x1b` or `\x07`)
+/// * `text` — the visible label text to wrap
+///
+/// # Examples
+///
+/// ```
+/// use mermaid_text::render::unicode::osc8_wrap;
+///
+/// let s = osc8_wrap("https://example.com", "Click me");
+/// assert!(s.starts_with("\x1b]8;;https://example.com\x1b\\"));
+/// assert!(s.ends_with("\x1b]8;;\x1b\\"));
+/// assert!(s.contains("Click me"));
+/// ```
+pub fn osc8_wrap(url: &str, text: &str) -> String {
+    // OSC 8 open:  ESC ] 8 ; params ; url ST
+    //   (params is empty — no `id=` or `title=` extension today)
+    // OSC 8 close: ESC ] 8 ; ; ST
+    // ST (String Terminator) here is ESC \ (two bytes: 0x1b 0x5c)
+    format!("\x1b]8;;{url}\x1b\\{text}\x1b]8;;\x1b\\")
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -2342,5 +2415,67 @@ mod tests {
     #[test]
     fn empty_sg_bounds_never_overlaps() {
         assert!(!overlaps_subgraph_border(0, 0, 100, &[]));
+    }
+
+    // ---- OSC 8 hyperlink render tests ------------------------------------
+
+    /// The `osc8_wrap` helper produces the correct three-part escape sequence.
+    #[test]
+    fn osc8_wrap_format() {
+        let s = osc8_wrap("https://example.com", "Hello");
+        assert_eq!(s, "\x1b]8;;https://example.com\x1b\\Hello\x1b]8;;\x1b\\");
+    }
+
+    /// A chart with a `click` directive renders the OSC 8 sequence around the
+    /// node label in plain-text (non-color) mode.
+    #[test]
+    fn click_directive_renders_osc8_in_plain_mode() {
+        let src = "graph LR\nA[Start] --> B[End]\nclick A \"https://example.com\"";
+        let out = crate::render(src).unwrap();
+        // The OSC 8 open sequence must be present for node A's label.
+        assert!(
+            out.contains("\x1b]8;;https://example.com\x1b\\"),
+            "OSC 8 open sequence missing in output:\n{out:?}"
+        );
+        // The OSC 8 close sequence must follow.
+        assert!(
+            out.contains("\x1b]8;;\x1b\\"),
+            "OSC 8 close sequence missing in output:\n{out:?}"
+        );
+        // The label text must be present.
+        assert!(out.contains("Start"), "label 'Start' not in output");
+        // Node B has no click directive — its label should not be wrapped.
+        assert!(
+            !out.contains("\x1b]8;;https://b"),
+            "unexpected OSC 8 for node B"
+        );
+    }
+
+    /// A chart WITHOUT any `click` directive must produce output that is
+    /// byte-for-byte identical to a plain `render` — no escape sequences.
+    #[test]
+    fn no_click_directive_produces_no_escape_sequences() {
+        let src = "graph LR\nA[Start] --> B[End]";
+        let out = crate::render(src).unwrap();
+        assert!(
+            !out.contains('\x1b'),
+            "unexpected escape sequence in output without click directive"
+        );
+    }
+
+    /// In color-render mode the OSC 8 sequence still appears alongside SGR
+    /// color escapes.
+    #[test]
+    fn click_directive_renders_osc8_in_color_mode() {
+        let src = "graph LR\nA[Start] --> B[End]\nclick A \"https://color.example\"";
+        let opts = crate::RenderOptions {
+            color: true,
+            ..Default::default()
+        };
+        let out = crate::render_with_options(src, &opts).unwrap();
+        assert!(
+            out.contains("\x1b]8;;https://color.example\x1b\\"),
+            "OSC 8 missing in color render:\n{out:?}"
+        );
     }
 }

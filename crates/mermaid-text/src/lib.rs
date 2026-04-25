@@ -447,10 +447,14 @@ pub fn render_with_options(input: &str, opts: &RenderOptions) -> Result<String, 
             render::sequence::render(&diag)
         }
         DiagramKind::Pie => {
-            // Pie charts honour `max_width` (bar columns scale to fit) but
-            // ignore `color` for now — slice colours are a follow-up.
+            // Pie charts honour both `max_width` (bar columns scale to fit)
+            // and `color` (distinct 24-bit ANSI hues per slice).
             let chart = parser::pie::parse(input)?;
-            render::pie::render(&chart, opts.max_width)
+            if opts.color {
+                render::pie::render_color(&chart, opts.max_width)
+            } else {
+                render::pie::render(&chart, opts.max_width)
+            }
         }
         DiagramKind::Er => {
             // erDiagram has its own layout pipeline; honours

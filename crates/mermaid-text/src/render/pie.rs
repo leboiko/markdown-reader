@@ -19,6 +19,11 @@
 //! - Percentages format as `{:>5.1}%` so the column aligns regardless of
 //!   value (`100.0%` and `  3.1%` both fit five cells).
 //! - When `show_data` is set the raw value follows in parentheses.
+//! - When `with_color` is `true`, each bar is painted with a distinct
+//!   ANSI 24-bit foreground color from [`SLICE_PALETTE`], cycling for
+//!   charts with more than [`SLICE_PALETTE`]`.len()` slices.
+
+use std::fmt::Write as _;
 
 use unicode_width::UnicodeWidthStr;
 
@@ -35,12 +40,74 @@ const MIN_BAR_WIDTH: usize = 10;
 /// pct↔value. Three gaps × 2 spaces = 6 chrome cells.
 const GAP: usize = 2;
 
-/// Render a [`PieChart`] as a horizontal bar chart.
+/// ANSI reset sequence — terminates a colored bar run.
+const RESET: &str = "\x1b[0m";
+
+/// A visually distinct 12-color palette for pie slice bars.
+///
+/// Colors are chosen to be legible on both light and dark terminals —
+/// mid-brightness hues avoid both washed-out pastels and near-black tones
+/// that disappear on dark backgrounds. The hues are spread evenly around
+/// the color wheel so consecutive slices never clash.
+///
+/// Each entry is `(r, g, b)` in 0–255 range.
+const SLICE_PALETTE: &[(u8, u8, u8)] = &[
+    (86, 180, 233),  // sky blue
+    (230, 97, 0),    // vermilion
+    (0, 158, 115),   // bluish green
+    (204, 121, 167), // reddish purple
+    (240, 228, 66),  // yellow
+    (0, 114, 178),   // blue
+    (213, 94, 0),    // orange
+    (0, 178, 128),   // teal
+    (153, 79, 204),  // violet
+    (255, 164, 0),   // amber
+    (128, 177, 211), // powder blue
+    (251, 128, 114), // salmon
+];
+
+/// Return the palette color for slice index `idx`, cycling for charts
+/// with more slices than palette entries.
+///
+/// # Arguments
+///
+/// * `idx` - Zero-based slice index.
+///
+/// # Returns
+///
+/// An `(r, g, b)` tuple ready for an ANSI SGR escape.
+#[inline]
+fn pick_slice_color(idx: usize) -> (u8, u8, u8) {
+    SLICE_PALETTE[idx % SLICE_PALETTE.len()]
+}
+
+/// Render a [`PieChart`] as a horizontal bar chart (monochrome).
 ///
 /// `max_width` caps the total line width; bar columns scale to fit the
 /// remaining budget after the label / percentage / value columns. When
 /// `None`, defaults to [`DEFAULT_WIDTH`].
 pub fn render(chart: &PieChart, max_width: Option<usize>) -> String {
+    render_inner(chart, max_width, false)
+}
+
+/// Render a [`PieChart`] as a horizontal bar chart with ANSI 24-bit color.
+///
+/// Identical to [`render`] except that each slice's filled-block segment is
+/// wrapped in an ANSI 24-bit foreground color SGR pair drawn from
+/// [`SLICE_PALETTE`] (cycling for charts with more than 12 slices). The
+/// unfilled shade characters, label, percentage, and value columns remain
+/// unstyled so the color draws the eye to the bar segment itself.
+///
+/// # Arguments
+///
+/// * `chart`     - Parsed pie chart.
+/// * `max_width` - Optional column budget; falls back to [`DEFAULT_WIDTH`].
+pub fn render_color(chart: &PieChart, max_width: Option<usize>) -> String {
+    render_inner(chart, max_width, true)
+}
+
+/// Shared implementation backing both [`render`] and [`render_color`].
+fn render_inner(chart: &PieChart, max_width: Option<usize>, with_color: bool) -> String {
     let budget = max_width.unwrap_or(DEFAULT_WIDTH);
     let total = chart.total();
 
@@ -97,8 +164,19 @@ pub fn render(chart: &PieChart, max_width: Option<usize>) -> String {
         out.push_str(&" ".repeat(label_w.saturating_sub(lw)));
         out.push_str(&" ".repeat(GAP));
 
-        // Bar.
-        out.push_str(&"█".repeat(filled));
+        // Bar — colored filled segment followed by uncolored unfilled segment.
+        if with_color {
+            let (r, g, b) = pick_slice_color(i);
+            // Write the ANSI SGR prefix for this slice's color.
+            // `write!` on a `String` is infallible; the `_` discards the
+            // `fmt::Result` that the trait requires us to handle.
+            let _ = write!(out, "\x1b[38;2;{r};{g};{b}m");
+            out.push_str(&"█".repeat(filled));
+            // Reset before drawing the unfilled (uncolored) shade cells.
+            out.push_str(RESET);
+        } else {
+            out.push_str(&"█".repeat(filled));
+        }
         out.push_str(&"░".repeat(unfilled));
         out.push_str(&" ".repeat(GAP));
 
@@ -193,5 +271,41 @@ mod tests {
         let out = render(&c, Some(20));
         let bar_count = out.chars().filter(|&c| c == '█' || c == '░').count();
         assert!(bar_count >= MIN_BAR_WIDTH * c.slices.len());
+    }
+
+    #[test]
+    fn render_color_emits_ansi_escapes() {
+        let c = parse("pie\n\"A\" : 1\n\"B\" : 1\n\"C\" : 2").unwrap();
+        let out = render_color(&c, Some(80));
+        // At least one 24-bit foreground escape must appear.
+        assert!(out.contains("\x1b[38;2;"), "expected ANSI escape: {out:?}");
+        // Each colored run must be closed by a reset.
+        assert!(out.contains("\x1b[0m"), "expected ANSI reset: {out:?}");
+        // The percentage column must still be readable in plain text.
+        assert!(out.contains("50.0%"));
+    }
+
+    #[test]
+    fn render_monochrome_has_no_ansi() {
+        let c = parse("pie\n\"A\" : 1\n\"B\" : 2").unwrap();
+        let out = render(&c, Some(80));
+        // Monochrome path must be byte-clean.
+        assert!(
+            !out.contains('\x1b'),
+            "unexpected ANSI escape in monochrome output"
+        );
+    }
+
+    #[test]
+    fn palette_cycles_for_many_slices() {
+        // 14 slices > SLICE_PALETTE.len() (12) — cycle must not panic.
+        let mut src = String::from("pie");
+        for i in 0..14 {
+            src.push_str(&format!("\n\"Slice{i}\" : 1"));
+        }
+        let c = parse(&src).unwrap();
+        // Should not panic.
+        let out = render_color(&c, Some(120));
+        assert!(out.contains("\x1b[38;2;"));
     }
 }

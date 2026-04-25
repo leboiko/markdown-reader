@@ -246,6 +246,31 @@ pub enum EdgeEndpoint {
     Cross,
 }
 
+/// A hyperlink target attached to a node via a Mermaid `click` directive.
+///
+/// When rendered in a terminal that supports OSC 8, the node's label text is
+/// wrapped with the appropriate escape sequences so it becomes a clickable
+/// hyperlink. In terminals that do not support OSC 8 the escape bytes are
+/// emitted but harmlessly ignored (or stripped by [`crate::to_ascii`] in ASCII
+/// mode).
+///
+/// # Examples
+///
+/// ```
+/// use mermaid_text::types::ClickTarget;
+///
+/// let ct = ClickTarget { url: "https://example.com".to_string(), tooltip: None };
+/// assert_eq!(ct.url, "https://example.com");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClickTarget {
+    /// The URL to open when the node label is clicked.
+    pub url: String,
+    /// Optional tooltip text (from the third argument of `click NodeId "url" "tooltip"`).
+    /// Not rendered in the terminal output but preserved for future use.
+    pub tooltip: Option<String>,
+}
+
 /// A single node in the diagram.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Node {
@@ -509,6 +534,15 @@ pub struct Graph {
     /// `node_styles` but only `stroke` is honoured today (filling a
     /// composite's interior would conflict with inner node fills).
     pub subgraph_styles: HashMap<String, NodeStyle>,
+    /// Hyperlink targets from `click NodeId "url"` directives.
+    ///
+    /// Keyed by node ID; present only for nodes that have an explicit
+    /// `click` directive with a URL. JS-callback forms (`click NodeId
+    /// callbackFn`) are silently ignored.
+    ///
+    /// Used by the renderer to wrap node labels in OSC 8 hyperlink
+    /// escape sequences when emitting Unicode output.
+    pub click_targets: HashMap<String, ClickTarget>,
 }
 
 impl Graph {
@@ -538,6 +572,7 @@ impl Graph {
             edge_styles: HashMap::new(),
             class_defs: HashMap::new(),
             subgraph_styles: HashMap::new(),
+            click_targets: HashMap::new(),
         }
     }
 

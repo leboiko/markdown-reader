@@ -1,0 +1,11 @@
+---
+source: crates/mermaid-text/tests/snapshots.rs
+expression: out
+---
+
+
+                                        ╭───────╮
+╭─────╮     ╭──────╮     ╭────────╮     │╭─────╮│
+│( ● )│────▸│ ]8;;https://state.example.com\Idle]8;;\ │────▸│ Active │────▸││  ●  ││
+╰─────╯     ╰──────╯     ╰────────╯     │╰─────╯│
+                                        ╰───────╯

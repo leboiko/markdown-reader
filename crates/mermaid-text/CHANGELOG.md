@@ -3,6 +3,53 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.18.0 — 2026-04-24
+
+### Added — three ROADMAP polish features
+
+- **Pie chart slice colours** (ROADMAP item shipped). `pie` charts now
+  emit per-slice 24-bit ANSI colour from a 12-entry colorblind-safe
+  palette (Wong 2011 + extensions) when rendered via the colour path
+  (`render::pie::render_color`). Monochrome path
+  (`render::pie::render`) and ASCII mode are byte-identical.
+  `pick_slice_color(idx)` cycles `idx % 12` so charts with > 12 slices
+  wrap cleanly without panicking.
+
+- **Wider fork/join bars** (ROADMAP item shipped). UML `<<fork>>` /
+  `<<join>>` synchronisation bars in state diagrams now render as
+  multi-cell filled rectangles (`█` U+2588) — `BAR_THICKNESS = 3`
+  cells thick — instead of single-cell `━`/`┃`. Matches Mermaid's
+  visual weight for SVG-rendered bars. Edge attachment uses the
+  existing midpoint logic since the outer-face arithmetic adapts
+  correctly to the new dimensions. Two state-diagram snapshots
+  updated with the visual upgrade.
+
+- **`click` directive support with OSC 8 hyperlinks** (ROADMAP item
+  shipped). Mermaid's `click NodeId "url" ["tooltip"]` directive now
+  parses (both flowchart and state diagrams; both bare-URL and `href`
+  keyword forms; JS-callback form silently ignored — we can't execute
+  JS in a text renderer). Node labels with a `click` target are
+  wrapped in OSC 8 hyperlink escape sequences when rendered, making
+  them clickable in iTerm2, kitty, WezTerm, foot, and other modern
+  terminals. URLs are interned in `Grid::hyperlink_urls` so duplicate
+  targets don't bloat the table. Charts WITHOUT `click` directives
+  produce byte-identical output via the `Grid::render` fast path
+  (`if hyperlink_urls.is_empty()` short-circuits).
+
+### Internal
+
+- `Graph::click_targets: HashMap<String, ClickTarget>` field added
+  (mirrors the `node_styles`/`edge_styles` per-graph pattern; avoids
+  bloating `Node`).
+- `Grid` gains a `hyperlink: Vec<Vec<Option<u32>>>` layer +
+  `hyperlink_urls: Vec<String>` interning table + a single
+  `paint_hyperlink(col, row, w, h, url)` API.
+- `Grid::render`/`render_with_colors` go through a shared
+  `render_inner(with_color: bool)` loop that emits OSC 8 sequences on
+  hyperlink-index transitions, analogous to how SGR sequences fire on
+  fg/bg transitions. OSC 8 close/open is bound to row boundaries so
+  hyperlinks never bleed across rows.
+
 ## 0.17.0 — 2026-04-24
 
 ### Changed — Sugiyama is now the default layout backend (Sugiyama Phase 2 / sub-phase 5)

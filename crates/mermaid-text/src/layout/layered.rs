@@ -15,6 +15,7 @@ use std::collections::HashMap;
 
 use unicode_width::UnicodeWidthStr;
 
+use crate::layout::grid::BAR_THICKNESS;
 use crate::layout::subgraph::{SG_BORDER_PAD, parallel_label_extra};
 use crate::types::{BarOrientation, Direction, Graph, NodeShape, Subgraph};
 
@@ -906,7 +907,7 @@ pub(crate) fn node_box_width(graph: &Graph, id: &str) -> usize {
             // Fork/join bar: perpendicular to flow. Horizontal bars
             // span 5 cells; vertical bars are a single column.
             NodeShape::Bar(BarOrientation::Horizontal) => 5,
-            NodeShape::Bar(BarOrientation::Vertical) => 1,
+            NodeShape::Bar(BarOrientation::Vertical) => BAR_THICKNESS,
         }
     } else {
         6 // fallback
@@ -941,7 +942,7 @@ pub(crate) fn node_box_height(graph: &Graph, id: &str) -> usize {
             // 5 rows so multiple parallel branches can attach; horizontal
             // bars are a single row. No label, so no extra rows.
             NodeShape::Bar(BarOrientation::Vertical) => 5,
-            NodeShape::Bar(BarOrientation::Horizontal) => 1,
+            NodeShape::Bar(BarOrientation::Horizontal) => BAR_THICKNESS,
         }
     } else {
         3
