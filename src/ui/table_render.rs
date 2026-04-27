@@ -425,6 +425,8 @@ mod tests {
             rendered_height: 3,
             source_line,
             row_source_lines: rsl,
+            source_byte_start: 0,
+            source_byte_end: 0,
         }
     }
 
@@ -880,6 +882,8 @@ mod tests {
             rendered_height: 3,
             source_line: 0,
             row_source_lines: vec![0, 2],
+            source_byte_start: 0,
+            source_byte_end: 0,
         };
         assert_snapshot!(table_to_snapshot_str(&table, 40));
     }

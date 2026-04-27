@@ -247,22 +247,29 @@ mod unit {
         // Build a view with one 10-char line followed by one 3-char line.
         let src_lines = vec![0u32, 1];
         let n = src_lines.len();
+        let text_lines_clamp = vec![
+            Line::from(Span::raw("0123456789")),
+            Line::from(Span::raw("abc")),
+        ];
         let block_id = {
             let mut h = DefaultHasher::new();
-            src_lines.hash(&mut h);
+            for line in &text_lines_clamp {
+                for span in &line.spans {
+                    span.content.hash(&mut h);
+                }
+            }
             n.hash(&mut h);
             TextBlockId(h.finish())
         };
         let block = DocBlock::Text {
             id: block_id,
-            text: Text::from(vec![
-                Line::from(Span::raw("0123456789")), // line 0: width=10
-                Line::from(Span::raw("abc")),        // line 1: width=3
-            ]),
+            text: Text::from(text_lines_clamp),
             links: vec![],
             heading_anchors: vec![],
             source_lines: src_lines,
             wrapped_height: std::cell::Cell::new(2),
+            source_byte_start: 0,
+            source_byte_end: 0,
         };
         // Populate text_layouts so `current_line_width` can read wrapped row widths.
         // At width 80 neither line wraps — row 0 width=10, row 1 width=3.
@@ -298,24 +305,31 @@ mod unit {
         let long: String = "a".repeat(50);
         let src_lines = vec![0u32, 1, 2];
         let n = src_lines.len();
+        let text_lines_wrap = vec![
+            Line::from(Span::raw("short")),
+            Line::from(Span::raw(long.clone())),
+            Line::from(Span::raw("end")),
+        ];
         let block_id = {
             let mut h = DefaultHasher::new();
-            src_lines.hash(&mut h);
+            for line in &text_lines_wrap {
+                for span in &line.spans {
+                    span.content.hash(&mut h);
+                }
+            }
             n.hash(&mut h);
             TextBlockId(h.finish())
         };
         let block = DocBlock::Text {
             id: block_id,
-            text: Text::from(vec![
-                Line::from(Span::raw("short")),      // logical 0: 1 row
-                Line::from(Span::raw(long.clone())), // logical 1: wraps to 3 rows at width 20
-                Line::from(Span::raw("end")),        // logical 2: 1 row
-            ]),
+            text: Text::from(text_lines_wrap),
             links: vec![],
             heading_anchors: vec![],
             source_lines: src_lines,
             // Width 20 -> long line wraps: rows are 20+20+10 = 5 total.
             wrapped_height: std::cell::Cell::new(5),
+            source_byte_start: 0,
+            source_byte_end: 0,
         };
         // Build the text layout cache at width 20.
         let mut text_layouts = std::collections::HashMap::new();
@@ -399,9 +413,14 @@ mod unit {
         let text_lines: Vec<Line<'static>> = (0..n)
             .map(|i| Line::from(Span::raw(format!("line {i}"))))
             .collect();
+        // Hash rendered text content (not source_lines) — stable across line-number shifts.
         let block_id = {
             let mut h = DefaultHasher::new();
-            source_lines.hash(&mut h);
+            for line in &text_lines {
+                for span in &line.spans {
+                    span.content.hash(&mut h);
+                }
+            }
             n.hash(&mut h);
             TextBlockId(h.finish())
         };
@@ -412,6 +431,8 @@ mod unit {
             heading_anchors: Vec::<HeadingAnchor>::new(),
             source_lines,
             wrapped_height: std::cell::Cell::new(crate::cast::u32_sat(n)),
+            source_byte_start: 0,
+            source_byte_end: 0,
         }
     }
 
@@ -449,6 +470,8 @@ mod unit {
             rendered_height: 4,
             source_line: 5,
             row_source_lines: vec![],
+            source_byte_start: 0,
+            source_byte_end: 0,
         });
         let blocks = vec![block];
         let tl = HashMap::new();
@@ -555,6 +578,8 @@ mod unit {
             rendered_height: 6,
             source_line: 5,
             row_source_lines: vec![5, 7, 8],
+            source_byte_start: 0,
+            source_byte_end: 0,
         });
         let blocks = vec![block];
         let tl = HashMap::new();
@@ -603,6 +628,8 @@ mod unit {
             rendered_height: 3,
             source_line: 10,
             row_source_lines: vec![10],
+            source_byte_start: 0,
+            source_byte_end: 0,
         });
         let blocks = vec![header_only];
         // Row 0 = top border → header (10)
@@ -622,6 +649,8 @@ mod unit {
             rendered_height: 4,
             source_line: 99,
             row_source_lines: vec![],
+            source_byte_start: 0,
+            source_byte_end: 0,
         });
         let blocks2 = vec![empty_rsl];
         // All positions must fall back to source_line without panicking.
@@ -672,22 +701,29 @@ mod unit {
         let long: String = "a".repeat(50);
         let src_lines = vec![0u32, 1];
         let n = src_lines.len();
+        let text_lines_height = vec![
+            Line::from(Span::raw("short")),
+            Line::from(Span::raw(long.clone())),
+        ];
         let block_id = {
             let mut h = DefaultHasher::new();
-            src_lines.hash(&mut h);
+            for line in &text_lines_height {
+                for span in &line.spans {
+                    span.content.hash(&mut h);
+                }
+            }
             n.hash(&mut h);
             TextBlockId(h.finish())
         };
         let block = DocBlock::Text {
             id: block_id,
-            text: Text::from(vec![
-                Line::from(Span::raw("short")),      // 1 row
-                Line::from(Span::raw(long.clone())), // 3 rows at width 20
-            ]),
+            text: Text::from(text_lines_height),
             links: vec![],
             heading_anchors: vec![],
             source_lines: src_lines,
             wrapped_height: std::cell::Cell::new(2),
+            source_byte_start: 0,
+            source_byte_end: 0,
         };
         let mut cache = HashMap::new();
         update_text_layouts(std::slice::from_ref(&block), &mut cache, 20);
@@ -713,9 +749,14 @@ mod unit {
         let content: String = "a".repeat(40); // 40 display columns
         let src_lines = vec![0u32];
         let n = src_lines.len();
+        let text_line_40 = vec![Line::from(Span::raw(content.clone()))];
         let block_id = {
             let mut h = DefaultHasher::new();
-            src_lines.hash(&mut h);
+            for line in &text_line_40 {
+                for span in &line.spans {
+                    span.content.hash(&mut h);
+                }
+            }
             n.hash(&mut h);
             TextBlockId(h.finish())
         };
@@ -728,6 +769,8 @@ mod unit {
                 heading_anchors: vec![],
                 source_lines: src_lines.clone(),
                 wrapped_height: std::cell::Cell::new(1),
+                source_byte_start: 0,
+                source_byte_end: 0,
             };
             let mut cache = std::collections::HashMap::new();
             update_text_layouts(std::slice::from_ref(&block), &mut cache, width);
@@ -759,19 +802,26 @@ mod unit {
         let content: String = "a".repeat(30);
         let src_lines = vec![0u32];
         let n = src_lines.len();
+        let text_line_30 = vec![Line::from(Span::raw(content.clone()))];
         let block_id = {
             let mut h = DefaultHasher::new();
-            src_lines.hash(&mut h);
+            for line in &text_line_30 {
+                for span in &line.spans {
+                    span.content.hash(&mut h);
+                }
+            }
             n.hash(&mut h);
             TextBlockId(h.finish())
         };
         let block = DocBlock::Text {
             id: block_id,
-            text: Text::from(vec![Line::from(Span::raw(content))]),
+            text: Text::from(text_line_30),
             links: vec![],
             heading_anchors: vec![],
             source_lines: src_lines,
             wrapped_height: std::cell::Cell::new(2),
+            source_byte_start: 0,
+            source_byte_end: 0,
         };
         let mut cache = std::collections::HashMap::new();
         update_text_layouts(std::slice::from_ref(&block), &mut cache, 20);
@@ -840,23 +890,30 @@ mod unit {
         };
         let src_lines = vec![0u32, 1, 2];
         let n = src_lines.len();
+        let text_lines_recomp = vec![
+            Line::from(Span::raw("line 0")),
+            Line::from(Span::raw("line 1")),
+            Line::from(Span::raw("line 2")),
+        ];
         let block_id = {
             let mut h = DefaultHasher::new();
-            src_lines.hash(&mut h);
+            for line in &text_lines_recomp {
+                for span in &line.spans {
+                    span.content.hash(&mut h);
+                }
+            }
             n.hash(&mut h);
             TextBlockId(h.finish())
         };
         let block = DocBlock::Text {
             id: block_id,
-            text: Text::from(vec![
-                Line::from(Span::raw("line 0")),
-                Line::from(Span::raw("line 1")),
-                Line::from(Span::raw("line 2")),
-            ]),
+            text: Text::from(text_lines_recomp),
             links: vec![link],
             heading_anchors: vec![],
             source_lines: src_lines,
             wrapped_height: std::cell::Cell::new(3),
+            source_byte_start: 0,
+            source_byte_end: 0,
         };
         let mut cache = std::collections::HashMap::new();
         update_text_layouts(std::slice::from_ref(&block), &mut cache, 80);
@@ -933,19 +990,26 @@ mod unit {
         let long = "a".repeat(50);
         let src_lines = vec![0u32];
         let n = src_lines.len();
+        let text_line_gutter = vec![Line::from(Span::raw(long.clone()))];
         let block_id = {
             let mut h = DefaultHasher::new();
-            src_lines.hash(&mut h);
+            for line in &text_line_gutter {
+                for span in &line.spans {
+                    span.content.hash(&mut h);
+                }
+            }
             n.hash(&mut h);
             TextBlockId(h.finish())
         };
         let block = DocBlock::Text {
             id: block_id,
-            text: Text::from(vec![Line::from(Span::raw(long))]),
+            text: Text::from(text_line_gutter),
             links: vec![],
             heading_anchors: vec![],
             source_lines: src_lines,
             wrapped_height: std::cell::Cell::new(3),
+            source_byte_start: 0,
+            source_byte_end: 0,
         };
         let mut cache = std::collections::HashMap::new();
         update_text_layouts(std::slice::from_ref(&block), &mut cache, 20);
@@ -985,22 +1049,29 @@ mod unit {
         };
         let src_lines = vec![0u32, 1];
         let n = src_lines.len();
+        let text_lines_link = vec![
+            Line::from(Span::raw("first line")),
+            Line::from(Span::raw("link text")),
+        ];
         let block_id = {
             let mut h = DefaultHasher::new();
-            src_lines.hash(&mut h);
+            for line in &text_lines_link {
+                for span in &line.spans {
+                    span.content.hash(&mut h);
+                }
+            }
             n.hash(&mut h);
             TextBlockId(h.finish())
         };
         let block = DocBlock::Text {
             id: block_id,
-            text: Text::from(vec![
-                Line::from(Span::raw("first line")),
-                Line::from(Span::raw("link text")),
-            ]),
+            text: Text::from(text_lines_link),
             links: vec![link],
             heading_anchors: vec![],
             source_lines: src_lines,
             wrapped_height: std::cell::Cell::new(2),
+            source_byte_start: 0,
+            source_byte_end: 0,
         };
         let mut cache = std::collections::HashMap::new();
         update_text_layouts(std::slice::from_ref(&block), &mut cache, 80);
@@ -1038,22 +1109,29 @@ mod unit {
         let line0 = format!("{} needle", "a".repeat(20));
         let src_lines = vec![0u32, 1];
         let n = src_lines.len();
+        let text_lines_needle = vec![
+            Line::from(Span::raw(line0.clone())),
+            Line::from(Span::raw("other")),
+        ];
         let block_id = {
             let mut h = DefaultHasher::new();
-            src_lines.hash(&mut h);
+            for line in &text_lines_needle {
+                for span in &line.spans {
+                    span.content.hash(&mut h);
+                }
+            }
             n.hash(&mut h);
             TextBlockId(h.finish())
         };
         let block = DocBlock::Text {
             id: block_id,
-            text: Text::from(vec![
-                Line::from(Span::raw(line0)),
-                Line::from(Span::raw("other")),
-            ]),
+            text: Text::from(text_lines_needle),
             links: vec![],
             heading_anchors: vec![],
             source_lines: src_lines,
             wrapped_height: std::cell::Cell::new(3),
+            source_byte_start: 0,
+            source_byte_end: 0,
         };
         let mut tl = HashMap::new();
         update_text_layouts(std::slice::from_ref(&block), &mut tl, 20);

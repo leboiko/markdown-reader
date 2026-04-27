@@ -1,3 +1,4 @@
+pub mod cursor_bridge;
 pub mod highlight;
 pub mod math;
 pub mod renderer;
@@ -76,6 +77,10 @@ pub struct TableBlock {
     /// table back to the exact markdown source row, so `enter_edit_mode` drops
     /// the editor cursor on the right line.
     pub row_source_lines: Vec<u32>,
+    /// Byte offset in the source string where this table block begins.
+    pub source_byte_start: u32,
+    /// Byte offset in the source string where this table block ends (exclusive).
+    pub source_byte_end: u32,
 }
 
 /// A single rendered block in a document.
@@ -94,8 +99,10 @@ pub enum DocBlock {
     Text {
         /// Stable cache key for the wrapped-layout cache in `MarkdownViewState`.
         ///
-        /// Derived at render time from a hash of `(source_lines, lines.len())`.
+        /// Derived at render time from a hash of `(rendered_text_content, lines.len())`.
         /// Stable across redraws as long as the document content is unchanged.
+        /// Notably, does NOT include `source_lines` — so shifting line numbers
+        /// from an upstream edit do not invalidate downstream cache entries.
         id: TextBlockId,
         text: Text<'static>,
         links: Vec<LinkInfo>,
@@ -113,6 +120,14 @@ pub enum DocBlock {
         /// `Cell` so the value can be updated through a shared `&DocBlock`
         /// reference during the immutable iteration in the draw loop.
         wrapped_height: Cell<u32>,
+        /// Byte offset in the source string where this block begins.
+        /// Set by the post-render fixup pass; guaranteed contiguous with
+        /// adjacent blocks (see `render_markdown`'s fixup invariant).
+        source_byte_start: u32,
+        /// Byte offset in the source string where this block ends (exclusive).
+        /// Set by the post-render fixup pass; guaranteed contiguous with
+        /// adjacent blocks.
+        source_byte_end: u32,
     },
     /// A reserved space for a mermaid diagram image.
     Mermaid {
@@ -126,6 +141,10 @@ pub enum DocBlock {
         cell_height: Cell<u32>,
         /// 0-indexed source line where the opening ` ```mermaid ` fence appears.
         source_line: u32,
+        /// Byte offset in the source string where this block begins.
+        source_byte_start: u32,
+        /// Byte offset in the source string where this block ends (exclusive).
+        source_byte_end: u32,
     },
     /// A parsed markdown table rendered inline with fair-share column widths.
     Table(TableBlock),
@@ -456,6 +475,8 @@ pub fn source_line_at(
 ///     heading_anchors: vec![],
 ///     source_lines: vec![0, 1],
 ///     wrapped_height: Cell::new(2),
+///     source_byte_start: 0,
+///     source_byte_end: 4,
 /// };
 /// assert_eq!(logical_line_at_source(&[block], 1, &std::collections::HashMap::new()), Some(1));
 /// ```
@@ -924,6 +945,9 @@ mod tests {
     // ── logical_line_at_source ───────────────────────────────────────────────
 
     /// Helper to build a `DocBlock::Text` with explicit source-line mapping.
+    ///
+    /// Uses the new content-based `TextBlockId` derivation (hash of rendered
+    /// text content + line count, NOT source_lines).
     fn text_block_with_sources(content: &[&str], sources: &[u32]) -> DocBlock {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
@@ -932,8 +956,14 @@ mod tests {
             .map(|s| ratatui::text::Line::from(ratatui::text::Span::raw(s.to_string())))
             .collect();
         let n = crate::cast::u32_sat(lines.len());
+        // Hash rendered text content (not source_lines) so the id is stable
+        // across source-line-number shifts from upstream edits.
         let mut h = DefaultHasher::new();
-        sources.hash(&mut h);
+        for line in &lines {
+            for span in &line.spans {
+                span.content.hash(&mut h);
+            }
+        }
         lines.len().hash(&mut h);
         let id = TextBlockId(h.finish());
         DocBlock::Text {
@@ -943,6 +973,8 @@ mod tests {
             heading_anchors: vec![],
             source_lines: sources.to_vec(),
             wrapped_height: std::cell::Cell::new(n),
+            source_byte_start: 0,
+            source_byte_end: 0,
         }
     }
 
@@ -988,6 +1020,8 @@ mod tests {
             rendered_height: 6,
             source_line: 5,
             row_source_lines: vec![5, 7, 8],
+            source_byte_start: 0,
+            source_byte_end: 0,
         });
         // Source line 5 (header) should map to rendered row 1.
         assert_eq!(logical_line_at_source(&[block], 5, &no_layouts), Some(1));
@@ -1009,6 +1043,8 @@ mod tests {
             rendered_height: 6,
             source_line: 5,
             row_source_lines: vec![5, 7, 8],
+            source_byte_start: 0,
+            source_byte_end: 0,
         });
         // Source line 7 (first body row) should map to rendered row 3.
         assert_eq!(logical_line_at_source(&[block], 7, &no_layouts), Some(3));
@@ -1026,6 +1062,8 @@ mod tests {
             source: "a\nb\nc".to_string(),
             cell_height: Cell::new(4),
             source_line: 10,
+            source_byte_start: 0,
+            source_byte_end: 0,
         };
         // Source line 12 = fence + 2 → local index 2 → logical line 0 + 2 = 2.
         assert_eq!(logical_line_at_source(&[block], 12, &no_layouts), Some(2));

@@ -5,6 +5,40 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.29.1] - 2026-04-27
+
+### Internal — Hybrid live-preview editing sub-phase 1 (foundation)
+
+Pure plumbing — no user-visible change. Sets up the data model that
+sub-phases 2-9 build on:
+
+- Every `DocBlock` variant (`Text`, `Table`, `Mermaid`) now carries
+  `source_byte_start: u32, source_byte_end: u32`. A post-render
+  fixup pass guarantees the byte-range coverage is total and
+  contiguous (every byte in `0..source.len()` belongs to exactly
+  one block, no gaps, no overlaps). This invariant is load-bearing
+  for the cursor-byte-offset → block-index lookup that sub-phase 4
+  introduces.
+- `TextBlockId` derivation switched from
+  `hash(source_lines, lines.len())` to
+  `hash(rendered_text_content, lines.len())`. The new derivation is
+  stable across source-line-number shifts, which means an early
+  edit no longer invalidates every downstream block's cache entry.
+  The wrap layout cache only depends on rendered content + width,
+  not on which absolute source line content originated from.
+- New module `src/markdown/cursor_bridge.rs` with three pure
+  functions: `byte_offset_to_block`, `byte_to_visual`,
+  `visual_to_byte`. Translate between source byte offsets and
+  visual (row, col) coordinates using the existing
+  `WrappedTextLayout` cache. Foundation for hybrid mode's cursor
+  positioning.
+
+7 new unit tests pin the invariants (contiguous coverage,
+round-trip byte↔visual, id stable under source-line-number shift,
+id changes under content change).
+
+898 tests pass (+7), clippy + fmt clean.
+
 ## [1.29.0] - 2026-04-24
 
 ### Changed

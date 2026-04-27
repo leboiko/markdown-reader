@@ -22,8 +22,13 @@ fn make_text_block(lines: &[&str]) -> DocBlock {
         .collect();
     let n = text_lines.len();
     let source_lines: Vec<u32> = (0..crate::cast::u32_sat(n)).collect();
+    // Hash rendered text content (not source_lines) — stable across line-number shifts.
     let mut h = DefaultHasher::new();
-    source_lines.hash(&mut h);
+    for line in &text_lines {
+        for span in &line.spans {
+            span.content.hash(&mut h);
+        }
+    }
     n.hash(&mut h);
     let id = TextBlockId(h.finish());
     DocBlock::Text {
@@ -33,6 +38,8 @@ fn make_text_block(lines: &[&str]) -> DocBlock {
         heading_anchors: Vec::new(),
         source_lines,
         wrapped_height: std::cell::Cell::new(crate::cast::u32_sat(n)),
+        source_byte_start: 0,
+        source_byte_end: 0,
     }
 }
 
@@ -61,6 +68,8 @@ fn make_table_block(id: u64, headers: &[&str], rows: &[&[&str]]) -> DocBlock {
         rendered_height: 4,
         source_line: 0,
         row_source_lines,
+        source_byte_start: 0,
+        source_byte_end: 0,
     })
 }
 
@@ -191,6 +200,8 @@ fn collect_matches_mermaid_source_only() {
             source: source.to_string(),
             cell_height: Cell::new(DEFAULT_MERMAID_HEIGHT),
             source_line: 0,
+            source_byte_start: 0,
+            source_byte_end: 0,
         },
     ];
     let cache = source_only_cache(99);
@@ -209,6 +220,8 @@ fn collect_matches_mermaid_failed_shows_source() {
         source: "graph LR\n    find_this".to_string(),
         cell_height: Cell::new(DEFAULT_MERMAID_HEIGHT),
         source_line: 0,
+        source_byte_start: 0,
+        source_byte_end: 0,
     }];
     let cache = ready_cache(42);
     let text_layouts = empty_text_layouts();
@@ -225,6 +238,8 @@ fn collect_matches_mermaid_absent_shows_source() {
         source: "sequenceDiagram\n    A ->> match_me: call".to_string(),
         cell_height: Cell::new(DEFAULT_MERMAID_HEIGHT),
         source_line: 0,
+        source_byte_start: 0,
+        source_byte_end: 0,
     }];
     let text_layouts = empty_text_layouts();
     let table_layouts = HashMap::new();
@@ -618,7 +633,11 @@ fn enter_edit_mode_uses_cursor_for_source_line() {
     let n = src_lines.len();
     let block_id = {
         let mut h = DefaultHasher::new();
-        src_lines.hash(&mut h);
+        for line in &text_lines {
+            for span in &line.spans {
+                span.content.hash(&mut h);
+            }
+        }
         n.hash(&mut h);
         TextBlockId(h.finish())
     };
@@ -629,6 +648,8 @@ fn enter_edit_mode_uses_cursor_for_source_line() {
         heading_anchors: Vec::<HeadingAnchor>::new(),
         source_lines: src_lines,
         wrapped_height: std::cell::Cell::new(3),
+        source_byte_start: 0,
+        source_byte_end: 0,
     };
     // Populate the text_layouts cache so `source_line_at` can resolve physical rows
     // to logical line indices (and then to source lines).
@@ -1729,6 +1750,8 @@ fn make_mermaid_block(id: u64, source: &str, height: u32) -> DocBlock {
         source: source.to_string(),
         cell_height: Cell::new(height),
         source_line: 0,
+        source_byte_start: 0,
+        source_byte_end: 0,
     }
 }
 

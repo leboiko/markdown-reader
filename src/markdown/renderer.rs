@@ -262,13 +262,19 @@ impl MdRenderer {
                 source_lines.len(),
                 lines.len(),
             );
-            // Derive a stable id from a hash of (source_lines, lines.len()).
-            // This matches the invariant checked by the layout cache: the same
-            // block content always produces the same id, so a re-render at a
-            // different width can reuse or invalidate the cached layout by id.
+            // Derive a stable id from a hash of (rendered_text_content, lines.len()).
+            //
+            // Intentionally does NOT hash `source_lines`: when an upstream edit
+            // shifts all downstream blocks' source line numbers, their rendered
+            // content is unchanged and so their ids remain stable. This keeps the
+            // wrap-layout cache valid for unedited blocks during live editing.
             let id = {
                 let mut h = DefaultHasher::new();
-                source_lines.hash(&mut h);
+                for line in &lines {
+                    for span in &line.spans {
+                        span.content.hash(&mut h);
+                    }
+                }
                 lines.len().hash(&mut h);
                 TextBlockId(h.finish())
             };
@@ -276,6 +282,8 @@ impl MdRenderer {
             // safe upper bound. update_text_layouts replaces it with the true
             // wrapped count once the layout width is known.
             let logical_count = crate::cast::u32_sat(lines.len());
+            // Byte ranges are populated by the post-render fixup pass in `render`;
+            // set to 0 here as sentinels that the fixup will overwrite.
             self.blocks.push(DocBlock::Text {
                 id,
                 text: Text::from(lines),
@@ -283,6 +291,8 @@ impl MdRenderer {
                 heading_anchors,
                 source_lines,
                 wrapped_height: Cell::new(logical_count),
+                source_byte_start: 0,
+                source_byte_end: 0,
             });
         }
     }
@@ -481,6 +491,90 @@ impl MdRenderer {
             self.flush_line();
         }
         self.flush_text_block();
+
+        // ── Post-render fixup: assign contiguous byte ranges ──────────────────
+        //
+        // This invariant is load-bearing for sub-phase 4's cursor-byte-offset →
+        // block-index lookup: every byte in `0..source.len()` must belong to
+        // exactly one block, with no gaps and no overlaps.
+        //
+        // Strategy: use each Text block's first `source_lines` entry to derive
+        // an approximate byte start via the line-boundary table, then make the
+        // ranges contiguous by clamping each block's end to the next block's
+        // start. For the first block, force `source_byte_start = 0`. For the
+        // last block, force `source_byte_end = source.len()`.
+        //
+        // Blocks are already emitted in document order; no sort is needed.
+        // The defensive sort is omitted because re-ordering could invalidate
+        // the `source_lines` invariant (they're also in document order).
+        let source_len = crate::cast::u32_sat(content.len());
+        let boundaries = &self.line_boundaries;
+
+        // First pass: set a raw byte_start for each block from its first
+        // source line (or 0 for the first block).
+        for block in &mut self.blocks {
+            let raw_start = match block {
+                DocBlock::Text { source_lines, .. } => source_lines
+                    .first()
+                    .and_then(|&l| boundaries.get(l as usize).copied())
+                    .unwrap_or(0),
+                DocBlock::Mermaid { source_line, .. } => {
+                    boundaries.get(*source_line as usize).copied().unwrap_or(0)
+                }
+                DocBlock::Table(t) => boundaries.get(t.source_line as usize).copied().unwrap_or(0),
+            };
+            match block {
+                DocBlock::Text {
+                    source_byte_start, ..
+                } => *source_byte_start = crate::cast::u32_sat(raw_start),
+                DocBlock::Mermaid {
+                    source_byte_start, ..
+                } => *source_byte_start = crate::cast::u32_sat(raw_start),
+                DocBlock::Table(t) => t.source_byte_start = crate::cast::u32_sat(raw_start),
+            }
+        }
+
+        // Ensure first block starts at 0.
+        if let Some(first) = self.blocks.first_mut() {
+            match first {
+                DocBlock::Text {
+                    source_byte_start, ..
+                } => *source_byte_start = 0,
+                DocBlock::Mermaid {
+                    source_byte_start, ..
+                } => *source_byte_start = 0,
+                DocBlock::Table(t) => t.source_byte_start = 0,
+            }
+        }
+
+        // Second pass: make ranges contiguous. Each block's end = next block's
+        // start; the last block's end = source.len().
+        let n = self.blocks.len();
+        for i in 0..n {
+            let next_start = if i + 1 < n {
+                match &self.blocks[i + 1] {
+                    DocBlock::Text {
+                        source_byte_start, ..
+                    } => *source_byte_start,
+                    DocBlock::Mermaid {
+                        source_byte_start, ..
+                    } => *source_byte_start,
+                    DocBlock::Table(t) => t.source_byte_start,
+                }
+            } else {
+                source_len
+            };
+            match &mut self.blocks[i] {
+                DocBlock::Text {
+                    source_byte_end, ..
+                } => *source_byte_end = next_start,
+                DocBlock::Mermaid {
+                    source_byte_end, ..
+                } => *source_byte_end = next_start,
+                DocBlock::Table(t) => t.source_byte_end = next_start,
+            }
+        }
+
         self.blocks
     }
 
@@ -744,12 +838,16 @@ impl MdRenderer {
         self.code_block_content.clear();
 
         let id = MermaidBlockId(hash_str(&source));
+        // Byte ranges are populated by the post-render fixup pass in `render`;
+        // set to 0 here as sentinels that the fixup will overwrite.
         self.blocks.push(DocBlock::Mermaid {
             id,
             source,
             cell_height: Cell::new(DEFAULT_MERMAID_HEIGHT),
             // The fence line is the canonical source position for the block.
             source_line: self.code_block_start_line,
+            source_byte_start: 0,
+            source_byte_end: 0,
         });
         // Blank line after the diagram (will open a new Text block).
         self.push_blank_line();
@@ -913,6 +1011,8 @@ impl MdRenderer {
         let rendered_height = (crate::cast::u32_sat(rows.len()) + 3).max(3);
 
         self.flush_text_block();
+        // Byte ranges are populated by the post-render fixup pass in `render`;
+        // set to 0 here as sentinels that the fixup will overwrite.
         self.blocks.push(DocBlock::Table(TableBlock {
             id,
             headers,
@@ -922,6 +1022,8 @@ impl MdRenderer {
             rendered_height,
             source_line: self.table_start_line,
             row_source_lines,
+            source_byte_start: 0,
+            source_byte_end: 0,
         }));
         self.push_blank_line();
     }
@@ -1728,6 +1830,8 @@ mod tests {
             source: "graph LR\nA-->B\nC-->D".to_string(), // 3 content lines
             cell_height: Cell::new(DEFAULT_MERMAID_HEIGHT),
             source_line: 0, // fence is on line 0
+            source_byte_start: 0,
+            source_byte_end: 0,
         }];
 
         let tl = std::collections::HashMap::new();
