@@ -77,7 +77,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         viewer_area = content_chunks[1];
         app.viewer_area_rect = Some(viewer_area);
 
-        if app.tabs.active_tab().is_some_and(|t| t.editor.is_some()) {
+        // Hybrid mode draws the formatted viewer (not the fullscreen editor).
+        if app.focus != Focus::HybridEditor
+            && app.tabs.active_tab().is_some_and(|t| t.editor.is_some())
+        {
             editor::draw(f, app, viewer_area);
         } else {
             markdown_view::draw(f, app, viewer_area, is_viewer_focused(app.focus));
@@ -120,7 +123,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         viewer_area = viewer_col_chunks[1];
         app.viewer_area_rect = Some(viewer_area);
 
-        if app.tabs.active_tab().is_some_and(|t| t.editor.is_some()) {
+        // Hybrid mode draws the formatted viewer (not the fullscreen editor),
+        // so we check `focus` rather than `editor.is_some()` here.
+        if app.focus != Focus::HybridEditor
+            && app.tabs.active_tab().is_some_and(|t| t.editor.is_some())
+        {
             editor::draw(f, app, viewer_area);
         } else {
             markdown_view::draw(f, app, viewer_area, is_viewer_focused(app.focus));
@@ -183,6 +190,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 }
 
 /// Returns `true` when the viewer panel should render as focused.
+///
+/// Both [`Focus::Editor`] and [`Focus::HybridEditor`] return `true` because the
+/// viewer panel is what draws in both cases (hybrid mode overlays a cursor on
+/// the formatted view; the fullscreen editor replaces the view entirely).
 fn is_viewer_focused(focus: Focus) -> bool {
     matches!(
         focus,
@@ -196,5 +207,6 @@ fn is_viewer_focused(focus: Focus) -> bool {
             | Focus::CopyMenu
             | Focus::LinkPicker
             | Focus::Editor
+            | Focus::HybridEditor
     )
 }

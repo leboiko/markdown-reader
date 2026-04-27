@@ -25,11 +25,8 @@ pub struct Tab {
     /// when viewing the rendered markdown.
     pub editor: Option<TabEditor>,
     /// Hybrid live-preview editing state.  `Some` while the tab is in hybrid
-    /// mode (entered via `enter_hybrid_mode`, sub-phase 4), `None` otherwise.
-    /// Today nothing populates this field — it is always `None` after sub-phase 2.
-    /// Sub-phase 4 introduces the `I` keybinding that calls `enter_hybrid_mode`.
-    // Dormant until sub-phase 4; suppress the dead_code lint.
-    #[allow(dead_code)]
+    /// mode (entered via `enter_hybrid_mode`).  `None` otherwise.
+    /// Populated by the `I` keybinding via [`crate::app::App::enter_hybrid_mode`].
     pub hybrid: Option<HybridState>,
 }
 

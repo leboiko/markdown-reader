@@ -24,6 +24,9 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         Focus::CopyMenu => "COPY",
         Focus::LinkPicker => "LINKS",
         Focus::Editor => "EDIT",
+        // Hybrid mode shows the viewer panel formatted; the status bar
+        // reflects the editing context (sub-phase 9 will rename this to EDIT).
+        Focus::HybridEditor => "HYBRID",
     };
 
     // Override the label when the viewer has an active visual selection.

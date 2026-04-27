@@ -4,6 +4,7 @@
 use super::*;
 use crate::markdown::{CellSpans, MermaidBlockId, TableBlock, TableBlockId, TextBlockId};
 use crate::mermaid::{DEFAULT_MERMAID_HEIGHT, MermaidEntry};
+use crate::theme::{Palette, Theme};
 use crate::ui::editor::{CommandOutcome, dispatch_command};
 use crate::ui::markdown_view::TableLayout;
 use std::collections::hash_map::DefaultHasher;
@@ -1957,4 +1958,220 @@ fn handle_mermaid_modal_key_zoom_adjusts_text_zoom() {
     app.handle_mermaid_modal_key(KeyCode::Char('='));
     let s = app.mermaid_modal.as_ref().unwrap();
     assert_eq!(s.text_zoom, 0, "= resets zoom to 0");
+}
+
+// ── Sub-phase 4: Hybrid mode tests ────────────────────────────────────────────
+
+/// Build an `App` with an active tab fully loaded from `source`, using the real
+/// markdown renderer so `view.rendered` and `view.text_layouts` are populated.
+///
+/// The tab is given the fake path `/fake/hybrid_test.md`; focus starts at
+/// `Focus::Viewer` with the cursor at the top of the document.
+fn make_app_with_rendered_tab(source: &str) -> (App, PathBuf) {
+    let mut app = App::new(PathBuf::from("."), None);
+    let path = PathBuf::from("/fake/hybrid_test.md");
+    app.tabs.open_or_focus(&path, true);
+    if let Some(tab) = app.tabs.active_tab_mut() {
+        let p = Palette::from_theme(Theme::Default);
+        tab.view.load(
+            path.clone(),
+            "hybrid_test.md".to_string(),
+            source.to_string(),
+            &p,
+            Theme::Default,
+        );
+        // Populate text layout cache at a 80-column width so byte_to_visual and
+        // visual_to_byte can resolve positions in Text blocks.
+        let width = 80u16;
+        crate::markdown::update_text_layouts(&tab.view.rendered, &mut tab.view.text_layouts, width);
+    }
+    app.focus = Focus::Viewer;
+    (app, path)
+}
+
+/// Test 1 — `HybridState::from_source` places the edtui cursor at row 0, col 0
+/// (byte 0 of the source).
+#[test]
+fn hybrid_state_initial_cursor_at_byte_zero_when_starting_fresh() {
+    use crate::ui::hybrid_editor::HybridState;
+    let state = HybridState::from_source("# Hello\n\nworld\n");
+    // edtui's Index2 uses (row, col); both must be 0 for the start of the source.
+    assert_eq!(
+        state.editor_state.cursor.row, 0,
+        "initial cursor row must be 0"
+    );
+    assert_eq!(
+        state.editor_state.cursor.col, 0,
+        "initial cursor col must be 0"
+    );
+    // line_boundaries[0] is always 0.
+    assert_eq!(
+        state.line_boundaries.first().copied(),
+        Some(0),
+        "first line boundary must be byte 0"
+    );
+    // source and baseline must both equal the input.
+    assert_eq!(state.source, "# Hello\n\nworld\n");
+    assert_eq!(state.baseline, "# Hello\n\nworld\n");
+    assert!(
+        !state.is_dirty(),
+        "freshly constructed state must not be dirty"
+    );
+}
+
+/// Test 2 — `enter_hybrid_mode` sets `app.focus == Focus::HybridEditor` and
+/// `tab.hybrid.is_some()`.
+#[test]
+fn enter_hybrid_mode_sets_focus_correctly() {
+    let (mut app, _path) = make_app_with_rendered_tab("# Heading\n\nParagraph text.\n");
+    app.enter_hybrid_mode();
+    assert_eq!(
+        app.focus,
+        Focus::HybridEditor,
+        "focus must be HybridEditor after enter_hybrid_mode"
+    );
+    let tab = app.tabs.active_tab().expect("tab must exist");
+    assert!(
+        tab.hybrid.is_some(),
+        "tab.hybrid must be Some after enter_hybrid_mode"
+    );
+}
+
+/// Test 3 — after enter then exit, `app.focus == Focus::Viewer` and
+/// `tab.hybrid.is_none()`.
+#[test]
+fn exit_hybrid_mode_restores_viewer_focus() {
+    let (mut app, _path) = make_app_with_rendered_tab("Hello world.\n");
+    app.enter_hybrid_mode();
+    assert_eq!(app.focus, Focus::HybridEditor);
+    app.exit_hybrid_mode();
+    assert_eq!(
+        app.focus,
+        Focus::Viewer,
+        "focus must return to Viewer after exit_hybrid_mode"
+    );
+    let tab = app.tabs.active_tab().expect("tab must exist");
+    assert!(
+        tab.hybrid.is_none(),
+        "tab.hybrid must be None after exit_hybrid_mode"
+    );
+}
+
+/// Test 4 — pressing lowercase `i` still enters `Focus::Editor` (regression
+/// guard for the unchanged fullscreen edtui path).
+#[test]
+fn i_keybinding_enters_old_edit_mode_unchanged() {
+    let (mut app, _path) = make_app_with_rendered_tab("# Regression guard\n");
+    // Simulate the viewer's `i` key handler directly.
+    app.handle_viewer_key(KeyCode::Char('i'), KeyModifiers::empty());
+    assert_eq!(
+        app.focus,
+        Focus::Editor,
+        "lowercase `i` must still enter Focus::Editor (fullscreen edtui)"
+    );
+    let tab = app.tabs.active_tab().expect("tab must exist");
+    assert!(
+        tab.editor.is_some(),
+        "tab.editor must be Some after `i` in viewer"
+    );
+    // Hybrid state must NOT have been touched.
+    assert!(
+        tab.hybrid.is_none(),
+        "tab.hybrid must remain None after lowercase `i`"
+    );
+}
+
+/// Test 5 — pressing uppercase `I` calls `enter_hybrid_mode`, entering
+/// `Focus::HybridEditor`.
+#[test]
+fn capital_i_keybinding_enters_hybrid_mode() {
+    let (mut app, _path) = make_app_with_rendered_tab("# Hybrid entry\n\nSome text.\n");
+    app.handle_viewer_key(KeyCode::Char('I'), KeyModifiers::empty());
+    assert_eq!(
+        app.focus,
+        Focus::HybridEditor,
+        "`I` must enter Focus::HybridEditor"
+    );
+    let tab = app.tabs.active_tab().expect("tab must exist");
+    assert!(
+        tab.hybrid.is_some(),
+        "tab.hybrid must be Some after pressing `I`"
+    );
+    // The fullscreen editor must NOT have been activated.
+    assert!(
+        tab.editor.is_none(),
+        "tab.editor must remain None after `I`"
+    );
+}
+
+/// Test 6 — snapshot/rendering smoke test.  With `tab.hybrid` populated, the
+/// draw pipeline doesn't panic and produces the same block-level output as
+/// without hybrid (no visual change to formatted blocks).
+///
+/// Full terminal rendering in a unit test requires a backend; we skip the
+/// `f.set_cursor_position` assertion and instead verify that entering hybrid
+/// mode does NOT change `tab.view.rendered` (the formatted blocks are
+/// byte-identical to what was rendered without hybrid).
+#[test]
+fn hybrid_mode_does_not_alter_rendered_blocks() {
+    let source = "# Title\n\nBody paragraph.\n";
+    let p = Palette::from_theme(Theme::Default);
+
+    // Render once without hybrid.
+    let blocks_without_hybrid =
+        crate::markdown::renderer::render_markdown(source, &p, Theme::Default);
+
+    // Render with hybrid entry (which must not re-render the blocks).
+    let (mut app, _path) = make_app_with_rendered_tab(source);
+    app.enter_hybrid_mode();
+    let tab = app.tabs.active_tab().expect("tab must exist");
+
+    // Number of blocks must be identical.
+    assert_eq!(
+        tab.view.rendered.len(),
+        blocks_without_hybrid.len(),
+        "block count must be the same before and after entering hybrid mode"
+    );
+
+    // Spot-check: each block's source byte range is unchanged.  The rendered
+    // text content (Tab::view::rendered) is not mutated by enter_hybrid_mode.
+    for (i, (with_hybrid, without_hybrid)) in tab
+        .view
+        .rendered
+        .iter()
+        .zip(blocks_without_hybrid.iter())
+        .enumerate()
+    {
+        let (hs, he) = match with_hybrid {
+            crate::markdown::DocBlock::Text {
+                source_byte_start,
+                source_byte_end,
+                ..
+            } => (*source_byte_start, *source_byte_end),
+            crate::markdown::DocBlock::Mermaid {
+                source_byte_start,
+                source_byte_end,
+                ..
+            } => (*source_byte_start, *source_byte_end),
+            crate::markdown::DocBlock::Table(t) => (t.source_byte_start, t.source_byte_end),
+        };
+        let (ws, we) = match without_hybrid {
+            crate::markdown::DocBlock::Text {
+                source_byte_start,
+                source_byte_end,
+                ..
+            } => (*source_byte_start, *source_byte_end),
+            crate::markdown::DocBlock::Mermaid {
+                source_byte_start,
+                source_byte_end,
+                ..
+            } => (*source_byte_start, *source_byte_end),
+            crate::markdown::DocBlock::Table(t) => (t.source_byte_start, t.source_byte_end),
+        };
+        assert_eq!(
+            (hs, he),
+            (ws, we),
+            "block[{i}] byte range must be identical with/without hybrid"
+        );
+    }
 }

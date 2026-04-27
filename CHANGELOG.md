@@ -5,6 +5,49 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.30.0] - 2026-04-27
+
+### Added — Hybrid live-preview editing sub-phase 4 (`I` enters hybrid mode)
+
+**First user-visible moment of the hybrid editing project.** Press
+`I` (capital) on a markdown file to enter `Focus::HybridEditor`:
+the viewer keeps drawing exactly as before (all blocks formatted),
+but a real terminal cursor appears at the source byte position.
+`:q` exits back to viewer mode. `i` (lowercase) continues to enter
+the legacy fullscreen edtui editor, unchanged.
+
+This sub-phase deliberately ships a minimal experience: no edits,
+no cursor movement (that's sub-phase 5), no block reveal (also
+sub-phase 5). The cursor materializes, blinks on the rendered
+view, and `:q` is the only escape. The point is to establish the
+focus, the cursor display, and the exit path without yet touching
+editing semantics — proof that the foundation works before sub-phase
+5 reveals the active block as raw source.
+
+Implementation:
+- New `Focus::HybridEditor` variant + dispatch through
+  `handle_hybrid_key`.
+- `enter_hybrid_mode` / `exit_hybrid_mode` in `app/file_ops.rs`
+  mirror `enter_edit_mode` / `exit_edit_mode`. Cursor seeded from
+  viewer's `cursor_line` / `cursor_col` via
+  `cursor_bridge::visual_to_byte`.
+- `handle_hybrid_key` routes Esc / `:` / command-line input. `:q`
+  and `:q!` exit. All other keys are no-ops in this sub-phase.
+- Cursor positioning at end of `markdown_view::draw`: edtui
+  `(row, col)` → byte → `byte_to_visual` → terminal absolute
+  coordinates → `f.set_cursor_position`. Returns `None` for cursor
+  in mermaid/table blocks (sub-phases 5/8 handle).
+- Status-bar shows "HYBRID" in this mode.
+
+The `i` keybinding is unchanged — sub-phase 9 will swap them to
+make hybrid the default.
+
+6 new tests pin: initial cursor at byte 0, focus transitions,
+keybinding routing for `i` vs `I`, no visual change to rendered
+blocks.
+
+921 tests pass (+6). Clippy + fmt clean.
+
 ## [1.29.3] - 2026-04-27
 
 ### Internal — Hybrid live-preview editing sub-phase 3 (render-block-from-slice + splice helpers)

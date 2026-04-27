@@ -5,8 +5,60 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
 use crate::action::Action;
+use crate::markdown::DocBlock;
 use crate::ui::tabs::OpenOutcome;
 use std::time::Instant;
+
+// ── Private helpers for hybrid-mode byte ↔ editor-position translation ────────
+
+/// Convert a source byte offset to an edtui `(row, col)` position using the
+/// pre-computed `line_boundaries` table.
+///
+/// `line_boundaries[i]` is the byte offset of the start of line `i`.  We binary-
+/// search for the line that contains `byte` and compute the column offset within
+/// that line.  Both values are returned as `usize` for use with
+/// [`edtui::Index2::new`].
+fn byte_to_editor_pos(line_boundaries: &[usize], byte: usize) -> (usize, usize) {
+    // Binary search: find the largest boundary index whose value is <= byte.
+    let row = match line_boundaries.binary_search(&byte) {
+        Ok(i) => i,
+        Err(i) => i.saturating_sub(1),
+    };
+    let col = byte.saturating_sub(line_boundaries.get(row).copied().unwrap_or(0));
+    (row, col)
+}
+
+/// Convert an edtui `(row, col)` position back to a source byte offset using the
+/// pre-computed `line_boundaries` table.
+///
+/// Clamps to the end of the source when `row` or `col` is out of range.
+fn editor_pos_to_byte(line_boundaries: &[usize], row: usize, col: usize) -> usize {
+    let line_start = line_boundaries.get(row).copied().unwrap_or_else(|| {
+        // Row past end of document — clamp to last boundary.
+        line_boundaries.last().copied().unwrap_or(0)
+    });
+    line_start + col
+}
+
+/// Extract `(source_byte_start, source_byte_end)` from any [`DocBlock`] variant.
+///
+/// Returns `(0, 0)` if the block has zero-length ranges (shouldn't happen after
+/// the post-render fixup pass, but is safe to call unconditionally).
+fn block_byte_range_of(block: &DocBlock) -> (usize, usize) {
+    match block {
+        DocBlock::Text {
+            source_byte_start,
+            source_byte_end,
+            ..
+        } => (*source_byte_start as usize, *source_byte_end as usize),
+        DocBlock::Mermaid {
+            source_byte_start,
+            source_byte_end,
+            ..
+        } => (*source_byte_start as usize, *source_byte_end as usize),
+        DocBlock::Table(t) => (t.source_byte_start as usize, t.source_byte_end as usize),
+    }
+}
 
 impl App {
     // ── Tree width helpers ────────────────────────────────────────────────────
@@ -524,6 +576,109 @@ impl App {
         // The watcher suppression above prevents a FilesChanged action from
         // firing, which is where the refresh normally hooks in.
         self.refresh_git_status();
+    }
+
+    // ── Hybrid editor lifecycle ───────────────────────────────────────────────
+
+    /// Enter hybrid live-preview editing mode for the currently active tab.
+    ///
+    /// Requires the tab to have a `current_path` set (i.e., it was loaded from
+    /// disk).  Constructs a [`crate::ui::hybrid_editor::HybridState`] from the
+    /// current source buffer, positions the cursor at the source byte that
+    /// corresponds to the viewer's current `cursor_line`, and switches focus to
+    /// [`Focus::HybridEditor`].
+    ///
+    /// The mode is read-only in sub-phase 4.  Arrow keys and editing keystrokes
+    /// are no-ops; only `:q` does anything.  Sub-phase 5 adds cursor movement
+    /// and sub-phase 6 adds editing.
+    pub fn enter_hybrid_mode(&mut self) {
+        let Some(tab) = self.tabs.active_tab_mut() else {
+            return;
+        };
+        // Only enter hybrid mode when we have a real path on disk.
+        if tab.view.current_path.is_none() {
+            return;
+        }
+
+        let source = tab.view.content.clone();
+        let mut state = crate::ui::hybrid_editor::HybridState::from_source(&source);
+
+        // Compute the initial cursor byte offset from the viewer's current
+        // visual position.  `visual_to_byte` maps (cursor_line, cursor_col) →
+        // a source byte offset for Text blocks.  Fall back to byte 0 when the
+        // cursor is on a Mermaid or Table block (sub-phase 4 doesn't handle those).
+        let cursor_byte = crate::markdown::cursor_bridge::visual_to_byte(
+            &tab.view.rendered,
+            &tab.view.text_layouts,
+            tab.view.cursor_line,
+            // cursor_col is already u16 (display-column units, unicode-width).
+            tab.view.cursor_col,
+        )
+        .unwrap_or(0);
+
+        // Map the byte offset to an edtui cursor row/col so the cursor
+        // tracks the same logical position in the source.
+        let (cursor_row, cursor_col_in_line) =
+            byte_to_editor_pos(&state.line_boundaries, cursor_byte);
+        state.editor_state.cursor = edtui::Index2::new(cursor_row, cursor_col_in_line);
+
+        // Record which block the cursor is in so sub-phase 5 can reveal it.
+        if !tab.view.rendered.is_empty() {
+            let block_idx = crate::markdown::cursor_bridge::byte_offset_to_block(
+                &tab.view.rendered,
+                cursor_byte,
+            );
+            let (start, end) = block_byte_range_of(&tab.view.rendered[block_idx]);
+            state.active_block = Some(crate::ui::hybrid_editor::BlockSourceRange {
+                index: block_idx,
+                start_byte: start,
+                end_byte: end,
+            });
+        }
+
+        tab.hybrid = Some(state);
+        self.focus = Focus::HybridEditor;
+    }
+
+    /// Exit hybrid live-preview editing mode, restoring viewer focus.
+    ///
+    /// Drops `tab.hybrid` and switches focus back to [`Focus::Viewer`].  The
+    /// viewer cursor is restored to the visual position that corresponds to the
+    /// hybrid cursor's last byte offset (best-effort round-trip via
+    /// `byte_to_visual`).
+    pub fn exit_hybrid_mode(&mut self) {
+        let Some(tab) = self.tabs.active_tab_mut() else {
+            self.focus = Focus::Viewer;
+            return;
+        };
+
+        // Extract the final cursor byte so we can restore the viewer position.
+        let final_byte = tab.hybrid.as_ref().map(|h| {
+            editor_pos_to_byte(
+                &h.line_boundaries,
+                h.editor_state.cursor.row,
+                h.editor_state.cursor.col,
+            )
+        });
+
+        // Drop hybrid state first.
+        tab.hybrid = None;
+        self.focus = Focus::Viewer;
+
+        // Attempt to restore the viewer cursor from the hybrid cursor's byte.
+        if let Some(byte) = final_byte
+            && let Some((visual_row, _visual_col)) = crate::markdown::cursor_bridge::byte_to_visual(
+                &tab.view.rendered,
+                &tab.view.text_layouts,
+                byte,
+            )
+        {
+            let vh = self.tabs.view_height;
+            if let Some(tab2) = self.tabs.active_tab_mut() {
+                tab2.view.cursor_line = visual_row;
+                tab2.view.scroll_to_cursor(vh);
+            }
+        }
     }
 
     // ── Link picker ───────────────────────────────────────────────────────────

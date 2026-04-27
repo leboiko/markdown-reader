@@ -19,9 +19,9 @@
 //! Callers should treat `source` as the truth for byte-range bookkeeping and
 //! `editor_state` as the truth for cursor position and undo history.
 
-// The public items in this module are new API surface not yet wired into the
-// production call graph — they will be consumed in sub-phases 4–9.
-// Suppress the dead_code lint until then so clippy stays clean.
+// Some items (apply_edit, is_dirty, EditEffect, BlockSourceRange) are used by
+// sub-phases 5–9 and not yet wired into the production call graph.  Suppress
+// the dead_code lint for those dormant items.
 #![allow(dead_code)]
 
 use edtui::{EditorState, Lines};

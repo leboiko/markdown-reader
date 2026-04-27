@@ -253,9 +253,19 @@ impl App {
                     ds.match_lines.clear();
                 }
             }
-            // `i` enters vim-style edit mode for the active tab's source file.
+            // `i` enters vim-style edit mode for the active tab's source file
+            // (fullscreen edtui; unchanged until sub-phase 9 swaps the bindings).
             KeyCode::Char('i') => {
                 self.enter_edit_mode();
+            }
+            // `I` enters hybrid live-preview editing mode (sub-phase 4).
+            // The viewer keeps drawing all blocks formatted; a real terminal
+            // cursor appears at the source-byte-offset position.  No edits work
+            // yet — arrow keys and character input are no-ops.  Only `:q` exits.
+            // Sub-phase 5 adds cursor movement; sub-phase 6 adds editing;
+            // sub-phase 9 swaps `i` and `I`.
+            KeyCode::Char('I') => {
+                self.enter_hybrid_mode();
             }
             KeyCode::Char('q') => self.running = false,
             KeyCode::Char('j') | KeyCode::Down => {
@@ -866,6 +876,83 @@ impl App {
                 self.pending_chord = Some('g');
             }
             _ => {}
+        }
+    }
+
+    // ── Hybrid editor ─────────────────────────────────────────────────────────
+
+    /// Handle a key event while [`Focus::HybridEditor`] is active.
+    ///
+    /// Sub-phase 4 is intentionally minimal: only `:q` does anything.  All
+    /// other keystrokes are silently consumed (no-ops).  Sub-phase 5 will wire
+    /// up arrow keys / hjkl for cursor movement; sub-phase 6 will add editing.
+    ///
+    /// Two sub-modes mirror the editor:
+    /// - **Command-line mode** (`hybrid.command_line.is_some()`): we capture
+    ///   chars ourselves to build an ex command (`:q`).
+    /// - **Normal mode**: `:` opens the command line; everything else is a no-op.
+    pub(super) fn handle_hybrid_key(&mut self, key: crossterm::event::KeyEvent) {
+        let Some(tab) = self.tabs.active_tab_mut() else {
+            return;
+        };
+        let Some(hybrid) = tab.hybrid.as_mut() else {
+            // Hybrid state was unexpectedly None; snap back to Viewer.
+            self.focus = Focus::Viewer;
+            return;
+        };
+
+        if hybrid.command_line.is_some() {
+            // Command-line capture mode — handle in-place to avoid borrow issues.
+            match key.code {
+                KeyCode::Esc => {
+                    hybrid.command_line = None;
+                    hybrid.status_message = None;
+                }
+                KeyCode::Backspace => {
+                    if let Some(ref mut cmd) = hybrid.command_line {
+                        cmd.pop();
+                    }
+                }
+                KeyCode::Enter => {
+                    let cmd = hybrid.command_line.take().unwrap_or_default();
+                    hybrid.status_message = None;
+                    // Drop the borrow on `tab` before calling `exit_hybrid_mode`,
+                    // which needs `&mut self`.
+                    let should_exit = matches!(cmd.trim(), "q" | "q!");
+                    if should_exit {
+                        self.exit_hybrid_mode();
+                    } else {
+                        // Unknown command — set a status message.
+                        if let Some(tab2) = self.tabs.active_tab_mut()
+                            && let Some(h) = tab2.hybrid.as_mut()
+                        {
+                            h.status_message = Some(format!("unknown command: :{}", cmd.trim()));
+                        }
+                    }
+                }
+                KeyCode::Char(c) => {
+                    if let Some(ref mut cmd) = hybrid.command_line {
+                        cmd.push(c);
+                    }
+                }
+                _ => {}
+            }
+        } else {
+            // Normal mode — `:` opens the command line; everything else is a
+            // no-op in sub-phase 4.
+            match key.code {
+                KeyCode::Char(':') => {
+                    hybrid.command_line = Some(String::new());
+                }
+                KeyCode::Esc => {
+                    // Already in read-only normal mode.  No-op for sub-phase 4.
+                    // Sub-phase 5 will use Esc to abort cursor movement.
+                }
+                // Sub-phase 5 will add arrow keys / hjkl.
+                // Sub-phase 6 will add editing keys.
+                // For sub-phase 4, all other keys are no-ops.
+                _ => {}
+            }
         }
     }
 

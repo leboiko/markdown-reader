@@ -226,6 +226,13 @@ pub enum Focus {
     LinkPicker,
     /// Vim-style in-place editor for the active tab's source file.
     Editor,
+    /// Hybrid live-preview editing mode (read-only in sub-phase 4).
+    ///
+    /// The viewer panel continues drawing all blocks formatted exactly as in
+    /// [`Focus::Viewer`], but a real terminal cursor is placed at the source-byte
+    /// position tracked by [`crate::ui::hybrid_editor::HybridState`].  Editing
+    /// actions are no-ops until sub-phase 6; only `:q` does anything.
+    HybridEditor,
 }
 
 // ── Ancillary state types ────────────────────────────────────────────────────
@@ -950,10 +957,10 @@ impl App {
             return;
         }
 
-        // While the editor is active, mouse events are ignored entirely.
-        // The user must `:q` first to exit edit mode before interacting with
+        // While the editor or hybrid mode is active, mouse events are ignored
+        // entirely.  The user must `:q` first to exit before interacting with
         // the tree, tabs, or other panels via pointer.
-        if self.focus == Focus::Editor {
+        if self.focus == Focus::Editor || self.focus == Focus::HybridEditor {
             return;
         }
 
@@ -1151,6 +1158,11 @@ impl App {
             Focus::Editor => {
                 let key = crossterm::event::KeyEvent::new(code, modifiers);
                 self.handle_editor_key(key);
+            }
+            // Hybrid mode: similar reconstruction for the hybrid key handler.
+            Focus::HybridEditor => {
+                let key = crossterm::event::KeyEvent::new(code, modifiers);
+                self.handle_hybrid_key(key);
             }
         }
     }

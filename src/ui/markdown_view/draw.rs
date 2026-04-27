@@ -5,13 +5,13 @@ use super::highlight::{
 use super::mermaid_draw::{MermaidDrawParams, draw_mermaid_block};
 use super::state::VisualRange;
 use crate::action::Action;
-use crate::app::App;
+use crate::app::{App, Focus};
 use crate::markdown::{DocBlock, MermaidBlockId, update_mermaid_heights, update_text_layouts};
 use crate::mermaid::MermaidRenderConfig;
 use crate::ui::table_render::layout_table;
 use ratatui::{
     Frame,
-    layout::Rect,
+    layout::{Position, Rect},
     style::{Color, Style},
     text::Text,
     widgets::{Block, Borders, Paragraph},
@@ -597,5 +597,55 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
             visual_mode: md.visual_mode,
         };
         draw_mermaid_block(f, app, rect, &p, &params);
+    }
+
+    // ── Hybrid-mode cursor placement ─────────────────────────────────────────
+    //
+    // When the active tab is in hybrid mode (`tab.hybrid` is `Some`), place the
+    // real terminal cursor at the visual position that corresponds to the hybrid
+    // editor's current source byte offset.  The viewer renders unchanged — the
+    // only visible difference is the blinking cursor.
+    //
+    // Sub-phase 4 only handles Text blocks (byte_to_visual returns None for
+    // Mermaid / Table blocks).  Sub-phases 5/8 will refine those cases.
+    if app.focus == Focus::HybridEditor
+        && let Some(tab) = app.tabs.active_tab()
+        && let Some(hybrid) = tab.hybrid.as_ref()
+    {
+        // Translate edtui cursor position (row, col) → source byte offset.
+        let cursor_byte = {
+            let row = hybrid.editor_state.cursor.row;
+            let col = hybrid.editor_state.cursor.col;
+            let line_start = hybrid
+                .line_boundaries
+                .get(row)
+                .copied()
+                .unwrap_or_else(|| hybrid.line_boundaries.last().copied().unwrap_or(0));
+            line_start + col
+        };
+
+        // Translate byte → visual (visual_row, visual_col).
+        if let Some((visual_row, visual_col)) = crate::markdown::cursor_bridge::byte_to_visual(
+            &tab.view.rendered,
+            &tab.view.text_layouts,
+            cursor_byte,
+        ) {
+            // Translate from document-absolute visual row to viewport-relative
+            // row by subtracting the current scroll offset, then add the
+            // inner rect's y offset to get an absolute terminal row.
+            let viewport_row = visual_row.saturating_sub(scroll_offset);
+            let abs_y = inner
+                .y
+                .saturating_add(crate::cast::u16_from_u32(viewport_row));
+            let abs_x = inner.x.saturating_add(visual_col);
+
+            // Only place the cursor when it's within the visible viewport.
+            if abs_y >= inner.y && abs_y < inner.y + inner.height {
+                f.set_cursor_position(Position::new(abs_x, abs_y));
+            }
+        }
+        // When byte_to_visual returns None (cursor in a Mermaid or Table
+        // block), we simply don't show the cursor.  Sub-phases 5 / 8 will
+        // handle those block types.
     }
 }
