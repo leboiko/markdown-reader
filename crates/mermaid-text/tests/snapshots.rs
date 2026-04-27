@@ -483,6 +483,38 @@ fn classdef_and_class_directives() {
 }
 
 // ---------------------------------------------------------------------------
+// `classDef DEFAULT` special semantics — DEFAULT is a universal base class:
+// - unstyled nodes pick it up directly,
+// - explicitly-classed nodes get DEFAULT merged under (explicit wins).
+// ---------------------------------------------------------------------------
+#[test]
+fn classdef_default_merges_into_all_nodes() {
+    // A[Apple]:::fruit — gets DEFAULT stroke AND fruit fill.
+    // B[Bone]          — gets only DEFAULT stroke (no explicit class).
+    let src = r#"graph LR
+        A[Apple]:::fruit
+        B[Bone]
+        classDef DEFAULT stroke:#0ff
+        classDef fruit fill:#f00"#;
+    let opts = mermaid_text::RenderOptions {
+        color: true,
+        ..Default::default()
+    };
+    let out = mermaid_text::render_with_options(src, &opts).unwrap();
+    // Both nodes should carry the cyan stroke from DEFAULT.
+    assert!(
+        out.matches("\x1b[38;2;0;255;255m").count() >= 2,
+        "DEFAULT stroke SGR must appear on both nodes"
+    );
+    // Only node A (fruit) carries the red fill.
+    assert!(
+        out.contains("\x1b[48;2;255;0;0m"),
+        "fruit fill SGR present on A"
+    );
+    assert_snapshot!("classdef_default_merges_into_all_nodes", out);
+}
+
+// ---------------------------------------------------------------------------
 // `:::` shorthand inline on node references in transitions.
 // ---------------------------------------------------------------------------
 #[test]
@@ -623,13 +655,60 @@ Sync --> [*]";
     let out = mermaid_text::render(src).unwrap();
     // <<choice>> now renders with diagonal corner characters (╱ ╲) instead of
     // the old ◇ markers, giving a clearer visual distinction from plain rects.
-    assert!(out.contains('╱'), "missing diagonal corner '╱' for <<choice>>");
-    assert!(out.contains('╲'), "missing diagonal corner '╲' for <<choice>>");
+    assert!(
+        out.contains('╱'),
+        "missing diagonal corner '╱' for <<choice>>"
+    );
+    assert!(
+        out.contains('╲'),
+        "missing diagonal corner '╲' for <<choice>>"
+    );
     assert!(
         out.contains('█'),
         "missing filled-block glyph for <<fork>>/<<join>> in default LR layout"
     );
     assert_snapshot!("state_diagram_special_shapes", out);
+}
+
+/// Snapshot test for anonymous vs named `<<choice>>` rendering.
+///
+/// - Named choice (`state named_cond <<choice>>`): label "named_cond" must
+///   appear inside the diamond.
+/// - Anonymous choice (`<<choice>>` used directly as a transition endpoint):
+///   the diamond must be present but the synthetic id (`__choice_N__`) must
+///   NOT appear in the output.
+#[test]
+fn state_diagram_anonymous_choice() {
+    let src = "stateDiagram-v2
+[*] --> named_cond
+state named_cond <<choice>>
+named_cond --> Pass: ok
+named_cond --> Fail: error
+Fail --> [*]
+Pass --> Done
+Done --> [*]
+[*] --> <<choice>>
+<<choice>> --> Open: start
+<<choice>> --> Closed: stop
+Open --> [*]
+Closed --> [*]";
+    let out = mermaid_text::render(src).unwrap();
+    // Both diamonds must have their diagonal corners rendered.
+    assert!(
+        out.contains('╱'),
+        "missing diagonal corner '╱' for <<choice>> in:\n{out}"
+    );
+    // Named choice label must be present.
+    assert!(
+        out.contains("named_cond"),
+        "named <<choice>> label 'named_cond' missing from output:\n{out}"
+    );
+    // Anonymous choice synthetic id must NOT appear.
+    assert!(
+        !out.contains("__choice_"),
+        "synthetic anonymous-choice id leaked into output:\n{out}"
+    );
+    assert_snapshot!("state_diagram_anonymous_choice", out);
 }
 
 #[test]
@@ -1863,8 +1942,62 @@ fn flowchart_md_tui_test_diagram() {
         "circle label still leaks parens — bug 1 not fixed:\n{out}"
     );
     // Rhombus must use diagonal corners.
-    assert!(out.contains('╱'), "diagonal corner '╱' missing for Rhombus:\n{out}");
-    assert!(out.contains('╲'), "diagonal corner '╲' missing for Rhombus:\n{out}");
+    assert!(
+        out.contains('╱'),
+        "diagonal corner '╱' missing for Rhombus:\n{out}"
+    );
+    assert!(
+        out.contains('╲'),
+        "diagonal corner '╲' missing for Rhombus:\n{out}"
+    );
     assert!(!out.contains('◇'), "old '◇' marker still present:\n{out}");
     assert_snapshot!("flowchart_md_tui_test_diagram", out);
+}
+
+// ---------------------------------------------------------------------------
+// Edge-label midpoint placement regression (LR multi-segment route)
+//
+// This snapshot guards the `longest_horizontal_segment_with_range` fix: when
+// an edge in an LR graph is routed via multiple horizontal segments, the label
+// must be placed on the LONGEST horizontal segment (closest to the geometric
+// midpoint of the full route), not on the last (destination-side) segment.
+//
+// The A→B edge here forces A* to produce a path with horizontal segments on
+// both the source and destination sides of the route; the source-side segment
+// is longer. With the old code the label landed adjacent to B; with the fix
+// it lands on the longer source-side run.
+// ---------------------------------------------------------------------------
+#[test]
+fn flowchart_label_midpoint_placement_lr() {
+    let src = "graph LR
+    A[Source] -- \"edge label\" --> B[Dest]
+    A --> G1[Gate1]
+    G1 --> B
+    G1 --> G2[Gate2]
+    G2 --> B";
+    let out = mermaid_text::render(src).unwrap();
+    // The label must appear somewhere in the output.
+    assert!(out.contains("edge label"), "edge label missing:\n{out}");
+    // The label must NOT be immediately adjacent to the destination node
+    // border character. We check this by asserting that "edge label" does
+    // not appear on the same row as the `▸│` destination-arrival glyph.
+    // A destination-adjacent label would produce something like:
+    //   `  edge label  ▸│ Dest │`
+    // while a correctly-centred label appears well to the left of `▸│`.
+    let bad_proximity = out.lines().any(|line| {
+        // "edge label" and the destination arrow on the same line with
+        // fewer than 4 characters between them.
+        if let (Some(label_pos), Some(arrow_pos)) = (line.find("edge label"), line.find("▸│")) {
+            let gap = arrow_pos.saturating_sub(label_pos + "edge label".len());
+            gap < 4
+        } else {
+            false
+        }
+    });
+    assert!(
+        !bad_proximity,
+        "edge label is immediately adjacent to the destination arrow — \
+         midpoint placement regression:\n{out}"
+    );
+    assert_snapshot!("flowchart_label_midpoint_placement_lr", out);
 }

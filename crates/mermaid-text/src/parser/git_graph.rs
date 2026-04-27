@@ -37,9 +37,9 @@
 //! assert_eq!(g.commits[1].id, "hello");
 //! ```
 
+use crate::Error;
 use crate::git_graph::{Branch, Commit, CommitKind, Event, GitGraph};
 use crate::parser::common::strip_inline_comment;
-use crate::Error;
 
 // ---------------------------------------------------------------------------
 // Public entry point
@@ -88,12 +88,7 @@ pub fn parse(src: &str) -> Result<GitGraph, Error> {
         let first = line.split_whitespace().next().unwrap_or("");
         match first {
             "commit" => {
-                handle_commit(
-                    line,
-                    &mut graph,
-                    &current_branch,
-                    &mut commit_counter,
-                )?;
+                handle_commit(line, &mut graph, &current_branch, &mut commit_counter)?;
             }
             "branch" => {
                 // Clone current_branch so we can pass it immutably while also
@@ -118,7 +113,9 @@ pub fn parse(src: &str) -> Result<GitGraph, Error> {
     }
 
     if !header_seen {
-        return Err(Error::ParseError("missing `gitGraph` header line".to_string()));
+        return Err(Error::ParseError(
+            "missing `gitGraph` header line".to_string(),
+        ));
     }
 
     Ok(graph)
@@ -224,7 +221,9 @@ fn handle_checkout(
 ) -> Result<(), Error> {
     let name = rest_after_keyword(line, "checkout").trim().to_string();
     if name.is_empty() {
-        return Err(Error::ParseError("checkout: missing branch name".to_string()));
+        return Err(Error::ParseError(
+            "checkout: missing branch name".to_string(),
+        ));
     }
     if graph.lane_of(&name).is_none() {
         return Err(Error::ParseError(format!(
@@ -302,9 +301,8 @@ fn handle_cherry_pick(
     current_branch: &str,
     counter: &mut usize,
 ) -> Result<(), Error> {
-    let source_id = extract_quoted_attr(line, "id").ok_or_else(|| {
-        Error::ParseError("cherry-pick: missing id attribute".to_string())
-    })?;
+    let source_id = extract_quoted_attr(line, "id")
+        .ok_or_else(|| Error::ParseError("cherry-pick: missing id attribute".to_string()))?;
 
     // Verify the commit id exists.
     if !graph.commits.iter().any(|c| c.id == source_id) {
@@ -531,9 +529,6 @@ mod tests {
     fn checkout_unknown_branch_returns_error() {
         let src = "gitGraph\n  checkout ghost";
         let err = parse(src).unwrap_err();
-        assert!(
-            err.to_string().contains("ghost"),
-            "unexpected error: {err}"
-        );
+        assert!(err.to_string().contains("ghost"), "unexpected error: {err}");
     }
 }

@@ -1120,8 +1120,16 @@ mod tests {
         assert_eq!(node.shape, NodeShape::Circle);
         // The label must be "Circle", not "( Circle )" or "(Circle)".
         assert_eq!(node.label, "Circle");
-        assert!(!node.label.contains('('), "label must not contain '(': {:?}", node.label);
-        assert!(!node.label.contains(')'), "label must not contain ')': {:?}", node.label);
+        assert!(
+            !node.label.contains('('),
+            "label must not contain '(': {:?}",
+            node.label
+        );
+        assert!(
+            !node.label.contains(')'),
+            "label must not contain ')': {:?}",
+            node.label
+        );
     }
 
     #[test]
@@ -1274,7 +1282,10 @@ mod tests {
     #[test]
     fn parse_parallelogram_backslash_node() {
         let g = parse("graph LR\nA[\\LeanLeft\\]").unwrap();
-        assert_eq!(g.node("A").unwrap().shape, NodeShape::ParallelogramBackslash);
+        assert_eq!(
+            g.node("A").unwrap().shape,
+            NodeShape::ParallelogramBackslash
+        );
         assert_eq!(g.node("A").unwrap().label, "LeanLeft");
     }
 

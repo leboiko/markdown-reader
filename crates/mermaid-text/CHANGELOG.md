@@ -3,6 +3,42 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.26.0 — 2026-04-27 — Render polish (edge labels, classDef DEFAULT, anonymous choices)
+
+Three independent polish bugs landed in one release.
+
+### Fixed — Edge-label midpoint placement (LR/RL)
+
+Labels on multi-segment edge routes now sit at the midpoint of the longest
+horizontal segment instead of landing near the destination box. Single-
+segment direct routes are unaffected. Back-edges routing via top
+perimeters correctly retain last-segment placement to avoid landing in the
+perimeter row. Closes the deferred bug 3 from 0.24.0.
+
+### Added — `classDef DEFAULT` special semantics
+
+`classDef DEFAULT` now correctly serves as a base class merged into every
+other class definition (and applied to nodes that have no explicit
+class). Matches Mermaid's reference behaviour. Previously `DEFAULT` was
+treated as a regular class name with no merge semantics, so its style
+only applied to nodes explicitly tagged `:::DEFAULT`.
+
+### Fixed — Anonymous `<<choice>>` labels are now hidden (state diagrams)
+
+When a choice node is declared without a user-supplied name — by using
+`<<choice>>` directly as a transition endpoint instead of
+`state if_state <<choice>>` — the auto-generated synthetic id is no
+longer rendered inside the diamond. Named choices continue to show
+their label. Matches Mermaid's reference behaviour.
+
+### Tests
+
+3 new snapshots (`flowchart_label_midpoint_placement_lr`,
+`classdef_default_merges_into_all_nodes`,
+`state_diagram_anonymous_choice`) plus 16 inline unit tests across the
+parser and renderer modules. No pre-existing snapshots were affected by
+any of the three changes (verified by full suite review).
+
 ## 0.25.0 — 2026-04-27 — Shape variants polish (Phase 2)
 
 Six shape-rendering bugs fixed and two missing parser arms added, covering all

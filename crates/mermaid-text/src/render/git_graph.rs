@@ -101,15 +101,18 @@ pub fn render(diag: &GitGraph, max_width: Option<usize>) -> String {
                 if commit.kind == CommitKind::Merge
                     && let Some(mp_idx) = commit.merge_parent
                 {
-                    let src_lane =
-                        diag.lane_of(&diag.commits[mp_idx].branch).unwrap_or(0);
+                    let src_lane = diag.lane_of(&diag.commits[mp_idx].branch).unwrap_or(0);
                     if src_lane != lane {
                         // Emit a merge-arc row connecting src_lane → lane.
                         // The merge destination is lane (left), source is src_lane (right),
                         // assuming source lanes come from branches to the right.
                         out.push_str(&render_arc_row(
-                            lane_count, &alive, lane, src_lane,
-                            CONN_MERGE_DST, CONN_MERGE_SRC,
+                            lane_count,
+                            &alive,
+                            lane,
+                            src_lane,
+                            CONN_MERGE_DST,
+                            CONN_MERGE_SRC,
                         ));
                         out.push('\n');
                     }
@@ -151,8 +154,12 @@ pub fn render(diag: &GitGraph, max_width: Option<usize>) -> String {
 
                 // Emit the fork arc row: parent lane forks into the new lane.
                 out.push_str(&render_arc_row(
-                    lane_count, &alive, parent_lane, new_lane,
-                    CONN_FORK_LEFT, CONN_FORK_RIGHT,
+                    lane_count,
+                    &alive,
+                    parent_lane,
+                    new_lane,
+                    CONN_FORK_LEFT,
+                    CONN_FORK_RIGHT,
                 ));
                 out.push('\n');
             }
@@ -228,9 +235,17 @@ fn render_arc_row(
 
     build_lane_part(lane_count, alive, |lane| {
         if lane == lo {
-            if lo == left_lane { left_glyph } else { right_glyph }
+            if lo == left_lane {
+                left_glyph
+            } else {
+                right_glyph
+            }
         } else if lane == hi {
-            if hi == right_lane { right_glyph } else { left_glyph }
+            if hi == right_lane {
+                right_glyph
+            } else {
+                left_glyph
+            }
         } else if lane > lo && lane < hi {
             // Between the two endpoints: horizontal fill.
             CONN_HORIZ
@@ -297,11 +312,7 @@ fn render_label_row(diag: &GitGraph) -> String {
 /// Returns a string of `lane_count` lane characters separated by single
 /// spaces. The mapping function receives the lane index and returns the
 /// character to place at that position.
-fn build_lane_part(
-    lane_count: usize,
-    alive: &[bool],
-    mut f: impl FnMut(usize) -> char,
-) -> String {
+fn build_lane_part(lane_count: usize, alive: &[bool], mut f: impl FnMut(usize) -> char) -> String {
     let mut s = String::with_capacity(lane_count * 2);
     for i in 0..lane_count {
         if i > 0 {
@@ -373,7 +384,10 @@ mod tests {
         let out = render(&g, None);
 
         // Every commit glyph must appear.
-        let commit_count = out.lines().filter(|l| l.trim_start().starts_with('*')).count();
+        let commit_count = out
+            .lines()
+            .filter(|l| l.trim_start().starts_with('*'))
+            .count();
         assert_eq!(commit_count, 3, "expected 3 commit rows:\n{out}");
 
         // All ids must appear.

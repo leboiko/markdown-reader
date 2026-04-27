@@ -169,6 +169,15 @@ struct Walker {
     /// same `NodeShape::Bar` — they're visually identical and only the
     /// semantic role differs.
     pending_bar_kinds: HashSet<String>,
+    /// Maps a composite-path scope key (empty string = top level,
+    /// otherwise the path joined with `PATH_SEP`) to the single
+    /// synthesised anonymous-choice id active in that scope.
+    ///
+    /// At most one anonymous `<<choice>>` / `[[choice]]` node exists per
+    /// scope — multiple occurrences of the literal token in the same
+    /// scope all refer to the same synthesised node (matching Mermaid's
+    /// own behaviour).
+    anon_choice_by_scope: HashMap<String, String>,
     /// `(target_id, class_name)` pairs from `class …` directives and
     /// inline `:::className` shorthands. Resolved at end-of-parse via
     /// the shared [`apply_pending_classes`] helper so a `class A foo`
@@ -187,6 +196,20 @@ struct Walker {
     /// X : text` directive bumps this and creates one synthetic node
     /// plus one dotted edge connecting it to its anchor.
     note_counter: usize,
+    /// Monotonically increasing counter for synthesised anonymous choice IDs
+    /// (`__choice_1__`, `__choice_2__`, …). Bumped each time `<<choice>>`
+    /// appears directly as a transition endpoint without a preceding
+    /// `state <Id> <<choice>>` declaration. These IDs are tracked in
+    /// `anonymous_choice_ids` so the renderer can suppress the synthetic
+    /// label (displaying an empty diamond instead of e.g. `__choice_1__`).
+    choice_counter: usize,
+    /// IDs that were auto-generated for anonymous `<<choice>>` endpoints.
+    ///
+    /// At [`materialise`] time every node whose id is in this set receives
+    /// an empty label (`""`) so the diamond renders empty — matching
+    /// Mermaid's reference behaviour where unnamed choices have no label
+    /// inside the diamond.
+    anonymous_choice_ids: HashSet<String>,
 }
 
 impl Default for Walker {
@@ -214,11 +237,14 @@ impl Default for Walker {
             composite_children: HashMap::new(),
             composite_directions: HashMap::new(),
             pending_bar_kinds: HashSet::new(),
+            anon_choice_by_scope: HashMap::new(),
             pending_classes: Vec::new(),
             // Direction will be overwritten in materialise; the
             // helpers don't read it, so any value works as the seed.
             style_scratch: Graph::new(Direction::LeftToRight),
             note_counter: 0,
+            choice_counter: 0,
+            anonymous_choice_ids: HashSet::new(),
         }
     }
 }
@@ -492,6 +518,43 @@ impl Walker {
             self.shapes.entry(id.clone()).or_insert(shape);
             return id;
         }
+        // Anonymous `<<choice>>` / `[[choice]]` used directly as a transition
+        // endpoint without a preceding `state <Id> <<choice>>` declaration.
+        //
+        // Mermaid's own grammar allows the short form:
+        //   `[*] --> <<choice>>`
+        //   `<<choice>> --> True : condition`
+        //   `<<choice>> --> False : !condition`
+        //
+        // All occurrences of the literal token `<<choice>>` in a given scope
+        // (top-level or composite body) refer to the **same** anonymous node —
+        // Mermaid does not support multiple distinct unnamed choices per scope.
+        // We synthesise one id per scope on first encounter and reuse it.
+        if raw == "<<choice>>" || raw == "[[choice]]" {
+            // Scope key: empty at top level, otherwise the composite path joined
+            // with `PATH_SEP` (same convention as the marker-id mangling).
+            let scope_key = if path.is_empty() {
+                String::new()
+            } else {
+                path.join(PATH_SEP)
+            };
+            let id = if let Some(existing) = self.anon_choice_by_scope.get(&scope_key) {
+                existing.clone()
+            } else {
+                self.choice_counter += 1;
+                let new_id = if scope_key.is_empty() {
+                    format!("__choice_{}__", self.choice_counter)
+                } else {
+                    format!("__choice_{}_{}__", self.choice_counter, scope_key)
+                };
+                self.anon_choice_by_scope.insert(scope_key, new_id.clone());
+                self.anonymous_choice_ids.insert(new_id.clone());
+                new_id
+            };
+            self.register_node(&id, path);
+            self.shapes.insert(id.clone(), NodeShape::Diamond);
+            return id;
+        }
         self.register_node(raw, path);
         raw.to_string()
     }
@@ -704,6 +767,11 @@ impl Walker {
             let shape = self.shapes.get(id).copied().unwrap_or(NodeShape::Rounded);
             let label = if self.is_marker(id) {
                 MARKER_LABEL.to_string()
+            } else if self.anonymous_choice_ids.contains(id) {
+                // Anonymous `<<choice>>` node: suppress the synthetic id so the
+                // diamond renders empty — matching Mermaid's reference behaviour
+                // where unnamed choices show no label inside the diamond.
+                String::new()
             } else if let Some(explicit) = self.explicit_labels.get(id) {
                 explicit.clone()
             } else if let Some(lines) = self.descriptions.get(id) {
@@ -1530,5 +1598,87 @@ Inner --> Inner
         assert!(g.node("Active").is_none(), "composite id leaked as a node");
         // It must appear as a subgraph instead.
         assert!(g.subgraphs.iter().any(|s| s.id == "Active"));
+    }
+
+    // ---- Anonymous vs named <<choice>> label suppression (bug fix) ------
+
+    /// A named choice (`state if_state <<choice>>`) must preserve the
+    /// user-supplied id as its label — Mermaid renders it inside the diamond.
+    #[test]
+    fn named_choice_keeps_user_label() {
+        let g = parse(
+            "stateDiagram-v2\nstate if_state <<choice>>\n[*] --> if_state\nif_state --> True\nif_state --> False",
+        )
+        .unwrap();
+        let node = g.node("if_state").expect("named choice node must exist");
+        assert_eq!(node.shape, NodeShape::Diamond);
+        // The label must equal the user-supplied id, not be suppressed.
+        assert_eq!(
+            node.label, "if_state",
+            "named choice must keep its user-supplied id as label"
+        );
+    }
+
+    /// An anonymous choice (`<<choice>>` used directly as a transition endpoint)
+    /// must receive an empty label so the diamond renders without any text —
+    /// matching Mermaid's reference behaviour for unnamed choices.
+    #[test]
+    fn anonymous_choice_has_none_label() {
+        let g = parse(
+            "stateDiagram-v2\n[*] --> <<choice>>\n<<choice>> --> True: condition\n<<choice>> --> False: !condition",
+        )
+        .unwrap();
+        // There should be exactly one anonymous diamond node.
+        let diamonds: Vec<&crate::types::Node> = g
+            .nodes
+            .iter()
+            .filter(|n| n.shape == NodeShape::Diamond)
+            .collect();
+        assert_eq!(diamonds.len(), 1, "exactly one anonymous choice diamond");
+        let node = diamonds[0];
+        assert!(
+            node.label.is_empty(),
+            "anonymous choice must have an empty label, got {:?}",
+            node.label
+        );
+        // The synthetic id must not be exposed as the label.
+        assert_ne!(
+            node.label, node.id,
+            "synthetic id must not leak into the label"
+        );
+    }
+
+    /// Multiple occurrences of `<<choice>>` in the **same scope** must resolve
+    /// to the **same** node (all three transitions attach to a single diamond).
+    #[test]
+    fn anonymous_choice_all_occurrences_same_scope_share_one_node() {
+        let g = parse("stateDiagram-v2\n[*] --> <<choice>>\n<<choice>> --> A\n<<choice>> --> B")
+            .unwrap();
+        // Only one diamond node — all three lines resolved to the same id.
+        let diamonds: Vec<&crate::types::Node> = g
+            .nodes
+            .iter()
+            .filter(|n| n.shape == NodeShape::Diamond)
+            .collect();
+        assert_eq!(diamonds.len(), 1, "single anonymous choice per scope");
+        // All three edges must fan out from/to that one node.
+        assert_eq!(g.edges.len(), 3);
+    }
+
+    /// `[[choice]]` (double-bracket syntax) used as an anonymous transition
+    /// endpoint must be treated identically to `<<choice>>`.
+    #[test]
+    fn anonymous_choice_double_bracket_syntax() {
+        let g = parse("stateDiagram-v2\n[*] --> [[choice]]\n[[choice]] --> Done: ok").unwrap();
+        let diamonds: Vec<&crate::types::Node> = g
+            .nodes
+            .iter()
+            .filter(|n| n.shape == NodeShape::Diamond)
+            .collect();
+        assert_eq!(diamonds.len(), 1);
+        assert!(
+            diamonds[0].label.is_empty(),
+            "[[choice]] anonymous form must also suppress the synthetic label"
+        );
     }
 }

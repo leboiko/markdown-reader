@@ -208,10 +208,7 @@ mod tests {
 
     #[test]
     fn detects_git_graph_keyword() {
-        assert_eq!(
-            detect("gitGraph\ncommit").unwrap(),
-            DiagramKind::GitGraph
-        );
+        assert_eq!(detect("gitGraph\ncommit").unwrap(), DiagramKind::GitGraph);
         // Case-insensitive match: "gitgraph" lowercased.
         assert_eq!(detect("GitGraph").unwrap(), DiagramKind::GitGraph);
     }

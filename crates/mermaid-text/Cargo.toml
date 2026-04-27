@@ -1,6 +1,6 @@
 [package]
 name = "mermaid-text"
-version = "0.25.0"
+version = "0.26.0"
 edition = "2024"
 # edition = "2024" requires Rust 1.85+; use that as the floor.
 rust-version = "1.92"

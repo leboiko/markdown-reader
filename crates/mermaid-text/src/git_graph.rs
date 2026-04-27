@@ -144,7 +144,10 @@ mod tests {
     fn make_graph() -> GitGraph {
         let mut g = GitGraph {
             branches: vec![
-                Branch { name: "main".to_string(), created_after_commit: None },
+                Branch {
+                    name: "main".to_string(),
+                    created_after_commit: None,
+                },
                 Branch {
                     name: "develop".to_string(),
                     created_after_commit: Some(1),

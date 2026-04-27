@@ -86,7 +86,9 @@ fn render_section(out: &mut String, section: &TimelineSection, max_width: Option
         out.push(' ');
         // Fill remaining columns with dashes up to SECTION_RULE_TARGET.
         let used = 3 + UnicodeWidthStr::width(name) + 1;
-        let dashes = SECTION_RULE_TARGET.saturating_sub(used).max(SECTION_RULE_MIN);
+        let dashes = SECTION_RULE_TARGET
+            .saturating_sub(used)
+            .max(SECTION_RULE_MIN);
         for _ in 0..dashes {
             out.push('\u{2500}'); // '─'
         }
@@ -242,10 +244,7 @@ mod tests {
         let out = render(&diag, Some(40));
         for line in out.lines() {
             let w = UnicodeWidthStr::width(line);
-            assert!(
-                w <= 40,
-                "line exceeds max_width=40 ({w} cells): {line:?}"
-            );
+            assert!(w <= 40, "line exceeds max_width=40 ({w} cells): {line:?}");
         }
         assert!(out.contains('\u{2026}'), "ellipsis not inserted");
     }
@@ -259,9 +258,7 @@ mod tests {
         // A named-section rule line starts with "── " at the beginning of the
         // line (no indent). None of the output lines should start with the
         // section-rule prefix when the only section is the implicit unnamed one.
-        let has_rule_line = out
-            .lines()
-            .any(|l| l.starts_with("\u{2500}\u{2500} "));
+        let has_rule_line = out.lines().any(|l| l.starts_with("\u{2500}\u{2500} "));
         assert!(!has_rule_line, "unexpected section rule in:\n{out}");
         assert!(out.contains("2002"));
         assert!(out.contains("LinkedIn"));

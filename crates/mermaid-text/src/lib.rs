@@ -123,9 +123,9 @@ pub use er::{Attribute, AttributeKey, Cardinality, Entity, ErDiagram, LineStyle,
 pub use gantt::{GanttDiagram, GanttSection, GanttTask};
 pub use git_graph::{Branch, Commit, CommitKind, Event as GitEvent, GitGraph};
 pub use journey::{JourneyDiagram, Section, Task};
-pub use timeline::{Timeline, TimelineEntry, TimelineSection};
 pub use pie::{PieChart, PieSlice};
 pub use sequence::{Message, MessageStyle, Participant, SequenceDiagram};
+pub use timeline::{Timeline, TimelineEntry, TimelineSection};
 pub use types::{Direction, Edge, EdgeEndpoint, EdgeStyle, Graph, Node, NodeShape};
 
 use detect::DiagramKind;
@@ -1121,10 +1121,7 @@ mod tests {
             out.contains('╭') && out.contains('╰'),
             "missing rounded corners:\n{out}",
         );
-        assert!(
-            out.contains('─'),
-            "missing interior lip dashes:\n{out}",
-        );
+        assert!(out.contains('─'), "missing interior lip dashes:\n{out}",);
     }
 
     #[test]
@@ -1207,7 +1204,10 @@ mod tests {
             "unexpected T-junction divider in cylinder:\n{out}"
         );
         // Rounded corners must still be present.
-        assert!(out.contains('╭') && out.contains('╰'), "missing rounded corners:\n{out}");
+        assert!(
+            out.contains('╭') && out.contains('╰'),
+            "missing rounded corners:\n{out}"
+        );
     }
 
     #[test]
@@ -1215,9 +1215,15 @@ mod tests {
         let out = render("graph LR; A{{Hexagon}}").unwrap();
         assert!(out.contains("Hexagon"), "missing label:\n{out}");
         // Top/bottom corners are `╱` / `╲` (slanted, like a rhombus).
-        assert!(out.contains('╱') && out.contains('╲'), "missing slanted corners:\n{out}");
+        assert!(
+            out.contains('╱') && out.contains('╲'),
+            "missing slanted corners:\n{out}"
+        );
         // Left/right midpoints have `<` / `>` side-point markers.
-        assert!(out.contains('<') && out.contains('>'), "missing side-point markers:\n{out}");
+        assert!(
+            out.contains('<') && out.contains('>'),
+            "missing side-point markers:\n{out}"
+        );
     }
 
     #[test]

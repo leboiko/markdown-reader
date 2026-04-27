@@ -1690,64 +1690,150 @@ fn candidate_positions(
                 }
             }
 
-            if let Some((mid_col, seg_row, lo_col, hi_col)) =
-                last_horizontal_segment_with_range(path)
-            {
-                // Three column anchors along the segment.
-                let third = (hi_col - lo_col) / 3;
-                let col_anchors = [mid_col, lo_col + third, lo_col + 2 * third];
-                // Row offsets: alternate above/below, growing in distance.
-                let row_offsets: [isize; 8] = [-1, 1, -2, 2, -3, 3, -4, 4];
-                // Two-phase candidate ordering:
-                //
-                // Phase 1 (column-first × interior rows): For each column anchor
-                // try all 8 row offsets; but ONLY emit rows that fall within the
-                // bounding box of any subgraph that the segment row lies inside.
-                // This ensures that (mid_col, row_inside) is tried before
-                // (secondary_col, row_outside), keeping labels inside the
-                // subgraph.  For `panics`, mid_col=6 at dr=-4→row1 (inside) is
-                // tried before any outside row.
-                //
-                // Phase 2 (all remaining positions): all col × row combinations
-                // not emitted in phase 1, i.e. rows outside any enclosing
-                // subgraph.  These are the last-resort positions.
-                //
-                // Within each column the row offsets are tried in the [-1,1,-2,2…]
-                // order so nearby rows are preferred over distant ones.  Across
-                // columns, mid_col is tried before the secondary anchors so that
-                // labels stay visually centred on the segment.
-                //
-                // B8: col 19 (wall-adjacent) is blocked at interior rows by
-                // `label_abuts_subgraph_right_wall` but passes at exterior row 12.
-                // With phase separation, the exterior (19, 12) appears in phase 2,
-                // AFTER the interior (17, 8) in phase 1 — so (17, 8) wins.
-                out.reserve(col_anchors.len() * row_offsets.len() * 2);
-                // Phase 1: inside any enclosing subgraph.
-                for &c in &col_anchors {
-                    for &dr in &row_offsets {
-                        let r = (seg_row as isize + dr).max(0) as usize;
-                        // Include if the row falls inside any subgraph bounding box
-                        // (strictly interior: between top and bottom border rows).
-                        let inside_sg = sg_bounds.iter().any(|sg| {
-                            let bottom = sg.row + sg.height;
-                            r > sg.row && r < bottom.saturating_sub(1)
-                        });
-                        if inside_sg {
-                            out.push((c, r));
+            // Determine which horizontal segment(s) to use for candidate
+            // generation.  Prefer the LONGEST segment (geometric midpoint of
+            // the most prominent horizontal run) but fall back to the LAST
+            // segment (destination-side, the old behaviour) when all
+            // longest-segment positions are blocked by collision guards.
+            //
+            // Concretely: emit candidates from the longest segment first
+            // (Phases 1 and 2 with full subgraph separation), then, if the
+            // last segment differs from the longest, append the last segment's
+            // candidates as Phase 3.  `label_position`'s Pass A (full guards)
+            // then Pass B (relaxed guards) walk the combined list in order —
+            // so the longest-segment positions are always preferred when any
+            // clear position exists there, and the last-segment positions are
+            // only reached when every longest-segment candidate is blocked.
+            let raw_longest_seg = longest_horizontal_segment_with_range(path);
+            let last_seg = last_horizontal_segment_with_range(path);
+
+            // Back-edges can route along the diagram perimeter (e.g. above all
+            // nodes on a small row index).  For such paths the longest segment
+            // is on the perimeter row while the last segment is on the natural
+            // routing row near the nodes (a larger row index).  Using the
+            // perimeter segment as the label anchor places the label far above
+            // the actual visual connection.
+            //
+            // Guard: for back-edges, only prefer the longest segment when it is
+            // at or BELOW the last segment's row (i.e. on the natural routing
+            // corridor, not a top perimeter).  When the longest segment is ABOVE
+            // the last segment (smaller row index), fall back to last-segment
+            // behaviour — the perimeter run is unsuitable as a label anchor.
+            let longest_seg = if edge_is_back {
+                match (raw_longest_seg, last_seg) {
+                    (Some(lng), Some(last)) if lng.1 >= last.1 => Some(lng),
+                    _ => last_seg,
+                }
+            } else {
+                raw_longest_seg
+            };
+
+            // Closure: append two-phase candidates for one segment into `out`.
+            // Phase 1 = rows inside any enclosing subgraph (preferred — keeps
+            // labels inside the subgraph box when possible).
+            // Phase 2 = remaining rows (outside all subgraphs).
+            //
+            // `exclude_row`: when `Some(r)`, skip all candidates at row `r`.
+            // Used when generating candidates from the longest segment to avoid
+            // the "junction row" — the row of the last horizontal segment, where
+            // edge-routing junction glyphs (`┴`, `┬`) form AFTER label placement
+            // (timing hazard: `grid.get` does not yet show the final glyph).
+            // Those rows are instead covered by the fallback Phase 3 candidates
+            // generated from `last_seg`.
+            let append_seg_candidates =
+                |out: &mut Vec<(usize, usize)>,
+                 mid_col: usize,
+                 seg_row: usize,
+                 lo_col: usize,
+                 hi_col: usize,
+                 exclude_row: Option<usize>| {
+                    // Three column anchors: midpoint first, then 1/3 and 2/3
+                    // positions along the segment for more fallback variety.
+                    let third = (hi_col - lo_col) / 3;
+                    let col_anchors = [mid_col, lo_col + third, lo_col + 2 * third];
+                    // Row offsets: alternate above/below in growing distance
+                    // so nearby rows are tried before far-away ones.
+                    let row_offsets: [isize; 8] = [-1, 1, -2, 2, -3, 3, -4, 4];
+                    out.reserve(col_anchors.len() * row_offsets.len() * 2);
+                    // Phase 1 (column-first × interior rows).
+                    //
+                    // B8: wall-adjacent positions (e.g. col 19) are blocked at
+                    // interior rows by `label_abuts_subgraph_right_wall` but
+                    // accepted at exterior rows.  Emitting interior positions
+                    // first ensures that the closer, non-wall position beats
+                    // the exterior fallback.
+                    for &c in &col_anchors {
+                        for &dr in &row_offsets {
+                            let r = (seg_row as isize + dr).max(0) as usize;
+                            if exclude_row == Some(r) {
+                                continue;
+                            }
+                            let inside_sg = sg_bounds.iter().any(|sg| {
+                                let bottom = sg.row + sg.height;
+                                r > sg.row && r < bottom.saturating_sub(1)
+                            });
+                            if inside_sg {
+                                out.push((c, r));
+                            }
                         }
                     }
-                }
-                // Phase 2: outside (or on the border of) all subgraphs.
-                for &c in &col_anchors {
-                    for &dr in &row_offsets {
-                        let r = (seg_row as isize + dr).max(0) as usize;
-                        let inside_sg = sg_bounds.iter().any(|sg| {
-                            let bottom = sg.row + sg.height;
-                            r > sg.row && r < bottom.saturating_sub(1)
-                        });
-                        if !inside_sg {
-                            out.push((c, r));
+                    // Phase 2 (all remaining positions — outside any subgraph).
+                    for &c in &col_anchors {
+                        for &dr in &row_offsets {
+                            let r = (seg_row as isize + dr).max(0) as usize;
+                            if exclude_row == Some(r) {
+                                continue;
+                            }
+                            let inside_sg = sg_bounds.iter().any(|sg| {
+                                let bottom = sg.row + sg.height;
+                                r > sg.row && r < bottom.saturating_sub(1)
+                            });
+                            if !inside_sg {
+                                out.push((c, r));
+                            }
                         }
+                    }
+                };
+
+            if let Some((mid_col, seg_row, lo_col, hi_col)) = longest_seg {
+                // Determine the row of the last (destination-side) segment,
+                // which is the "junction-prone" row to exclude from the longest-
+                // segment's candidate set.  Junction glyphs (`┴ ┬`) at the path's
+                // horizontal/vertical turn points form AFTER label placement
+                // (because later edges are drawn after earlier edge labels are
+                // committed).  Excluding the last segment's row from longest-
+                // segment candidates prevents labels from landing next to future
+                // junction glyphs that aren't yet in the grid.
+                let last_row_for_exclusion = last_seg
+                    .filter(|(_, lr, _, _)| *lr != seg_row)
+                    .map(|(_, lr, _, _)| lr);
+
+                // Primary candidates: longest horizontal segment, excluding the
+                // last segment's row (which gets its own Phase 3 candidates below).
+                append_seg_candidates(
+                    &mut out,
+                    mid_col,
+                    seg_row,
+                    lo_col,
+                    hi_col,
+                    last_row_for_exclusion,
+                );
+
+                // Phase 3 fallback: append candidates from the LAST horizontal
+                // segment (destination-side / old behaviour) whenever the last
+                // segment differs from the longest in either row OR column
+                // bounds.  This gives Pass A a second chance to find a clean
+                // position using the pre-fix segment when all of the longest
+                // segment's candidates are blocked (e.g. by the B10 corner-
+                // adjacency guard that protects `panics┴` artifacts).
+                if let Some((last_mid, last_row, last_lo, last_hi)) = last_seg {
+                    // Only append if the segment is genuinely different — skip
+                    // when longest == last to avoid duplicate candidates.
+                    if last_row != seg_row || last_lo != lo_col || last_hi != hi_col {
+                        append_seg_candidates(
+                            &mut out, last_mid, last_row, last_lo, last_hi,
+                            None, // no row exclusion for the last-segment fallback
+                        );
                     }
                 }
             } else {
@@ -1823,9 +1909,11 @@ fn candidate_positions(
 }
 
 /// Find the **last** horizontal run in `path` (closest to the tip) that is
-/// at least 2 cells long. Returns `(midpoint_col, row, lo_col, hi_col)`
-/// — the inclusive `(lo, hi)` range lets callers pick column anchors
-/// along the segment (not just its midpoint) for label placement.
+/// at least 2 cells long. Returns `(midpoint_col, row, lo_col, hi_col)`.
+///
+/// Used as a fallback in candidate generation: when the longest segment's
+/// candidate positions are all blocked, positions from the last segment are
+/// appended so the label can still land somewhere readable.
 fn last_horizontal_segment_with_range(
     path: &[(usize, usize)],
 ) -> Option<(usize, usize, usize, usize)> {
@@ -1857,6 +1945,61 @@ fn last_horizontal_segment_with_range(
         }
     }
     None
+}
+
+/// Find the **longest** horizontal run in `path` that is at least 2 cells long.
+/// Returns `(midpoint_col, row, lo_col, hi_col)` where `lo_col`/`hi_col` are
+/// the inclusive column bounds of the segment. The inclusive `(lo, hi)` range
+/// lets callers pick column anchors along the segment for label placement.
+///
+/// When there is only one horizontal segment (direct, same-row routes) the
+/// result is identical to picking the last segment, so single-segment
+/// behaviour is fully preserved.
+///
+/// For multi-segment L- or U-shaped routes in LR/RL graphs the longest segment
+/// is usually the main horizontal trunk (e.g. the run from source to a bend
+/// point), not the short final hop into the destination — so labels land near
+/// the geometric midpoint of the route rather than adjacent to the destination.
+fn longest_horizontal_segment_with_range(
+    path: &[(usize, usize)],
+) -> Option<(usize, usize, usize, usize)> {
+    if path.len() < 2 {
+        return None;
+    }
+
+    let mut best: Option<(usize, usize, usize, usize, usize)> = None; // (len, mid, row, lo, hi)
+
+    let n = path.len();
+    let mut i = n.saturating_sub(2);
+    loop {
+        let row = path[i].1;
+        let mut start = i;
+        while start > 0 && path[start - 1].1 == row {
+            start -= 1;
+        }
+        let run_len = i - start + 1;
+        if run_len >= 2 {
+            let lo_col = path[start].0.min(path[i].0);
+            let hi_col = path[start].0.max(path[i].0);
+            let seg_len = hi_col - lo_col;
+            let mid_col = (lo_col + hi_col) / 2;
+            // Keep the longest segment; on a tie, the one already stored wins
+            // (i.e. prefer the later / destination-side segment to preserve the
+            // old behaviour when segments are equal-length).
+            if best.is_none() || seg_len > best.unwrap().0 {
+                best = Some((seg_len, mid_col, row, lo_col, hi_col));
+            }
+        }
+        if i == 0 {
+            break;
+        }
+        i = start.saturating_sub(1);
+        if i == 0 && path[0].1 != row {
+            break;
+        }
+    }
+
+    best.map(|(_len, mid, row, lo, hi)| (mid, row, lo, hi))
 }
 
 /// Return the direction of the last horizontal run in `path`, preserving path
@@ -2519,5 +2662,140 @@ mod tests {
                 "old '◇' marker still present for label {label:?} in:\n{out}"
             );
         }
+    }
+
+    // ---- longest_horizontal_segment_with_range ---------------------------
+
+    /// Helper: build a path from `(col, row)` pairs.
+    fn path_from(pairs: &[(usize, usize)]) -> Vec<(usize, usize)> {
+        pairs.to_vec()
+    }
+
+    /// For a direct single-segment route the longest segment IS the only segment,
+    /// so the result is the same as picking the last segment (no behaviour change).
+    ///
+    /// Note: the path scanner uses `i = n-2` as the starting index, so the very
+    /// last waypoint (the arrowhead arrival cell) is not the upper bound — the
+    /// detected range is `path[0]..=path[n-2]`.  With a path of 9 waypoints
+    /// (cols 2..=10) the scanned range is cols 2..=9, mid = 5.
+    #[test]
+    fn longest_seg_single_segment_matches_last() {
+        // Horizontal run from col 2 to col 10 on row 0 (9 waypoints).
+        // Scanner starts at i = 7 (col 9) and walks back to start = 0 (col 2).
+        let path = path_from(&[
+            (2, 0),
+            (3, 0),
+            (4, 0),
+            (5, 0),
+            (6, 0),
+            (7, 0),
+            (8, 0),
+            (9, 0),
+            (10, 0),
+        ]);
+        let (mid, row, lo, hi) = longest_horizontal_segment_with_range(&path).unwrap();
+        assert_eq!(row, 0);
+        assert_eq!(lo, 2);
+        assert_eq!(hi, 9); // last scanned col is path[n-2] = 9
+        assert_eq!(mid, 5, "midpoint of [2, 9] should be 5");
+    }
+
+    /// For a two-segment L-route (long horizontal out of source, short hop at
+    /// destination), the longer source-side segment wins and the label midpoint
+    /// is placed on it — NOT on the short destination-side hop.
+    ///
+    /// Route: long horizontal run (cols 0..=19, row 0), vertical turn, then a
+    /// short 2-cell approach (cols 20..=21, row 3).
+    ///
+    /// The source-side segment spans 19 cells (cols 0..=18 via `path[n-2]`-
+    /// adjusted indexing); the destination-side hop spans only ~1 cell, so the
+    /// source side wins and the label is placed near col 9 (its midpoint).
+    #[test]
+    fn longest_seg_picks_source_side_on_l_route() {
+        // Long horizontal source run (col 0..=19, row 0), then vertical leg,
+        // then short destination-side approach (col 19..=21, row 3).
+        let mut path: Vec<(usize, usize)> = (0..=19).map(|c| (c, 0)).collect();
+        // Vertical leg col=19, rows 1..=3.
+        path.extend((1..=3).map(|r| (19, r)));
+        // Short destination-side horizontal (col 19..=21, row 3).
+        path.extend((20..=21).map(|c| (c, 3)));
+
+        let (_mid, row, _lo, _hi) = longest_horizontal_segment_with_range(&path).unwrap();
+        assert_eq!(
+            row, 0,
+            "longest segment is on source row 0, not destination row 3"
+        );
+    }
+
+    /// When two segments are equal length the later (destination-side) segment
+    /// wins — preserves old tie-break behaviour to avoid gratuitous churn.
+    #[test]
+    fn longest_seg_tie_keeps_later_segment() {
+        // Source-side run: cols 0..=8 on row 0 (9 waypoints, scanned range 0..=7 = 8 cells).
+        // Dest-side run:   cols 9..=17 on row 3 (scanned range 9..=16 = 8 cells — equal).
+        let mut path: Vec<(usize, usize)> = (0..=8).map(|c| (c, 0)).collect();
+        path.extend((1..=3).map(|r| (8, r)));
+        path.extend((9..=17).map(|c| (c, 3)));
+
+        let (_mid, row, _lo, _hi) = longest_horizontal_segment_with_range(&path).unwrap();
+        // On a tie the first segment found wins (destination-side, since we scan
+        // from the tip backward): `best` is only replaced when strictly greater.
+        assert_eq!(
+            row, 3,
+            "on a tie the destination-side segment (found first) should win"
+        );
+    }
+
+    // ---- <<choice>> label suppression (state diagrams) -------------------
+
+    /// A named `<<choice>>` node (`state if_state <<choice>>`) must show the
+    /// user-supplied id inside the diamond in the rendered output.
+    #[test]
+    fn named_choice_renders_label_inside_diamond() {
+        let src = "stateDiagram-v2
+state if_state <<choice>>
+[*] --> if_state
+if_state --> True: condition
+if_state --> False: !condition";
+        // Use the top-level render API so state diagram detection fires.
+        let out = crate::render(src).expect("state diagram render must succeed");
+        // The diamond must be present (diagonal corners).
+        assert!(
+            out.contains('╱'),
+            "missing diagonal corner '╱' for named <<choice>> in:\n{out}"
+        );
+        // The user-supplied label must appear in the output.
+        assert!(
+            out.contains("if_state"),
+            "named <<choice>> label 'if_state' missing from rendered output:\n{out}"
+        );
+    }
+
+    /// An anonymous `<<choice>>` used directly as a transition endpoint must
+    /// render as an empty diamond — no synthetic id like `__choice_1__` should
+    /// appear in the output.
+    #[test]
+    fn anonymous_choice_renders_empty_diamond() {
+        let src = "stateDiagram-v2
+[*] --> <<choice>>
+<<choice>> --> Pass: success
+<<choice>> --> Fail: error";
+        // Use the top-level render API so state diagram detection fires.
+        let out = crate::render(src).expect("state diagram render must succeed");
+        // The diamond border must still be present.
+        assert!(
+            out.contains('╱'),
+            "missing diagonal corner '╱' for anonymous <<choice>> in:\n{out}"
+        );
+        // No synthetic id should leak into the output.
+        assert!(
+            !out.contains("__choice_"),
+            "synthetic choice id leaked into rendered output:\n{out}"
+        );
+        // Also assert the concrete synthetic id pattern is absent.
+        assert!(
+            !out.contains("choice_1"),
+            "partial synthetic id 'choice_1' leaked into rendered output:\n{out}"
+        );
     }
 }

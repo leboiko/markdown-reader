@@ -436,10 +436,25 @@ pub(crate) fn continuation_keyword_for(kind: BlockKind) -> Option<&'static str> 
 /// on `graph.node_styles` or `graph.subgraph_styles`. Multiple classes
 /// per target stack via [`merge_node_style`] in source order. Class
 /// names without a matching `classDef` are silently ignored.
+///
+/// After all explicit class assignments are resolved, if the diagram defines
+/// a `classDef DEFAULT …`, that style is applied as a **base** to every node
+/// and subgraph in the graph. Explicit class styles (applied above) are then
+/// merged on top of DEFAULT, so they win on any property they define while
+/// still inheriting any property DEFAULT supplies that they don't.
+///
+/// This matches Mermaid's reference behaviour: `DEFAULT` is a special sentinel
+/// that acts as a universal base class rather than just another named class.
 pub(crate) fn apply_pending_classes(graph: &mut Graph, pending: &[(String, String)]) {
     let subgraph_ids: std::collections::HashSet<String> =
         graph.subgraphs.iter().map(|s| s.id.clone()).collect();
+
+    // Pass 1: apply all explicitly-listed class assignments in source order.
     for (target, class_name) in pending {
+        // Skip the special DEFAULT sentinel here — it is handled in Pass 2.
+        if class_name == "DEFAULT" {
+            continue;
+        }
         let Some(overlay) = graph.class_defs.get(class_name).copied() else {
             continue;
         };
@@ -450,6 +465,40 @@ pub(crate) fn apply_pending_classes(graph: &mut Graph, pending: &[(String, Strin
         };
         let base = target_map.get(target).copied().unwrap_or_default();
         target_map.insert(target.clone(), merge_node_style(base, overlay));
+    }
+
+    // Pass 2: apply `DEFAULT` as the universal base class.
+    //
+    // Mermaid treats `classDef DEFAULT` as a baseline that is merged under
+    // every other class definition and applied to every node not otherwise
+    // styled. We implement this by:
+    // 1. For each node/subgraph that already has an explicit style (from
+    //    Pass 1 or a `style` directive), merge DEFAULT under it so the
+    //    explicit properties still win.
+    // 2. For each node/subgraph with no style entry yet, insert DEFAULT's
+    //    style directly.
+    let Some(default_style) = graph.class_defs.get("DEFAULT").copied() else {
+        // No DEFAULT defined — nothing to do (preserves pre-existing behaviour).
+        return;
+    };
+
+    // Collect the IDs we need to visit so we can mutate the style maps after.
+    let node_ids: Vec<String> = graph.nodes.iter().map(|n| n.id.clone()).collect();
+    let sg_ids: Vec<String> = graph.subgraphs.iter().map(|s| s.id.clone()).collect();
+
+    for id in node_ids {
+        // Merge DEFAULT under the existing explicit style: `merge_node_style(base, overlay)`
+        // returns `overlay.field.or(base.field)`, so existing explicit values win.
+        let explicit = graph.node_styles.get(&id).copied().unwrap_or_default();
+        // default_style is the base; explicit is the overlay (overlay wins on conflict).
+        let merged = merge_node_style(default_style, explicit);
+        graph.node_styles.insert(id, merged);
+    }
+
+    for id in sg_ids {
+        let explicit = graph.subgraph_styles.get(&id).copied().unwrap_or_default();
+        let merged = merge_node_style(default_style, explicit);
+        graph.subgraph_styles.insert(id, merged);
     }
 }
 
@@ -745,5 +794,140 @@ mod tests {
         };
         let merged = merge_node_style(base, NodeStyle::default());
         assert_eq!(merged.fill, Some(Rgb(1, 2, 3)));
+    }
+
+    // ---- classDef DEFAULT special semantics ---------------------------------
+
+    /// A single unstyled node picks up `classDef DEFAULT fill:red`.
+    #[test]
+    fn default_classdef_merges_into_unstyled_node() {
+        // Build a minimal Graph with one node and a DEFAULT class.
+        let mut graph = crate::types::Graph::new(crate::types::Direction::LeftToRight);
+        graph.nodes.push(crate::types::Node::new(
+            "A",
+            "A",
+            crate::types::NodeShape::Rectangle,
+        ));
+        graph.class_defs.insert(
+            "DEFAULT".to_string(),
+            NodeStyle {
+                fill: Some(Rgb(0xff, 0, 0)),
+                ..Default::default()
+            },
+        );
+
+        // No explicit class assignments — pending is empty.
+        apply_pending_classes(&mut graph, &[]);
+
+        let style = graph.node_styles.get("A").copied().unwrap_or_default();
+        assert_eq!(
+            style.fill,
+            Some(Rgb(0xff, 0, 0)),
+            "unstyled node must inherit DEFAULT fill"
+        );
+    }
+
+    /// An explicitly classed node gets DEFAULT as base, explicit class wins on conflict.
+    #[test]
+    fn default_classdef_merges_under_explicit_class() {
+        // classDef DEFAULT fill:#eee, stroke:#999
+        // classDef important fill:#f00
+        // node A:::important  => fill:#f00 (important wins), stroke:#999 (DEFAULT inherited)
+        let mut graph = crate::types::Graph::new(crate::types::Direction::LeftToRight);
+        graph.nodes.push(crate::types::Node::new(
+            "A",
+            "A",
+            crate::types::NodeShape::Rectangle,
+        ));
+        graph.class_defs.insert(
+            "DEFAULT".to_string(),
+            NodeStyle {
+                fill: Some(Rgb(0xee, 0xee, 0xee)),
+                stroke: Some(Rgb(0x99, 0x99, 0x99)),
+                color: None,
+            },
+        );
+        graph.class_defs.insert(
+            "important".to_string(),
+            NodeStyle {
+                fill: Some(Rgb(0xff, 0, 0)),
+                stroke: None,
+                color: None,
+            },
+        );
+
+        apply_pending_classes(&mut graph, &[("A".to_string(), "important".to_string())]);
+
+        let style = graph.node_styles.get("A").copied().unwrap_or_default();
+        assert_eq!(
+            style.fill,
+            Some(Rgb(0xff, 0, 0)),
+            "explicit class fill must win over DEFAULT"
+        );
+        assert_eq!(
+            style.stroke,
+            Some(Rgb(0x99, 0x99, 0x99)),
+            "DEFAULT stroke must be inherited when explicit class doesn't define it"
+        );
+    }
+
+    /// When no DEFAULT is defined, unstyled nodes remain unstyled.
+    #[test]
+    fn default_classdef_does_not_apply_when_absent() {
+        let mut graph = crate::types::Graph::new(crate::types::Direction::LeftToRight);
+        graph.nodes.push(crate::types::Node::new(
+            "A",
+            "A",
+            crate::types::NodeShape::Rectangle,
+        ));
+        // Intentionally no DEFAULT in class_defs.
+
+        apply_pending_classes(&mut graph, &[]);
+
+        assert!(
+            !graph.node_styles.contains_key("A"),
+            "no DEFAULT means no style entry for unstyled node"
+        );
+    }
+
+    /// State diagrams use the same apply_pending_classes path — verify that
+    /// classDef DEFAULT propagates to state-diagram nodes identically.
+    #[test]
+    fn default_classdef_works_in_state_diagrams() {
+        // State diagrams go through the same apply_pending_classes helper.
+        // We can test this by simulating what the state-diagram parser does:
+        // build a Graph with nodes representing states and a DEFAULT classDef.
+        let mut graph = crate::types::Graph::new(crate::types::Direction::TopToBottom);
+        graph.nodes.push(crate::types::Node::new(
+            "Idle",
+            "Idle",
+            crate::types::NodeShape::Rounded,
+        ));
+        graph.nodes.push(crate::types::Node::new(
+            "Working",
+            "Working",
+            crate::types::NodeShape::Rounded,
+        ));
+        graph.class_defs.insert(
+            "DEFAULT".to_string(),
+            NodeStyle {
+                stroke: Some(Rgb(0x99, 0xcc, 0xff)),
+                ..Default::default()
+            },
+        );
+
+        apply_pending_classes(&mut graph, &[]);
+
+        // Both states must pick up DEFAULT's stroke.
+        assert_eq!(
+            graph.node_styles.get("Idle").and_then(|s| s.stroke),
+            Some(Rgb(0x99, 0xcc, 0xff)),
+            "state Idle must inherit DEFAULT stroke"
+        );
+        assert_eq!(
+            graph.node_styles.get("Working").and_then(|s| s.stroke),
+            Some(Rgb(0x99, 0xcc, 0xff)),
+            "state Working must inherit DEFAULT stroke"
+        );
     }
 }
