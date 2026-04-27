@@ -5,7 +5,59 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — 1.33.3
+## [Unreleased] — 1.34.0
+
+### Fixed — Hybrid mode block-level reveal now operates per structural element
+
+**Bug discovery:** `MdRenderer` was emitting a single `DocBlock::Text` for the
+entire document whenever the content contained no mermaid fences or tables.
+Only `TagEnd::Table` and `TagEnd::CodeBlock` (mermaid path) called
+`flush_text_block()` to start a new block; every heading, paragraph, list, and
+blockquote accumulated into one giant text run. In hybrid mode the "active block"
+was therefore always the whole document, so entering `i` revealed the entire file
+as raw markdown source — defeating the purpose of block-level reveal.
+
+**Renderer change (`src/markdown/renderer.rs`):** added `flush_text_block()` calls
+in `MdRenderer::end_tag` for the following arms (after the existing
+`push_blank_line()`, preserving the blank-line-in-block ordering that the mermaid
+path already used):
+
+- `TagEnd::Heading(_)` — every heading is its own block.
+- `TagEnd::Paragraph` — every paragraph is its own block.
+- `TagEnd::List(_)` — only when the outermost list closes (`list_depth == 0` after
+  decrement). Nested list closes do NOT flush, keeping nested lists in a single block.
+- `TagEnd::BlockQuote(_)` — every blockquote is its own block.
+- `TagEnd::CodeBlock` (non-mermaid path) — each fenced code block is its own block;
+  the mermaid path already flushed via `emit_mermaid_block`.
+
+Also guarded `Tag::CodeBlock`'s `flush_line()` call with
+`if !self.current_spans.is_empty()` to prevent an unconditional empty-line push
+from creating a spurious zero-length `DocBlock::Text` whenever a paragraph
+immediately precedes a code block (the empty line leaked into the pending buffer
+between the paragraph flush and the mermaid emit).
+
+**Test updates:**
+- `renderer::tests::source_lines_map_paragraph_correctly` — rewritten to locate
+  heading and paragraph in their own separate blocks (was finding both in one block).
+- `renderer::tests::text_before_code_block` — rewritten to find intro paragraph and
+  code block in separate blocks (was asserting they shared one block).
+- `hybrid_editor::tests::type_mermaid_fence_splits_text_block` — updated initial
+  block-count assertion from `== 1` to `>= 2` (two paragraphs now produce two blocks).
+
+**New tests (3):**
+- `heading_emits_own_text_block` — two headings produce at least 2 Text blocks with
+  contiguity invariant verified.
+- `paragraph_and_heading_split_into_separate_blocks` — paragraph + heading + paragraph
+  yield at least 3 separate blocks in distinct positions.
+- `nested_list_stays_in_single_block` — a nested list with parent and child items
+  produces exactly 1 Text block.
+
+**Hybrid-mode UX impact:** with per-element granularity, pressing `i` in hybrid mode
+now reveals only the heading, paragraph, list, blockquote, or code block under the
+cursor as raw markdown — the rest of the document remains rendered. This is the
+intended block-level reveal behaviour the hybrid mode was designed to provide.
+
+## [1.33.3] — 2026-04-27
 
 ### Fixed — Hybrid mode cursor lands inside the gutter when line numbers are on
 

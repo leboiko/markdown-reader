@@ -1432,25 +1432,25 @@ mod tests {
     }
 
     /// Typing a mermaid fence into a text block and triggering cursor-leave
-    /// must split the single text block into [text, mermaid, text] — 2 additional
-    /// blocks, increasing the block count.
+    /// must increase the block count (mermaid fence forces a new `DocBlock::Mermaid`
+    /// plus surrounding text blocks).
     ///
-    /// # Why mermaid fences and not `\n\n`
-    ///
-    /// The renderer merges all non-mermaid content into a single `DocBlock::Text`
-    /// between any two mermaid fences.  Adding `\n\n` inside a text block re-
-    /// parses the slice but still produces one `DocBlock::Text` (multiple
-    /// paragraphs share one block).  The only way to increase the block count
-    /// via a re-parse is to introduce a mermaid fence — the renderer then flushes
-    /// a text block before the mermaid and after it.
+    /// With per-element granularity each paragraph is its own `DocBlock::Text`,
+    /// so "Intro.\n\nOutro.\n" already produces 2 blocks before the edit.
+    /// Inserting a mermaid fence between them creates additional blocks (at
+    /// minimum a Mermaid block plus any split text blocks).
     #[test]
     fn type_mermaid_fence_splits_text_block() {
-        // Single text block — no mermaid.
+        // Two paragraphs — each in its own block with per-element granularity.
         let source = "Intro.\n\nOutro.\n";
         let (mut state, blocks) = setup(source);
         let mut view = view_with_blocks(blocks);
         let block_count_before = view.rendered.len();
-        assert_eq!(block_count_before, 1, "single text block expected");
+        // With per-element granularity, "Intro." and "Outro." are separate blocks.
+        assert!(
+            block_count_before >= 2,
+            "expected at least 2 text blocks for 2 paragraphs"
+        );
 
         // Insert a mermaid fence between "Intro.\n\n" and "Outro.\n".
         // Byte 8 is the start of "Outro".
@@ -1463,13 +1463,20 @@ mod tests {
         // Simulate cursor leave on block 0.
         reparse_and_splice_block(&state, &mut view, 0, &palette(), theme());
 
-        // The slice now contains: text + mermaid fence + text → 3 blocks.
+        // The document now contains a mermaid block, so total block count must
+        // be at least 3 (intro text, mermaid, outro text).
         assert!(
-            view.rendered.len() > block_count_before,
-            "inserting a mermaid fence must split the text block; \
+            view.rendered.len() >= 3,
+            "inserting a mermaid fence must produce at least 3 blocks (text+mermaid+text); \
              source = {:?}, block count = {}",
             state.source,
             view.rendered.len(),
+        );
+        assert!(
+            view.rendered
+                .iter()
+                .any(|b| matches!(b, DocBlock::Mermaid { .. })),
+            "re-parsed document must contain a Mermaid block",
         );
     }
 

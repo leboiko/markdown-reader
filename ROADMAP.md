@@ -30,7 +30,7 @@ Design choices (locked in 2026-04-27):
 - **Keep edtui as text-editing primitive** (cursor, undo/redo,
   vim-mode); viewer pipeline draws everything. No vendoring.
 
-9 sub-phases, ~13-17 engineering days total:
+10 sub-phases, ~13-17 engineering days total:
 
 | # | Sub-phase | Status | Effort |
 |---|---|---|---|
@@ -44,6 +44,7 @@ Design choices (locked in 2026-04-27):
 | 8 | Active mermaid (deferred re-render on leave) | shipped 1.32.2 | 0.5-1d |
 | 8b | Mermaid byte-range covers full fenced region (bug fix flagged in 8) | shipped 1.32.3 | 0.5d |
 | 9 | `i`/`I` swap (hybrid becomes default) | shipped 1.33.0 | 0.5d |
+| 10 | Per-element block granularity (true block-level reveal in hybrid) | shipped 1.34.0 | 0.5d |
 
 Out of scope, deliberately deferred to follow-up tickets:
 - Continuous inline syntax styling (live `**bold**`); incoherent

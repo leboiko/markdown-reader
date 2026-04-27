@@ -677,7 +677,13 @@ impl MdRenderer {
                 // Record the fence's byte offset and resolve its source line.
                 self.code_block_fence_offset = Some(span.start);
                 self.code_block_start_line = byte_offset_to_line(span.start, &self.line_boundaries);
-                self.flush_line();
+                // Only flush if there are pending inline spans — an unconditional
+                // flush_line() would push an empty line into self.lines, which then
+                // creates a spurious empty DocBlock::Text when the preceding element
+                // already called flush_text_block() (per-element granularity).
+                if !self.current_spans.is_empty() {
+                    self.flush_line();
+                }
             }
             Tag::List(start) => {
                 self.list_depth += 1;
@@ -778,18 +784,27 @@ impl MdRenderer {
                     line: crate::cast::u32_sat(self.lines.len()),
                 });
                 self.flush_line();
+                // Blank line is part of this heading's block (visual separator),
+                // then flush so each heading gets its own DocBlock::Text.
                 self.push_blank_line();
+                self.flush_text_block();
                 self.in_heading = false;
                 self.heading_text.clear();
             }
             TagEnd::Paragraph => {
                 self.flush_line();
+                // Blank line belongs to this paragraph's block, then flush so
+                // each paragraph is a separate DocBlock::Text.
                 self.push_blank_line();
+                self.flush_text_block();
             }
             TagEnd::BlockQuote(_) => {
                 self.in_blockquote = false;
                 self.pop_style();
+                // Blank line belongs to this blockquote's block, then flush so
+                // each blockquote is a separate DocBlock::Text.
                 self.push_blank_line();
+                self.flush_text_block();
             }
             TagEnd::CodeBlock => {
                 let lang = self.code_block_lang.as_deref();
@@ -820,6 +835,11 @@ impl MdRenderer {
                     self.emit_mermaid_block();
                 } else {
                     self.render_code_block();
+                    // Flush so each fenced code block is its own DocBlock::Text.
+                    // `render_code_block` already appended the trailing blank line
+                    // (visual separator), so the blank is part of this block.
+                    // Mermaid already calls flush_text_block inside emit_mermaid_block.
+                    self.flush_text_block();
                 }
                 self.in_code_block = false;
                 self.code_block_lang = None;
@@ -828,7 +848,12 @@ impl MdRenderer {
                 self.list_depth = self.list_depth.saturating_sub(1);
                 self.list_counters.pop();
                 if self.list_depth == 0 {
+                    // Blank line belongs to this list's block, then flush so the
+                    // outermost list is its own DocBlock::Text. Nested list closes
+                    // (list_depth > 0 after decrement) must NOT flush — nested
+                    // lists must stay in a single block with their parent.
                     self.push_blank_line();
+                    self.flush_text_block();
                 }
             }
             TagEnd::Item => {
@@ -1532,24 +1557,48 @@ mod tests {
         }
     }
 
-    /// A heading on line 0 should map to source line 0.  A paragraph starting
-    /// on line 2 (after blank line) should map to source line 2.
+    /// A heading on line 0 should emit its own block mapping to source line 0.
+    /// A paragraph starting on line 2 (after blank line) should emit its own
+    /// block mapping to source line 2.  With per-element granularity the two
+    /// are now separate `DocBlock::Text` values.
     #[test]
     fn source_lines_map_paragraph_correctly() {
         let md = "# Title\n\nParagraph text\n";
         let blocks = render_markdown(md, &default_palette(), Theme::Default);
-        let text_block = blocks
-            .iter()
-            .find(|b| matches!(b, DocBlock::Text { .. }))
-            .expect("expected a Text block");
-        let DocBlock::Text { source_lines, .. } = text_block else {
+
+        // Locate the block whose first rendered line contains the heading prefix.
+        let heading_block = blocks.iter().find(|b| {
+            if let DocBlock::Text { text, .. } = b {
+                text.lines
+                    .iter()
+                    .any(|l| l.spans.iter().any(|s| s.content.contains("Title")))
+            } else {
+                false
+            }
+        });
+        let heading_block = heading_block.expect("expected a Text block containing 'Title'");
+        let DocBlock::Text { source_lines, .. } = heading_block else {
             panic!("expected Text block");
         };
-        // The heading is the very first rendered line — source line 0.
+        // The heading is the very first rendered line in its block — source line 0.
         assert_eq!(source_lines[0], 0, "heading should map to source line 0");
-        // Find the index of the rendered line containing "Paragraph".
-        let DocBlock::Text { text, .. } = text_block else {
-            panic!()
+
+        // Locate the block containing the paragraph text.
+        let para_block = blocks.iter().find(|b| {
+            if let DocBlock::Text { text, .. } = b {
+                text.lines
+                    .iter()
+                    .any(|l| l.spans.iter().any(|s| s.content.contains("Paragraph")))
+            } else {
+                false
+            }
+        });
+        let para_block = para_block.expect("expected a Text block containing 'Paragraph'");
+        let DocBlock::Text {
+            text, source_lines, ..
+        } = para_block
+        else {
+            panic!("expected Text block");
         };
         let para_idx = text
             .lines
@@ -1723,8 +1772,10 @@ mod tests {
         assert_eq!(*source_line, 0, "mermaid source_line should be 0");
     }
 
-    /// Text before a code block keeps its own source lines; the code block
-    /// content lines report source lines relative to the fence opening.
+    /// Text before a code block keeps its own source lines in a separate block;
+    /// the code block content lines report source lines relative to the fence
+    /// opening in their own block.  With per-element granularity, the intro
+    /// paragraph and the fenced code block are distinct `DocBlock::Text` values.
     #[test]
     fn text_before_code_block() {
         // Source layout:
@@ -1736,33 +1787,64 @@ mod tests {
         let md = "Intro\n\n```rust\nfn main() {}\n```\n";
         let blocks = render_markdown(md, &default_palette(), Theme::Default);
 
-        // There should be exactly one Text block containing both the intro and
-        // the rendered code box (they are in the same text run).
-        let text_block = blocks
+        // Find the block that contains "Intro" — the paragraph block.
+        let intro_block = blocks
             .iter()
-            .find(|b| matches!(b, DocBlock::Text { .. }))
-            .expect("expected a Text block");
+            .find(|b| {
+                if let DocBlock::Text { text, .. } = b {
+                    text.lines
+                        .iter()
+                        .any(|l| l.spans.iter().any(|s| s.content.contains("Intro")))
+                } else {
+                    false
+                }
+            })
+            .expect("expected a Text block containing 'Intro'");
         let DocBlock::Text {
-            text, source_lines, ..
-        } = text_block
+            text: intro_text,
+            source_lines: intro_source_lines,
+            ..
+        } = intro_block
         else {
             panic!("expected Text block");
         };
 
         // The first rendered line is "Intro" — source line 0.
-        let intro_idx = text
+        let intro_idx = intro_text
             .lines
             .iter()
             .position(|l| l.spans.iter().any(|s| s.content.contains("Intro")))
             .expect("intro line not found");
         assert_eq!(
-            source_lines[intro_idx], 0,
+            intro_source_lines[intro_idx], 0,
             "intro should map to source line 0"
         );
 
-        // Find the first content line inside the code box (not a border).
-        // Content lines start with "│ " and contain the source code.
-        let content_idx = text
+        // Find the block that contains the rendered code box (its own block now).
+        let code_block = blocks
+            .iter()
+            .find(|b| {
+                if let DocBlock::Text { text, .. } = b {
+                    text.lines.iter().any(|l| {
+                        let joined: String = l.spans.iter().map(|s| s.content.as_ref()).collect();
+                        joined.contains("fn main") || joined.contains("fn")
+                    })
+                } else {
+                    false
+                }
+            })
+            .expect("expected a Text block containing code content");
+        let DocBlock::Text {
+            text: code_text,
+            source_lines: code_source_lines,
+            ..
+        } = code_block
+        else {
+            panic!("expected Text block");
+        };
+
+        // Find the first content line inside the code box.
+        let content_idx = code_text
             .lines
             .iter()
             .position(|l| {
@@ -1772,7 +1854,7 @@ mod tests {
             .expect("code content line not found");
         // Content line 0 inside the box → source line 3 (fence=2, content=2+1=3).
         assert_eq!(
-            source_lines[content_idx], 3,
+            code_source_lines[content_idx], 3,
             "first code content line should map to source line 3"
         );
     }
@@ -2109,5 +2191,174 @@ mod tests {
             slice.trim_end().ends_with("```"),
             "mermaid byte range must include the closing fence, got: {slice:?}"
         );
+    }
+
+    // ── Per-element block granularity (sub-phase 10) ─────────────────────────
+
+    /// Each `# Heading` must produce its own `DocBlock::Text` so hybrid mode
+    /// reveals only the heading under the cursor, not the entire document.
+    ///
+    /// Input: two headings separated by a blank line.  Expected output: at
+    /// least 2 Text blocks (one per heading); the contiguity invariant must hold.
+    #[test]
+    fn heading_emits_own_text_block() {
+        let md = "# H1\n\n# H2\n";
+        let blocks = render_markdown(md, &default_palette(), Theme::Default);
+
+        let text_blocks: Vec<&DocBlock> = blocks
+            .iter()
+            .filter(|b| matches!(b, DocBlock::Text { .. }))
+            .collect();
+        assert!(
+            text_blocks.len() >= 2,
+            "expected at least 2 Text blocks for 2 headings, got {}",
+            text_blocks.len(),
+        );
+
+        // Each heading must appear in its own block.
+        let has_h1 = |b: &&DocBlock| {
+            if let DocBlock::Text { text, .. } = b {
+                text.lines
+                    .iter()
+                    .any(|l| l.spans.iter().any(|s| s.content.contains("H1")))
+            } else {
+                false
+            }
+        };
+        let has_h2 = |b: &&DocBlock| {
+            if let DocBlock::Text { text, .. } = b {
+                text.lines
+                    .iter()
+                    .any(|l| l.spans.iter().any(|s| s.content.contains("H2")))
+            } else {
+                false
+            }
+        };
+        let h1_block = text_blocks.iter().find(|b| has_h1(b));
+        let h2_block = text_blocks.iter().find(|b| has_h2(b));
+        assert!(h1_block.is_some(), "expected a block containing H1");
+        assert!(h2_block.is_some(), "expected a block containing H2");
+
+        // H1 and H2 must be in different blocks.
+        let h1_idx = blocks.iter().position(|b| has_h1(&b)).unwrap();
+        let h2_idx = blocks.iter().position(|b| has_h2(&b)).unwrap();
+        assert_ne!(
+            h1_idx, h2_idx,
+            "H1 and H2 must be in separate DocBlock::Text values"
+        );
+
+        // Contiguity: each block's end == next block's start.
+        for i in 0..blocks.len().saturating_sub(1) {
+            let end_i = match &blocks[i] {
+                DocBlock::Text {
+                    source_byte_end, ..
+                } => *source_byte_end,
+                DocBlock::Mermaid {
+                    source_byte_end, ..
+                } => *source_byte_end,
+                DocBlock::Table(t) => t.source_byte_end,
+            };
+            let start_next = match &blocks[i + 1] {
+                DocBlock::Text {
+                    source_byte_start, ..
+                } => *source_byte_start,
+                DocBlock::Mermaid {
+                    source_byte_start, ..
+                } => *source_byte_start,
+                DocBlock::Table(t) => t.source_byte_start,
+            };
+            assert_eq!(
+                end_i,
+                start_next,
+                "contiguity broken between block[{i}] (end={end_i}) and block[{}] (start={start_next})",
+                i + 1,
+            );
+        }
+    }
+
+    /// A paragraph followed by a heading followed by another paragraph must
+    /// produce at least 3 separate `DocBlock::Text` values so each element is
+    /// independently addressable in hybrid mode.
+    #[test]
+    fn paragraph_and_heading_split_into_separate_blocks() {
+        let md = "Para.\n\n# Heading\n\nPara2.\n";
+        let blocks = render_markdown(md, &default_palette(), Theme::Default);
+
+        let text_blocks: Vec<&DocBlock> = blocks
+            .iter()
+            .filter(|b| matches!(b, DocBlock::Text { .. }))
+            .collect();
+        assert!(
+            text_blocks.len() >= 3,
+            "expected at least 3 Text blocks (para + heading + para), got {}",
+            text_blocks.len(),
+        );
+
+        let block_containing = |needle: &str| {
+            blocks.iter().position(|b| {
+                if let DocBlock::Text { text, .. } = b {
+                    text.lines
+                        .iter()
+                        .any(|l| l.spans.iter().any(|s| s.content.contains(needle)))
+                } else {
+                    false
+                }
+            })
+        };
+
+        let para_idx = block_containing("Para.").expect("expected block containing 'Para.'");
+        let heading_idx = block_containing("Heading").expect("expected block containing 'Heading'");
+        let para2_idx = block_containing("Para2.").expect("expected block containing 'Para2.'");
+
+        assert_ne!(
+            para_idx, heading_idx,
+            "paragraph and heading must be in separate blocks"
+        );
+        assert_ne!(
+            heading_idx, para2_idx,
+            "heading and para2 must be in separate blocks"
+        );
+        assert_ne!(
+            para_idx, para2_idx,
+            "para and para2 must be in separate blocks"
+        );
+    }
+
+    /// A nested list must stay in a single `DocBlock::Text` — inner list closes
+    /// must not flush.  The outermost list close is the only flush point.
+    #[test]
+    fn nested_list_stays_in_single_block() {
+        let md = "- a\n  - a1\n  - a2\n- b\n";
+        let blocks = render_markdown(md, &default_palette(), Theme::Default);
+
+        let text_blocks: Vec<&DocBlock> = blocks
+            .iter()
+            .filter(|b| matches!(b, DocBlock::Text { .. }))
+            .collect();
+
+        // All list items (outer + nested) must be in exactly one Text block.
+        assert_eq!(
+            text_blocks.len(),
+            1,
+            "nested list must produce exactly 1 Text block, got {}; blocks: {:#?}",
+            text_blocks.len(),
+            blocks,
+        );
+
+        // All four items must appear in that one block.
+        let DocBlock::Text { text, .. } = text_blocks[0] else {
+            panic!("expected Text block");
+        };
+        let all_content: String = text
+            .lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
+            .collect();
+        for item in ["a", "a1", "a2", "b"] {
+            assert!(
+                all_content.contains(item),
+                "expected '{item}' in list block; content: {all_content:?}",
+            );
+        }
     }
 }

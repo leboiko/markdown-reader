@@ -2063,7 +2063,10 @@ fn exit_hybrid_mode_restores_viewer_focus() {
 fn i_keybinding_enters_hybrid_mode_by_default() {
     let (mut app, _path) = make_app_with_rendered_tab("# Hybrid default\n");
     // `use_hybrid_by_default` is `true` in the default Config, so `i` → hybrid.
-    assert!(app.use_hybrid_by_default, "default must be use_hybrid_by_default = true");
+    assert!(
+        app.use_hybrid_by_default,
+        "default must be use_hybrid_by_default = true"
+    );
     app.handle_viewer_key(KeyCode::Char('i'), KeyModifiers::empty());
     assert_eq!(
         app.focus,
@@ -2087,7 +2090,10 @@ fn i_keybinding_enters_hybrid_mode_by_default() {
 #[test]
 fn capital_i_keybinding_enters_fullscreen_edit_by_default() {
     let (mut app, _path) = make_app_with_rendered_tab("# Escape hatch\n\nSome text.\n");
-    assert!(app.use_hybrid_by_default, "default must be use_hybrid_by_default = true");
+    assert!(
+        app.use_hybrid_by_default,
+        "default must be use_hybrid_by_default = true"
+    );
     app.handle_viewer_key(KeyCode::Char('I'), KeyModifiers::empty());
     assert_eq!(
         app.focus,
