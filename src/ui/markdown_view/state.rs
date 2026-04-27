@@ -1,7 +1,7 @@
-use crate::markdown::{DocBlock, TableBlockId, TextBlockId};
+use crate::markdown::{DocBlock, MermaidBlockId, TableBlockId, TextBlockId};
 use crate::theme::Palette;
 use ratatui::text::Text;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 /// Whether the visual selection is character-wise or line-wise.
@@ -498,6 +498,94 @@ impl MarkdownViewState {
         let max = self.total_lines.saturating_sub(vh / 2);
         self.scroll_offset = self.scroll_offset.min(max);
     }
+
+    /// Replace the blocks at `range` in `self.rendered` with `replacement`.
+    ///
+    /// Evicts cache entries (`text_layouts`, `table_layouts`) for any block
+    /// removed by the replacement whose id is not reused by any surviving block.
+    /// Leaving stale entries is harmless (they're keyed by content hash and only
+    /// read when a block with that id exists), but evicting them keeps the cache
+    /// compact and avoids confusing stale heights.
+    ///
+    /// After splicing, `total_lines` is recomputed from the new block heights and
+    /// `recompute_positions` is called so links and heading anchors stay aligned.
+    ///
+    /// # Caller contract
+    ///
+    /// The replacement blocks must collectively cover the same absolute byte range
+    /// as the removed blocks, OR the caller must call `apply_edit` on `HybridState`
+    /// to fix up downstream `source_byte_start`/`source_byte_end` fields.  Sub-phase
+    /// 6 ties these together; this helper only performs the splice and cache eviction.
+    #[allow(dead_code)] // wired up in sub-phase 6
+    pub fn splice_blocks(&mut self, range: std::ops::Range<usize>, replacement: Vec<DocBlock>) {
+        // Collect ids of blocks being removed so we can evict their cache entries
+        // if no surviving block reuses the same id.
+        let removed_text_ids: Vec<TextBlockId> = self.rendered[range.clone()]
+            .iter()
+            .filter_map(|b| match b {
+                DocBlock::Text { id, .. } => Some(*id),
+                _ => None,
+            })
+            .collect();
+        let removed_table_ids: Vec<TableBlockId> = self.rendered[range.clone()]
+            .iter()
+            .filter_map(|b| match b {
+                DocBlock::Table(t) => Some(t.id),
+                _ => None,
+            })
+            .collect();
+        let removed_mermaid_ids: Vec<MermaidBlockId> = self.rendered[range.clone()]
+            .iter()
+            .filter_map(|b| match b {
+                DocBlock::Mermaid { id, .. } => Some(*id),
+                _ => None,
+            })
+            .collect();
+
+        self.rendered.splice(range, replacement);
+
+        // Evict cache entries only for ids that no remaining block uses.
+        // IDs are content-derived hashes, so an id reused by a replacement
+        // block (identical content re-parsed) naturally keeps its cache entry.
+        let surviving_text: HashSet<TextBlockId> = self
+            .rendered
+            .iter()
+            .filter_map(|b| match b {
+                DocBlock::Text { id, .. } => Some(*id),
+                _ => None,
+            })
+            .collect();
+        for id in removed_text_ids {
+            if !surviving_text.contains(&id) {
+                self.text_layouts.remove(&id);
+            }
+        }
+
+        let surviving_table: HashSet<TableBlockId> = self
+            .rendered
+            .iter()
+            .filter_map(|b| match b {
+                DocBlock::Table(t) => Some(t.id),
+                _ => None,
+            })
+            .collect();
+        for id in removed_table_ids {
+            if !surviving_table.contains(&id) {
+                self.table_layouts.remove(&id);
+            }
+        }
+
+        // Mermaid blocks have no entry in text_layouts or table_layouts; their
+        // heights are stored on the block itself via `cell_height: Cell<u32>` and
+        // resynced from the mermaid render cache on the next draw frame via
+        // `update_mermaid_heights`. No cache eviction is needed here — the cache
+        // is the mermaid render cache owned by the application, not MarkdownViewState.
+        // We consume the collected ids to make the exhaustive-eviction intent clear.
+        let _ = removed_mermaid_ids;
+
+        self.total_lines = self.rendered.iter().map(DocBlock::height).sum();
+        self.recompute_positions();
+    }
 }
 
 /// Cached rendering of a single table at a given layout width.
@@ -661,5 +749,198 @@ mod word_jump_tests {
         // "abc   def"
         //      ^ col=4 (in the gap) → "abc" starts at 0
         assert_eq!(prev_word_col("abc   def", 4), 0);
+    }
+}
+
+#[cfg(test)]
+mod splice_tests {
+    use super::*;
+    use crate::markdown::{DocBlock, TableBlock, TableBlockId, TextBlockId};
+    use ratatui::text::{Line, Span, Text};
+    use std::cell::Cell;
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    /// Build a minimal `DocBlock::Text` with `n` logical lines (height = n).
+    /// Each line contains the given content string. Byte ranges are set to
+    /// sentinel zeros — tests that care about byte ranges must override them.
+    fn text_block(content: &str, n: u32) -> DocBlock {
+        let mut h = DefaultHasher::new();
+        content.hash(&mut h);
+        n.hash(&mut h);
+        let id = TextBlockId(h.finish());
+        let lines: Vec<Line<'static>> = (0..n)
+            .map(|_| Line::from(Span::raw(content.to_string())))
+            .collect();
+        DocBlock::Text {
+            id,
+            text: Text::from(lines),
+            links: vec![],
+            heading_anchors: vec![],
+            source_lines: (0..n).collect(),
+            wrapped_height: Cell::new(n),
+            source_byte_start: 0,
+            source_byte_end: 0,
+        }
+    }
+
+    /// Build a `MarkdownViewState` pre-populated with `blocks`.
+    /// `total_lines` is set consistently; caches are empty.
+    fn state_with_blocks(blocks: Vec<DocBlock>) -> MarkdownViewState {
+        let total_lines = blocks.iter().map(DocBlock::height).sum();
+        MarkdownViewState {
+            total_lines,
+            rendered: blocks,
+            ..Default::default()
+        }
+    }
+
+    // ── splice_blocks_replaces_range ─────────────────────────────────────────
+
+    #[test]
+    fn splice_blocks_replaces_range() {
+        // 5 blocks of height 1 each → splice [1..3] with 1 new block.
+        let blocks: Vec<DocBlock> = (0..5).map(|i| text_block(&format!("b{i}"), 1)).collect();
+        let mut s = state_with_blocks(blocks);
+
+        let replacement = vec![text_block("new", 1)];
+        s.splice_blocks(1..3, replacement);
+
+        assert_eq!(s.rendered.len(), 4, "5 - 2 + 1 = 4 blocks after splice");
+        // The new block is at index 1.
+        if let DocBlock::Text { text, .. } = &s.rendered[1] {
+            let joined: String = text
+                .lines
+                .iter()
+                .flat_map(|l| l.spans.iter().map(|sp| sp.content.as_ref()))
+                .collect();
+            assert_eq!(joined, "new");
+        } else {
+            panic!("block at index 1 should be Text");
+        }
+    }
+
+    // ── splice_blocks_evicts_cache_for_removed_text_block ────────────────────
+
+    #[test]
+    fn splice_blocks_evicts_cache_for_removed_text_block() {
+        let removed = text_block("gone", 1);
+        let removed_id = match &removed {
+            DocBlock::Text { id, .. } => *id,
+            _ => unreachable!(),
+        };
+
+        let mut s = state_with_blocks(vec![
+            text_block("before", 1),
+            removed,
+            text_block("after", 1),
+        ]);
+
+        // Populate a cache entry for the block being removed.
+        s.text_layouts.insert(
+            removed_id,
+            WrappedTextLayout {
+                wrapped: vec![],
+                physical_to_logical: vec![],
+            },
+        );
+        assert!(
+            s.text_layouts.contains_key(&removed_id),
+            "entry should exist before splice"
+        );
+
+        // Splice out block at index 1.
+        s.splice_blocks(1..2, vec![]);
+
+        assert!(
+            !s.text_layouts.contains_key(&removed_id),
+            "cache entry for removed block should be evicted"
+        );
+    }
+
+    // ── splice_blocks_preserves_cache_for_unmodified_blocks ──────────────────
+
+    #[test]
+    fn splice_blocks_preserves_cache_for_unmodified_blocks() {
+        let kept = text_block("kept", 1);
+        let kept_id = match &kept {
+            DocBlock::Text { id, .. } => *id,
+            _ => unreachable!(),
+        };
+        let removed = text_block("gone", 1);
+
+        let mut s = state_with_blocks(vec![kept, removed]);
+
+        // Cache entry for the block that will NOT be spliced out.
+        s.text_layouts.insert(
+            kept_id,
+            WrappedTextLayout {
+                wrapped: vec![],
+                physical_to_logical: vec![],
+            },
+        );
+
+        // Splice out only the second block.
+        s.splice_blocks(1..2, vec![]);
+
+        assert!(
+            s.text_layouts.contains_key(&kept_id),
+            "cache entry for unmodified block must survive the splice"
+        );
+    }
+
+    // ── splice_blocks_recomputes_positions ───────────────────────────────────
+
+    #[test]
+    fn splice_blocks_recomputes_positions() {
+        // 3 blocks of heights 2, 3, 4 → total 9.
+        let blocks = vec![text_block("a", 2), text_block("b", 3), text_block("c", 4)];
+        let mut s = state_with_blocks(blocks);
+        assert_eq!(s.total_lines, 9);
+
+        // Replace the middle block (height 3) with a block of height 1.
+        s.splice_blocks(1..2, vec![text_block("small", 1)]);
+
+        // New total: 2 + 1 + 4 = 7.
+        assert_eq!(
+            s.total_lines, 7,
+            "total_lines must reflect the new block heights after splice"
+        );
+    }
+
+    // ── splice_blocks_evicts_table_cache ─────────────────────────────────────
+
+    #[test]
+    fn splice_blocks_evicts_table_cache_for_removed_block() {
+        let table_id = TableBlockId(42);
+        let table_block = DocBlock::Table(TableBlock {
+            id: table_id,
+            headers: vec![],
+            rows: vec![],
+            alignments: vec![],
+            natural_widths: vec![],
+            rendered_height: 3,
+            source_line: 0,
+            row_source_lines: vec![],
+            source_byte_start: 0,
+            source_byte_end: 0,
+        });
+
+        let mut s = state_with_blocks(vec![text_block("before", 1), table_block]);
+        s.table_layouts.insert(
+            table_id,
+            TableLayout {
+                text: Text::default(),
+                physical_to_source: vec![],
+            },
+        );
+        assert!(s.table_layouts.contains_key(&table_id));
+
+        s.splice_blocks(1..2, vec![]);
+
+        assert!(
+            !s.table_layouts.contains_key(&table_id),
+            "table cache entry should be evicted after splice"
+        );
     }
 }

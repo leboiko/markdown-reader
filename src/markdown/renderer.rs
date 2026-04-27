@@ -53,6 +53,50 @@ pub fn render_markdown(content: &str, palette: &Palette, theme: Theme) -> Vec<Do
     renderer.render(content, parser)
 }
 
+// Dormant until sub-phase 6 wires it into the cursor-leave path.
+#[allow(dead_code)]
+/// Re-parse a single block's source slice and produce its replacement [`DocBlock`](s).
+///
+/// Usually returns one block; occasionally more if the slice contains markdown
+/// structure that splits (e.g. the user typed `\n\n` mid-paragraph, producing
+/// two separate paragraphs).
+///
+/// # Byte-range contract
+///
+/// `byte_offset_in_doc` is the absolute byte offset where `slice` starts in
+/// the full document.  The fixup pass inside [`render_markdown`] sets each
+/// returned block's `source_byte_start`/`source_byte_end` relative to the
+/// *slice* (i.e. in `0..slice.len()`).  After calling `render_markdown` this
+/// function shifts those slice-local ranges to absolute offsets by adding
+/// `byte_offset_in_doc`, so callers receive blocks whose byte ranges sit
+/// directly inside `[byte_offset_in_doc, byte_offset_in_doc + slice.len())`.
+///
+/// Used by hybrid mode's cursor-leave logic: after the user edits a block, we
+/// re-parse just that slice and splice the result back into `MarkdownViewState`.
+/// Sub-phase 6 wires the splice; this sub-phase (3) only exposes the operation.
+///
+/// # Arguments
+///
+/// * `slice`             — raw markdown source of the block being re-parsed.
+/// * `byte_offset_in_doc` — byte offset of `slice` within the full document.
+/// * `palette`           — color palette for the active UI theme.
+/// * `theme`             — active UI theme; selects the syntect highlighting theme.
+pub fn render_block_from_slice(
+    slice: &str,
+    byte_offset_in_doc: usize,
+    palette: &crate::theme::Palette,
+    theme: crate::theme::Theme,
+) -> Vec<crate::markdown::DocBlock> {
+    let mut blocks = render_markdown(slice, palette, theme);
+    // Shift every block's byte range from slice-local to absolute document
+    // offsets so the caller can splice them into the full block list without
+    // any further arithmetic.
+    for block in &mut blocks {
+        block.shift_byte_range(byte_offset_in_doc);
+    }
+    blocks
+}
+
 /// Pre-compute line-start byte offsets for `content`.
 ///
 /// `line_boundaries[i]` is the byte offset where line `i` starts (0-indexed).
@@ -1850,5 +1894,118 @@ mod tests {
             3,
             "clamped past last content"
         );
+    }
+
+    // ── render_block_from_slice ──────────────────────────────────────────────
+
+    #[test]
+    fn render_block_from_slice_returns_one_block_for_simple_paragraph() {
+        let slice = "Hello, world.\n";
+        let blocks = render_block_from_slice(slice, 0, &default_palette(), Theme::Default);
+        assert_eq!(blocks.len(), 1, "expected exactly one block");
+        assert!(
+            matches!(blocks[0], DocBlock::Text { .. }),
+            "expected a Text block"
+        );
+    }
+
+    #[test]
+    fn render_block_from_slice_returns_multiple_blocks_for_split_input() {
+        // A mermaid fence embedded between two paragraphs forces the renderer
+        // to emit at least two blocks: the Text block before the fence and the
+        // Mermaid block (plus any trailing Text block).
+        let slice = "First paragraph.\n\n```mermaid\ngraph LR\nA-->B\n```\n\nSecond paragraph.\n";
+        let blocks = render_block_from_slice(slice, 0, &default_palette(), Theme::Default);
+        assert!(
+            blocks.len() >= 2,
+            "expected at least 2 blocks (Text + Mermaid), got {}: {blocks:?}",
+            blocks.len(),
+        );
+        assert!(
+            blocks.iter().any(|b| matches!(b, DocBlock::Text { .. })),
+            "expected at least one Text block"
+        );
+        assert!(
+            blocks.iter().any(|b| matches!(b, DocBlock::Mermaid { .. })),
+            "expected a Mermaid block"
+        );
+    }
+
+    #[test]
+    fn render_block_from_slice_byte_ranges_are_absolute() {
+        let slice = "Hello.\n";
+        let offset = 100usize;
+        let blocks = render_block_from_slice(slice, offset, &default_palette(), Theme::Default);
+        assert!(!blocks.is_empty());
+        // Every block's byte start must be >= the absolute offset.
+        for block in &blocks {
+            let (start, end) = match block {
+                DocBlock::Text {
+                    source_byte_start,
+                    source_byte_end,
+                    ..
+                } => (*source_byte_start as usize, *source_byte_end as usize),
+                DocBlock::Mermaid {
+                    source_byte_start,
+                    source_byte_end,
+                    ..
+                } => (*source_byte_start as usize, *source_byte_end as usize),
+                DocBlock::Table(t) => (t.source_byte_start as usize, t.source_byte_end as usize),
+            };
+            assert!(
+                start >= offset,
+                "source_byte_start {start} must be >= offset {offset}"
+            );
+            assert!(
+                end <= offset + slice.len(),
+                "source_byte_end {end} must be <= offset + slice.len() ({})",
+                offset + slice.len()
+            );
+        }
+        // First block starts exactly at the offset and last block ends at offset + slice.len().
+        let first_start = match &blocks[0] {
+            DocBlock::Text {
+                source_byte_start, ..
+            } => *source_byte_start as usize,
+            DocBlock::Mermaid {
+                source_byte_start, ..
+            } => *source_byte_start as usize,
+            DocBlock::Table(t) => t.source_byte_start as usize,
+        };
+        let last_end = match blocks.last().unwrap() {
+            DocBlock::Text {
+                source_byte_end, ..
+            } => *source_byte_end as usize,
+            DocBlock::Mermaid {
+                source_byte_end, ..
+            } => *source_byte_end as usize,
+            DocBlock::Table(t) => t.source_byte_end as usize,
+        };
+        assert_eq!(first_start, offset, "first block must start at the offset");
+        assert_eq!(
+            last_end,
+            offset + slice.len(),
+            "last block must end at offset + slice.len()"
+        );
+    }
+
+    #[test]
+    fn render_block_from_slice_for_mermaid_block() {
+        let slice = "```mermaid\ngraph LR\nA-->B\n```\n";
+        let blocks = render_block_from_slice(slice, 0, &default_palette(), Theme::Default);
+        assert!(
+            blocks.iter().any(|b| matches!(b, DocBlock::Mermaid { .. })),
+            "expected a Mermaid block, got: {blocks:?}"
+        );
+        let mermaid_block = blocks
+            .iter()
+            .find(|b| matches!(b, DocBlock::Mermaid { .. }))
+            .unwrap();
+        if let DocBlock::Mermaid { source, .. } = mermaid_block {
+            assert!(
+                source.contains("graph LR"),
+                "mermaid source should contain 'graph LR', got: {source:?}"
+            );
+        }
     }
 }

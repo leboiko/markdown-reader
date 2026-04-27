@@ -34,9 +34,9 @@ Design choices (locked in 2026-04-27):
 
 | # | Sub-phase | Status | Effort |
 |---|---|---|---|
-| 1 | Block source byte ranges + cursor model | not started | 1.5-2d |
-| 2 | Source buffer + apply_edit bookkeeping | not started | 2-3d |
-| 3 | Render-block-from-slice helper | not started | 1d |
+| 1 | Block source byte ranges + cursor model | shipped 1.29.1 | 1.5-2d |
+| 2 | Source buffer + apply_edit bookkeeping | shipped 1.29.2 | 2-3d |
+| 3 | Render-block-from-slice helper | shipped 1.29.3 | 1d |
 | 4 | `I` enters hybrid mode (read-only) | not started | 1.5d |
 | 5 | Active block reveal (the "wow") | not started | 2.5-3d |
 | 6 | Editing in active text blocks | not started | 3-4d |

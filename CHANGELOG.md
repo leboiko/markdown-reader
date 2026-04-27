@@ -5,6 +5,39 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.29.3] - 2026-04-27
+
+### Internal — Hybrid live-preview editing sub-phase 3 (render-block-from-slice + splice helpers)
+
+Plumbing — no user-visible change. Provides the operations sub-phase
+6 will use on cursor-leave to refresh just-edited blocks.
+
+- `render_block_from_slice(slice, byte_offset_in_doc, palette, theme)`
+  in `src/markdown/renderer.rs` — re-parses a single source slice and
+  returns its replacement `DocBlock`(s) with byte ranges shifted from
+  slice-local to absolute (so the returned blocks fit cleanly back
+  into the document's byte-range space).
+- `DocBlock::shift_byte_range(offset)` — small per-variant `match`
+  that shifts both `source_byte_start`/`source_byte_end` by the
+  delta. Exhaustive (no wildcard) so future variants force a compile
+  error here.
+- `MarkdownViewState::splice_blocks(range, replacement)` — replaces
+  a block range, evicts cache entries (`text_layouts`,
+  `table_layouts`) for removed ids that no surviving block uses,
+  then calls `recompute_positions` to refresh `total_lines` /
+  `block_starts` / etc. Mermaid block heights live in their own
+  `cell_height: Cell<u32>` and resync via `update_mermaid_heights`
+  on the next draw frame — no eviction needed there.
+
+9 new unit tests pin: single-paragraph slice → 1 block, split
+input → multiple blocks, byte ranges absolute after shift, mermaid
+slice → `DocBlock::Mermaid`, splice replaces range, splice evicts
+text-cache for removed-only ids, splice preserves cache for
+unmodified blocks, splice recomputes positions, splice evicts
+table-cache.
+
+915 tests pass (+9). Clippy + fmt clean.
+
 ## [1.29.2] - 2026-04-27
 
 ### Internal — Hybrid live-preview editing sub-phase 2 (source buffer + apply_edit)

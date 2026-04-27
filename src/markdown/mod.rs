@@ -151,6 +151,39 @@ pub enum DocBlock {
 }
 
 impl DocBlock {
+    /// Shift both `source_byte_start` and `source_byte_end` by `offset` bytes.
+    ///
+    /// Used by [`crate::markdown::renderer::render_block_from_slice`] to translate
+    /// slice-local byte ranges (which start at 0) into absolute document offsets
+    /// after re-parsing a single block's source slice.
+    // Dormant until sub-phase 6 wires render_block_from_slice into the production path.
+    #[allow(dead_code)]
+    pub fn shift_byte_range(&mut self, offset: usize) {
+        let delta = crate::cast::u32_sat(offset);
+        match self {
+            DocBlock::Text {
+                source_byte_start,
+                source_byte_end,
+                ..
+            } => {
+                *source_byte_start += delta;
+                *source_byte_end += delta;
+            }
+            DocBlock::Mermaid {
+                source_byte_start,
+                source_byte_end,
+                ..
+            } => {
+                *source_byte_start += delta;
+                *source_byte_end += delta;
+            }
+            DocBlock::Table(t) => {
+                t.source_byte_start += delta;
+                t.source_byte_end += delta;
+            }
+        }
+    }
+
     /// Number of display rows this block occupies in the current viewport.
     ///
     /// Always returns visual rows, not logical lines: a Text block whose
