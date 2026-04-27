@@ -134,17 +134,21 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
     // When line numbers are on, the gutter steals cells from the left of the
     // content area. Tables must be laid out against the actual content width
     // or their rows wrap inside ratatui's Paragraph and the grid breaks.
-    let effective_width = if app.show_line_numbers {
+    // Width of the line-number gutter (0 when line numbers are off).
+    // Hybrid mode's cursor placement also reads this so the terminal cursor
+    // lands at the same x-offset as the rendered text instead of overlapping
+    // the gutter.
+    let gutter_width: u16 = if app.show_line_numbers {
         let estimate = app
             .tabs
             .active_tab()
             .map_or(10, |t| t.view.total_lines.max(10));
         let num_digits = crate::cast::u16_from_u32((estimate.ilog10() + 1).max(4));
-        let gutter_width = num_digits + 3;
-        inner.width.saturating_sub(gutter_width)
+        num_digits + 3
     } else {
-        inner.width
+        0
     };
+    let effective_width = inner.width.saturating_sub(gutter_width);
 
     // If the effective width has changed, all layout caches are stale.
     // Recompute heights for every block and update total_lines.
@@ -796,7 +800,13 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
             let abs_y = inner
                 .y
                 .saturating_add(crate::cast::u16_from_u32(viewport_row));
-            let abs_x = inner.x.saturating_add(visual_col);
+            // Shift the cursor past the line-number gutter (zero when line
+            // numbers are off) so it lands inside the rendered text column,
+            // not overlapping the gutter digits.
+            let abs_x = inner
+                .x
+                .saturating_add(gutter_width)
+                .saturating_add(visual_col);
 
             // Only place the cursor when it's within the visible viewport.
             if abs_y >= inner.y && abs_y < inner.y + inner.height {
