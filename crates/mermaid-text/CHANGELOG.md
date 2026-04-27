@@ -3,6 +3,41 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.23.0 — 2026-04-27 — erDiagram Phase 3: grid layout
+
+### Added
+
+- **Multi-row grid layout for `erDiagram`**. When the natural single-row layout
+  would exceed the available width budget (default 80 columns, or `max_width` if
+  provided), entities are automatically wrapped into a `ceil(sqrt(n))`-column
+  grid. Diagrams with five or fewer entities — or any diagram where the single
+  row fits the budget — continue to render exactly as before (no regression).
+
+- **Cross-row relationship routing via right-margin spine**. When a relationship
+  connects two entities on different grid rows, the arrow exits the source entity's
+  right border (cardinality glyph + corner glyph), travels vertically down a
+  reserved spine column at the right edge of the canvas, then enters the target
+  entity's right border (corner glyph + cardinality glyph). Horizontal stubs on
+  entity name rows are limited to the immediate border area to avoid overwriting
+  entity names in adjacent grid columns. Same-row relationships continue to use
+  the existing horizontal routing.
+
+- **Graceful overflow**. If a single entity is wider than the budget the renderer
+  accepts the overflow rather than crashing or truncating entity content.
+
+- **Label placement in gap rows**. Cross-row relationship labels are placed in the
+  `ROW_GAP` inter-row area immediately after the source entity's bottom border,
+  never on another entity's name row.
+
+### Phase 3 limitations
+
+- Non-adjacent same-row relationships (source and destination separated by one or
+  more intermediate entities in the same grid row) route their horizontal line
+  through the intermediate entity boxes. This is a known visual overlap; a future
+  "routing bypass" pass can route these above or below the box row.
+- Two cross-row arrows that share the same spine column will overlap on the
+  vertical segment. Accepted; a future spine-offset pass can separate them.
+
 ## 0.22.0 — 2026-04-27 — Phase 9: `timeline` support
 
 ### Added

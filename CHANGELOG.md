@@ -5,6 +5,41 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.34.11] — 2026-04-27
+
+### Changed
+
+- **`mermaid-text` bumped to 0.23.0**. `erDiagram` now uses a multi-row grid
+  layout when the diagram is too wide for the terminal budget (`max_width`).
+  Entities wrap into a `ceil(sqrt(n))`-column grid; cross-row relationships
+  route via a right-margin spine column. Small diagrams (≤ 5 entities or those
+  that fit the budget) render unchanged. See `mermaid-text` 0.23.0 CHANGELOG
+  for the full Phase 3 description and known limitations.
+
+## [1.34.10] — 2026-04-27
+
+### Added
+
+- **HTML export** — render any markdown file to a self-contained HTML document
+  with `--export-html <file>` (write to stdout or `--output <path>`). No TUI
+  is launched; the output is ready to open in a browser or share as a file.
+
+  Markdown features that round-trip through the export:
+  - Paragraphs, headings (h1–h6), and horizontal rules
+  - Ordered and unordered lists, including task-list checkboxes
+  - Tables with borders and alternating row shading
+  - Fenced code blocks with per-language syntax highlighting (syntect,
+    inline `<span style="…">` — no external JS)
+  - Mermaid diagram blocks rendered as Unicode text art wrapped in
+    `<pre class="mermaid-text">` — no Mermaid.js or browser dependency
+  - Inline math (`$…$`) and display math (`$$…$$`) converted to Unicode
+    via the existing `latex_to_unicode` converter, wrapped in `<span
+    class="math">` and `<div class="math">` respectively
+  - Strikethrough, blockquotes, inline code, images, and hyperlinks
+
+  The active TUI theme determines the syntect colour palette so code blocks
+  look consistent with what the user sees in the viewer.
+
 ## [1.34.9] — 2026-04-27
 
 ### Added

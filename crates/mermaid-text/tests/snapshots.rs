@@ -1120,6 +1120,87 @@ fn er_non_identifying_renders_dashed_line() {
     assert_snapshot!("er_non_identifying_renders_dashed_line", out);
 }
 
+// ---------------------------------------------------------------------------
+// erDiagram Phase 3: grid layout — 8-entity order-management schema.
+//
+// With `render_with_width(src, Some(40))` the single-row layout would be
+// ~180 cols wide; the renderer wraps to a 3-column grid (ceil(sqrt(8))=3).
+// Cross-row relationships route via a right-margin spine.
+// ---------------------------------------------------------------------------
+#[test]
+fn er_diagram_grid_layout_8_entities() {
+    let src = "erDiagram
+CUSTOMER ||--o{ ORDER : places
+ORDER ||--|{ ITEM : contains
+PRODUCT ||--o{ ITEM : describes
+CATEGORY ||--o{ PRODUCT : groups
+ACCOUNT ||--|| CUSTOMER : owns
+INVOICE ||--|{ ORDER : bills
+WAREHOUSE ||--o{ PRODUCT : stocks
+REGION ||--o{ WAREHOUSE : hosts
+CUSTOMER {
+    int id PK
+    string name
+}
+ORDER {
+    int id PK
+    int customerId FK
+}
+PRODUCT {
+    int id PK
+    string name
+    int categoryId FK
+}
+CATEGORY {
+    int id PK
+    string label
+}
+ACCOUNT {
+    int id PK
+}
+INVOICE {
+    int id PK
+}
+WAREHOUSE {
+    int id PK
+    int regionId FK
+}
+REGION {
+    int id PK
+    string name
+}
+ITEM {
+    int orderId FK
+    int productId FK
+}";
+    // 40-column budget forces a multi-row grid.
+    let out = mermaid_text::render_with_width(src, Some(40)).unwrap();
+    // All 8 entity names must appear.
+    for name in &[
+        "CUSTOMER",
+        "ORDER",
+        "ITEM",
+        "PRODUCT",
+        "CATEGORY",
+        "ACCOUNT",
+        "INVOICE",
+        "WAREHOUSE",
+        "REGION",
+    ] {
+        assert!(out.contains(name), "{name} missing from output:\n{out}");
+    }
+    // More than one row of top-border glyphs confirms multi-row grid layout.
+    let top_border_rows = out.lines().filter(|l| l.contains('┌')).count();
+    assert!(
+        top_border_rows > 1,
+        "expected multi-row grid, got {top_border_rows} top-border rows"
+    );
+    // Cardinality glyphs must still appear.
+    assert!(out.contains('1'), "cardinality '1' missing");
+    assert!(out.contains('*'), "cardinality '*' missing");
+    assert_snapshot!("er_diagram_grid_layout_8_entities", out);
+}
+
 #[test]
 fn pie_minimal() {
     let src = "pie\n\"A\" : 1\n\"B\" : 1\n\"C\" : 2";
@@ -1681,8 +1762,14 @@ fn timeline_social_media_history() {
         out.contains("Google goes public"),
         "multi-event entry missing in:\n{out}"
     );
-    assert!(out.contains("2002-2004"), "section header missing in:\n{out}");
-    assert!(out.contains("2005-2008"), "section header missing in:\n{out}");
+    assert!(
+        out.contains("2002-2004"),
+        "section header missing in:\n{out}"
+    );
+    assert!(
+        out.contains("2005-2008"),
+        "section header missing in:\n{out}"
+    );
     insta::assert_snapshot!("timeline_social_media_history", out);
 }
 
@@ -1706,9 +1793,15 @@ fn git_graph_main_develop_merge() {
     commit tag: \"v1.0\"";
     let out = mermaid_text::render(src).unwrap();
     assert!(out.contains("second"), "commit id 'second' missing:\n{out}");
-    assert!(out.contains("feature-x"), "commit id 'feature-x' missing:\n{out}");
+    assert!(
+        out.contains("feature-x"),
+        "commit id 'feature-x' missing:\n{out}"
+    );
     assert!(out.contains("v1.0"), "tag 'v1.0' missing:\n{out}");
     assert!(out.contains("main"), "branch label 'main' missing:\n{out}");
-    assert!(out.contains("develop"), "branch label 'develop' missing:\n{out}");
+    assert!(
+        out.contains("develop"),
+        "branch label 'develop' missing:\n{out}"
+    );
     insta::assert_snapshot!("git_graph_main_develop_merge", out);
 }

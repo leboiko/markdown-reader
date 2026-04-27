@@ -250,6 +250,31 @@ When stdin is piped, the markdown is read into a temporary file and
 opened automatically — no path argument required. The temp file is
 cleaned up on exit.
 
+### HTML export
+
+Convert any markdown file to a self-contained HTML document — no TUI launched,
+no external CSS or JavaScript required:
+
+```sh
+# Write to stdout and redirect to a file
+markdown-reader --export-html input.md > output.html
+
+# Write directly to a file
+markdown-reader --export-html input.md --output rendered.html
+```
+
+The exported document includes:
+
+- Headings, paragraphs, lists, tables, blockquotes, and inline markup
+- Fenced code blocks with syntax highlighting (colours match your active theme)
+- Mermaid diagram blocks rendered as text art — no Mermaid.js or internet
+  connection needed; the diagram renders via the same `mermaid-text` engine
+  used by the TUI viewer
+- LaTeX math (`$…$` and `$$…$$`) converted to Unicode
+
+The output is a single `.html` file you can open in any browser or send to
+someone who doesn't have `markdown-reader` installed.
+
 Once inside the TUI, press `?` at any time for the keyboard help overlay.
 Press `c` to open the settings modal (themes, line numbers, tree
 position). Press `q`

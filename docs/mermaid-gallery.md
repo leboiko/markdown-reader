@@ -342,6 +342,36 @@ erDiagram
 The `||..o{` connector renders as a dashed line to mark it as
 non-identifying — the child could exist independently of the parent.
 
+### Wide schema: grid layout (Phase 3)
+
+When a diagram has more than ~5 entities (or when `max_width` is set and the
+single-row layout would exceed it), the renderer wraps entities into a
+`ceil(sqrt(n))`-column grid. Relationships between entities in the same row
+use the existing horizontal routing; cross-row relationships route via a
+vertical spine on the right margin of the canvas.
+
+```mermaid
+erDiagram
+    CUSTOMER ||--o{ ORDER : places
+    ORDER ||--|{ ITEM : contains
+    PRODUCT ||--o{ ITEM : describes
+    CATEGORY ||--o{ PRODUCT : groups
+    ACCOUNT ||--|| CUSTOMER : owns
+    INVOICE ||--|{ ORDER : bills
+    CUSTOMER { int id PK  string name }
+    ORDER    { int id PK  int customerId FK }
+    PRODUCT  { int id PK  string name  int categoryId FK }
+    CATEGORY { int id PK  string label }
+    ACCOUNT  { int id PK }
+    INVOICE  { int id PK }
+    ITEM     { int orderId FK  int productId FK }
+```
+
+With a 40-column budget, the 7 entities above render in a 3-column grid
+(ceil(sqrt(7)) = 3) with cross-row arrows routed along the right spine.
+Small diagrams (≤ 5 entities, or those that fit within the budget) are
+unaffected — they continue to render in a single row.
+
 ---
 
 ## Pie charts

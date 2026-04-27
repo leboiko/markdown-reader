@@ -3,6 +3,7 @@ mod app;
 mod cast;
 mod config;
 mod event;
+mod export;
 mod fs;
 mod markdown;
 mod mermaid;
@@ -64,6 +65,17 @@ struct Cli {
     /// stdin (`cat README.md | markdown-reader`).
     #[arg(default_value = ".")]
     path: PathBuf,
+
+    /// Render a markdown file to a self-contained HTML document and exit.
+    ///
+    /// Writes the HTML to stdout unless `--output` is also specified.
+    /// The TUI is not launched when this flag is present.
+    #[arg(long, value_name = "FILE")]
+    export_html: Option<PathBuf>,
+
+    /// Output path for `--export-html` (default: stdout).
+    #[arg(short, long, value_name = "FILE")]
+    output: Option<PathBuf>,
 }
 
 /// Read all of stdin into a freshly-created temp file with a `.md` suffix.
@@ -125,6 +137,39 @@ fn redirect_stdin_to_tty() -> Result<()> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    // ── HTML export mode ─────────────────────────────────────────────
+    // When `--export-html` is supplied, render to HTML and exit without
+    // touching the TUI at all. This keeps the happy path fully isolated
+    // so nothing below changes for normal interactive use.
+    if let Some(ref md_path) = cli.export_html {
+        let content = std::fs::read_to_string(md_path)
+            .with_context(|| format!("failed to read {}", md_path.display()))?;
+
+        // Use the user's configured theme so syntect colours match the TUI.
+        let cfg = config::Config::load();
+        // Derive a human-readable title: prefer the theme label + filename,
+        // fallback to just the filename.
+        let file_stem = md_path
+            .file_name()
+            .map(|n| n.to_string_lossy())
+            .unwrap_or_else(|| md_path.to_string_lossy());
+        let title = format!("{} — {}", file_stem, cfg.theme.label());
+
+        let html = export::html::render_to_html(&content, &title, cfg.theme);
+
+        if let Some(ref out_path) = cli.output {
+            std::fs::write(out_path, html.as_bytes())
+                .with_context(|| format!("failed to write {}", out_path.display()))?;
+        } else {
+            // Write directly to stdout — a single syscall for the whole
+            // document is fine; locking stdout is not needed.
+            std::io::stdout()
+                .write_all(html.as_bytes())
+                .context("failed to write HTML to stdout")?;
+        }
+        return Ok(());
+    }
 
     // ── stdin piping ─────────────────────────────────────────────────
     // When stdin is a pipe (`cat foo.md | markdown-reader`), drain it to

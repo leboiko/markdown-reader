@@ -1,0 +1,30 @@
+---
+source: crates/mermaid-text/tests/snapshots.rs
+expression: out
+---
+                         places                              contains
+┌──────────────────┐                ┌─────────────────────┐            ┌────────────────────┐
+│     CUSTOMER     ├1──────────────*├        ORDER        ├+──────────+├        ITEM        ├*┐
+├──────────────────┤                ├─────────────────────┤            ├────────────────────┤ │
+│  int    id   PK  │                │  int id         PK  │            │  int orderId   FK  │ │
+│  string name     │                │  int customerId FK  │            │  int productId FK  │ │
+└──────────────────┘                └─────────────────────┘            └────────────────────┘ │
+                                                                                    descbills │
+                                                                                              │
+                            groups                                                            │
+┌────────────────────────┐          ┌───────────────────┐      ┌─────────────┐                │
+│        PRODUCT         ├*────────1├     CATEGORY      │      │   ACCOUNT   ┤1               ┐
+├────────────────────────┤          ├───────────────────┤      ├─────────────┤                │
+│  int    id         PK  │          │  int    id    PK  │      │  int id PK  │                │
+│  string name           │          │  string label     │      └─────────────┘                │
+│  int    categoryId FK  │          └───────────────────┘                                     │
+└────────────────────────┘                                                                    │
+                                                                                       stocks │
+                                                                                              │
+                                                      hosts                                   │
+┌─────────────┐               ┌───────────────────┐           ┌──────────────────┐            │
+│   INVOICE   ┤1              │     WAREHOUSE     ┤*─────────1├      REGION      │            ┘
+├─────────────┤               ├───────────────────┤           ├──────────────────┤
+│  int id PK  │               │  int id       PK  │           │  int    id   PK  │
+└─────────────┘               │  int regionId FK  │           │  string name     │
+                              └───────────────────┘           └──────────────────┘
