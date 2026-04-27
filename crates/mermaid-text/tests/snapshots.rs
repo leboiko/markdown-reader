@@ -1506,3 +1506,113 @@ click Idle \"https://state.example.com\"";
     assert!(out.contains("Idle"), "label 'Idle' missing");
     assert_snapshot!("click_directive_state_diagram_osc8", out);
 }
+
+// ---------------------------------------------------------------------------
+// Journey diagram snapshot
+// ---------------------------------------------------------------------------
+
+/// Representative `journey` diagram: title, two sections, varied scores and
+/// multi-actor tasks.
+#[test]
+fn journey_working_day() {
+    let src = "journey
+    title My working day
+    section Go to work
+      Make tea: 5: Me
+      Go upstairs: 3: Me
+      Do work: 1: Me, Cat
+    section Go home
+      Go downstairs: 5: Me
+      Sit down: 3: Me";
+    let out = mermaid_text::render(src).unwrap();
+    assert!(out.contains("My working day"));
+    assert!(out.contains("Go to work"));
+    assert!(out.contains("Make tea"));
+    assert!(out.contains("Me, Cat"));
+    assert_snapshot!("journey_working_day", out);
+}
+
+// ---------------------------------------------------------------------------
+// B7. TB sibling-subgraph horizontal collision — regression guard.
+//
+// Repro source: two top-level subgraphs in a `flowchart TB` diagram where
+// one subgraph has a wide node (forces a wide border) and the other has only
+// narrow nodes.  With the native layout backend, the packing decision for
+// each layer used only the *current layer's* node widths to determine the
+// horizontal gap between sibling subgraph nodes, ignoring that the subgraph
+// border is sized by the *widest* node across ALL layers.  This caused the
+// Alpha border (grown by A2's wide label) to overlap Beta's border in layers
+// where A's node was narrow.
+//
+// Fix: `compute_positions` (native backend, TB/BT direction) now pre-computes
+// the maximum node width per top-level subgraph and enforces, at every
+// layer's sibling-boundary transition, that the new subgraph's start column
+// clears the previous subgraph's rendered right border.
+// ---------------------------------------------------------------------------
+#[test]
+fn b7_tb_sibling_subgraph_no_horizontal_collision() {
+    // Repro: Alpha has one wide node (A2) and narrow nodes otherwise.
+    // Beta has only narrow nodes.  Without the fix the native backend placed
+    // B1/B3 (in the narrow layers) so close to Alpha that Alpha's wide
+    // border (sized by A2) overlapped Beta's border.
+    const REPRO: &str = "flowchart TB
+    subgraph Alpha
+        A1[Short]
+        A2[A very wide label that forces the subgraph border to be wide]
+        A3[Short]
+        A1 --> A2 --> A3
+    end
+    subgraph Beta
+        B1[Short]
+        B2[Short]
+        B3[Short]
+        B1 --> B2 --> B3
+    end";
+
+    let opts = mermaid_text::RenderOptions {
+        backend: mermaid_text::layout::LayoutBackend::Native,
+        ..Default::default()
+    };
+    let out = mermaid_text::render_with_options(REPRO, &opts).unwrap();
+
+    // Extract the column ranges of the two subgraph borders from the first
+    // (top border) line of each.  The top border line contains the subgraph
+    // label and unique box-drawing corners (`╭` / `╮`).
+    let first_line = out.lines().next().expect("output should have at least one line");
+
+    // Find all occurrences of `╭` (left corner) on the top border line.
+    let corners: Vec<usize> = first_line
+        .char_indices()
+        .filter(|(_, c)| *c == '╭')
+        .map(|(i, _)| i)
+        .collect();
+    assert!(
+        corners.len() >= 2,
+        "expected at least 2 subgraph left corners on top line:\n{out}"
+    );
+
+    // Find all occurrences of `╮` (right corner) on the top border line.
+    let right_corners: Vec<usize> = first_line
+        .char_indices()
+        .filter(|(_, c)| *c == '╮')
+        .map(|(i, _)| i)
+        .collect();
+    assert!(
+        right_corners.len() >= 2,
+        "expected at least 2 subgraph right corners on top line:\n{out}"
+    );
+
+    // Alpha occupies [corners[0], right_corners[0]], Beta [corners[1], right_corners[1]].
+    // They must not overlap: Alpha's right corner must be strictly left of Beta's
+    // left corner.
+    let alpha_right = right_corners[0];
+    let beta_left = corners[1];
+    assert!(
+        alpha_right < beta_left,
+        "Alpha border (ends at byte {alpha_right}) overlaps Beta border \
+         (starts at byte {beta_left}) — B7 regression:\n{out}"
+    );
+
+    // Snapshot so any future layout change that touches these positions is caught.
+    insta::assert_snapshot!("b7_tb_sibling_subgraph_no_horizontal_collision", out);
+}

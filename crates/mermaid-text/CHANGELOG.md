@@ -3,6 +3,92 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.19.1 — 2026-04-27 — Bug fix B7: TB sibling-subgraph horizontal collision
+
+### Fixed
+
+- **Native backend: sibling subgraphs in `flowchart TB` (and `BT`) no longer
+  overlap horizontally when one subgraph contains a node that is wider than
+  the nodes visible in the current layer.**
+
+  Root cause: `compute_positions` (native layered backend, TB/BT direction)
+  processed each layer independently, computing the horizontal gap between two
+  nodes from different sibling subgraphs using only the *current layer's* node
+  widths.  `compute_subgraph_bounds` subsequently sized the border rectangle
+  using the *widest* node across ALL layers, so a narrow node in one layer
+  could allow the adjacent sibling subgraph's content to start at a column
+  that fell inside the wide-node layer's rendered border.
+
+  Fix: a pre-pass now computes the maximum node width per top-level subgraph
+  across all layers (`subgraph_max_node_width`), and a per-subgraph column
+  anchor (`sg_col_min`) is tracked during position assignment.  At every
+  cross-subgraph boundary, the new subgraph's starting column is clamped to
+  at least `anchor + max_width + SG_BORDER_PAD + SG_GAP_PER_BOUNDARY +
+  node_gap`, guaranteeing the sibling border clears the full rendered extent
+  of the previous subgraph.
+
+  This only applies to the **native** (`LayoutBackend::Native`) backend.  The
+  Sugiyama (default) backend delegates horizontal cluster packing to
+  `ascii_dag`, which already accounts for full subgraph extents.
+
+  LR/RL layout is unaffected — those directions already process all nodes in
+  a single per-layer sweep and do not restart `col = 0` across layers.
+
+### Note
+
+- **LR/RL sibling-subgraph packing** was investigated during this work and
+  found not to exhibit the same collision; no change was made.  Tracked as a
+  potential follow-up if gallery evidence emerges.
+
+## 0.19.0 — 2026-04-27 — Phase 6: `journey` support
+
+### Added
+
+- **`journey` diagram type** (seventh diagram type). Full support for
+  Mermaid's user-journey syntax: `title`, `section`, and task lines of the
+  form `<title>: <score>: <actor1>[, <actor2>...]`.
+
+- **`JourneyDiagram`, `Section`, `Task`** — new public data-model types in
+  `mermaid_text::journey`. `JourneyDiagram` holds an optional title and an
+  ordered list of `Section`s; each `Section` has an optional name (unnamed
+  sections collect tasks that appear before any `section` keyword) and a
+  list of `Task`s. `Task` carries a title, a satisfaction score (`u8` 1–5),
+  and a list of actor strings.
+
+- **`parser::journey::parse`** — parses `journey` source into a
+  `JourneyDiagram`. Validates scores strictly (1–5); rejects non-integer
+  and out-of-range values with `Error::ParseError`. Skips `%%` comments
+  and blank lines. Tasks before any `section` keyword go into an implicit
+  `Section { name: None }`.
+
+- **`render::journey::render`** — renders a `JourneyDiagram` as a
+  section/task tree with Unicode box-drawing connectors (`├─` / `└─`) and
+  a five-cell filled-star score bar (`★` / `☆`) per task. Actors are
+  listed after an em-dash separator. Task title columns align within each
+  section for readability.
+
+- **`detect::DiagramKind::Journey`** — the `journey` keyword (case-
+  insensitive) is now recognised by `detect::detect`.
+
+- **Feature-matrix doc comment** updated to reflect journey support.
+
+### Tests
+
+- `journey::tests` (2): `total_tasks_across_sections`,
+  `total_tasks_empty_diagram`.
+- `parser::journey::tests` (8): `parses_minimal_journey`,
+  `parses_title_and_section`, `parses_multiple_actors_per_task`,
+  `tasks_before_section_go_to_unnamed_section`,
+  `comment_and_blank_lines_are_ignored`, `score_outside_1_to_5_is_an_error`,
+  `missing_journey_header_returns_error`, `non_integer_score_is_an_error`,
+  `multiple_sections_tasks_grouped_correctly`.
+- `render::journey::tests` (5): `renders_title_when_present`,
+  `renders_score_visually_distinguishable_at_5_vs_1`,
+  `renders_multi_actor_task`, `renders_unnamed_section_without_heading`,
+  `star_bar_bounds`.
+- `detect::tests`: `detects_journey_keyword`.
+- `tests/snapshots.rs`: `journey_working_day` snapshot.
+
 ## 0.18.0 — 2026-04-24
 
 ### Added — three ROADMAP polish features

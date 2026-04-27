@@ -72,7 +72,8 @@
 //! | `sequenceDiagram` (participants, `->>`, `-->>`, `->`, `-->`) | yes |
 //! | `pie` (with optional `showData` and `title`) | yes (rendered as horizontal bar chart) |
 //! | `erDiagram` (entities + relationships with cardinality) | yes (Phase 1 — name-only boxes) |
-//! | `gantt`, `journey`, `classDiagram`, etc. | not supported |
+//! | `journey` (user-journey, section/task tree with score bars) | yes |
+//! | `gantt`, etc. | not supported |
 //!
 //! ## Limitations
 //!
@@ -101,6 +102,7 @@
 pub mod class;
 pub mod detect;
 pub mod er;
+pub mod journey;
 pub mod layout;
 pub mod parser;
 pub mod pie;
@@ -113,6 +115,7 @@ pub use class::{
     Stereotype, Visibility,
 };
 pub use er::{Attribute, AttributeKey, Cardinality, Entity, ErDiagram, LineStyle, Relationship};
+pub use journey::{JourneyDiagram, Section, Task};
 pub use pie::{PieChart, PieSlice};
 pub use sequence::{Message, MessageStyle, Participant, SequenceDiagram};
 pub use types::{Direction, Edge, EdgeEndpoint, EdgeStyle, Graph, Node, NodeShape};
@@ -254,6 +257,12 @@ pub fn render_with_width(input: &str, max_width: Option<usize>) -> Result<String
             // painting — no Sugiyama, no shared A* grid.
             let chart = parser::class::parse(input)?;
             return Ok(render::class::render(&chart, max_width));
+        }
+        DiagramKind::Journey => {
+            // Journey diagrams have a fixed section/task tree layout;
+            // no compaction pass needed.
+            let diag = parser::journey::parse(input)?;
+            return Ok(render::journey::render(&diag, max_width));
         }
         DiagramKind::Flowchart => parser::parse(input)?,
         DiagramKind::State => {
@@ -468,6 +477,12 @@ pub fn render_with_options(input: &str, opts: &RenderOptions) -> Result<String, 
             // are silently ignored in v1.
             let chart = parser::class::parse(input)?;
             render::class::render(&chart, opts.max_width)
+        }
+        DiagramKind::Journey => {
+            // Journey diagrams have a fixed layout; color/compaction opts
+            // are not applicable.
+            let diag = parser::journey::parse(input)?;
+            render::journey::render(&diag, opts.max_width)
         }
         DiagramKind::Flowchart => {
             let graph = parser::parse(input)?;
@@ -1422,8 +1437,8 @@ mod tests {
 
     #[test]
     fn unknown_diagram_types_still_error() {
-        // `pie` was added in 0.9.4; `journey` remains unsupported.
-        let err = render("journey\ntitle Onboarding\nsection sign-up\nfill out form: 5: User")
+        // `gantt` is unsupported; `journey` was added in 0.19.0.
+        let err = render("gantt\ntitle Roadmap\nsection Phase1\nTask: done, 2024-01-01, 30d")
             .unwrap_err();
         assert!(
             matches!(err, Error::UnsupportedDiagram(_)),

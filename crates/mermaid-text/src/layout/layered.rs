@@ -1126,6 +1126,52 @@ fn sibling_gap(
     base_gap + boundaries * SG_GAP_PER_BOUNDARY
 }
 
+/// Compute the maximum rendered node width (in terminal cells) across ALL
+/// direct and indirect members of subgraph `sg_id`.
+///
+/// This is used by `compute_positions` (TB/BT direction) to guard against
+/// the case where a node in one subgraph is narrower than the widest node
+/// in the same subgraph on a different layer — a condition that causes the
+/// `sibling_gap` formula to under-estimate the horizontal room needed and
+/// lets an adjacent sibling subgraph's border collide with the wider layer.
+///
+/// # Why this helper is needed (Bug B7)
+///
+/// In TB layout, `compute_positions` processes each layer independently,
+/// resetting `col = 0` at the start of each layer.  For two sibling
+/// subgraphs A and B, the gap between the nodes of A and B in each layer
+/// is computed with `sibling_gap`, which uses the *current layer's* node
+/// widths.  But `compute_subgraph_bounds` later wraps A's border around ALL
+/// of A's nodes across ALL layers — including the widest one.  If A has a
+/// narrow node in layer 0 but a wide node in layer 1, the gap computed for
+/// layer 0 is too small: A's border (sized to layer 1's wide node) extends
+/// further right than B's starting column in layer 0.
+///
+/// The fix: when placing B's node in any layer, enforce that B's column
+/// is at least `sg_col_min[A] + sg_max_width[A] + SG_BORDER_PAD +
+/// SG_GAP_PER_BOUNDARY` (the rendered right border of A, plus the minimum
+/// inter-border gap).  `sg_max_width[A]` is pre-computed by this function.
+fn subgraph_max_node_width(
+    graph: &Graph,
+    sg_id: &str,
+    ordered: &[Vec<String>],
+    node_to_sg: &HashMap<String, String>,
+    sg_parent: &HashMap<&str, &str>,
+) -> usize {
+    // Filter the full ordered node list — any node whose subgraph ancestry
+    // includes `sg_id` contributes to this subgraph's rendered width.
+    let mut max_w = 0usize;
+    for layer in ordered {
+        for nid in layer {
+            let chain = node_subgraph_chain(nid, node_to_sg, sg_parent);
+            if chain.contains(&sg_id) {
+                max_w = max_w.max(node_box_width(graph, nid));
+            }
+        }
+    }
+    max_w
+}
+
 /// Extra columns to add to a layer's width when one or more of its
 /// nodes lives in a subgraph that contains parallel-edge labels.
 /// Mirrors the bounds-side calculation so the border wraps cleanly
@@ -1273,6 +1319,23 @@ fn compute_positions(
             // Layers are rows; nodes within a layer are columns.
             let mut row = 0usize;
 
+            // Pre-compute the maximum rendered node width for each top-level
+            // subgraph across ALL layers.  This is the key input for Bug B7's
+            // fix (see `subgraph_max_node_width` doc).
+            //
+            // We cache results here rather than inside the loop because the
+            // function iterates the full `ordered` slice and we may call it
+            // once per distinct top-level subgraph, not once per layer — so
+            // the total cost stays O(nodes * depth) rather than O(layers * nodes).
+            let mut sg_max_width_cache: HashMap<String, usize> = HashMap::new();
+
+            // Track the minimum column that any node in each subgraph has
+            // been assigned so far (across all processed layers). This is
+            // the left-anchor used to compute the rendered left border of
+            // the subgraph, which determines how far right the border extends
+            // for the widest layer member.
+            let mut sg_col_min: HashMap<String, usize> = HashMap::new();
+
             for (layer_idx, layer_nodes) in ordered.iter().enumerate() {
                 if layer_nodes.is_empty() {
                     continue;
@@ -1299,6 +1362,66 @@ fn compute_positions(
                         let gap =
                             sibling_gap(prev_id, id, &node_to_sg, &sg_parent, config.node_gap);
                         col += gap.saturating_sub(config.node_gap);
+
+                        // Bug B7 fix: the sibling_gap formula uses the *current
+                        // layer's* node widths to decide how far right to push
+                        // the next subgraph's starting column.  But
+                        // compute_subgraph_bounds sizes the border box using
+                        // the *widest* node across ALL layers, so a narrow node
+                        // in the current layer produces an under-estimated gap
+                        // that lets the sibling border overlap the wide node in
+                        // another layer.
+                        //
+                        // Fix: when crossing a top-level subgraph boundary, also
+                        // enforce that `col` is at least
+                        //   sg_col_min[A] + sg_max_width[A] + SG_BORDER_PAD + SG_GAP_PER_BOUNDARY
+                        // (= the rendered right border of A plus the minimum
+                        // one-border inter-subgraph clearance).
+                        //
+                        // This only applies when both nodes are in different
+                        // top-level subgraphs (boundary count >= 2); within a
+                        // single subgraph the sibling_gap formula is exact.
+                        let chain_prev =
+                            node_subgraph_chain(prev_id, &node_to_sg, &sg_parent);
+                        let chain_curr =
+                            node_subgraph_chain(id, &node_to_sg, &sg_parent);
+                        if subgraph_boundary_count(&chain_prev, &chain_curr) >= 2 {
+                            // The outermost (last) entry in the chain is the
+                            // top-level subgraph ID that A belongs to.
+                            if let Some(&prev_top_sg) = chain_prev.last() {
+                                let max_w = sg_max_width_cache
+                                    .entry(prev_top_sg.to_owned())
+                                    .or_insert_with(|| {
+                                        subgraph_max_node_width(
+                                            graph,
+                                            prev_top_sg,
+                                            ordered,
+                                            &node_to_sg,
+                                            &sg_parent,
+                                        )
+                                    });
+                                // Left anchor of the previous subgraph in
+                                // this pre-offset coordinate system.
+                                let anchor = sg_col_min
+                                    .get(prev_top_sg)
+                                    .copied()
+                                    .unwrap_or(0);
+                                // Minimum safe column for the new subgraph's
+                                // node: anchor + widest member + right border
+                                // pad + one inter-border gap cell.
+                                let min_col_for_b = anchor
+                                    + *max_w
+                                    + SG_BORDER_PAD
+                                    + SG_GAP_PER_BOUNDARY
+                                    + config.node_gap;
+                                col = col.max(min_col_for_b);
+                            }
+                        }
+                    }
+                    // Record the leftmost column assigned to this top-level subgraph.
+                    if let Some(top_sg) = node_subgraph_chain(id, &node_to_sg, &sg_parent).last().copied() {
+                        let entry = sg_col_min.entry(top_sg.to_owned()).or_insert(col);
+                        *entry = (*entry).min(col);
                     }
                     positions.insert(id.clone(), (col, row));
                     col += w + config.node_gap;

@@ -5,6 +5,25 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.34.6] — 2026-04-27
+
+### Fixed
+
+- **TB/BT sibling subgraph horizontal collision** (`mermaid-text` 0.19.1).
+  `flowchart TB` diagrams where one subgraph had a wide node and the adjacent
+  sibling subgraph had narrow nodes could produce overlapping border boxes in
+  the native layout backend. Fixed via the `mermaid-text` workspace dep bump
+  to 0.19.1 (bug B7).
+
+## [1.34.5] — 2026-04-27
+
+### Added
+
+- **`journey` diagram type** rendered in the markdown viewer via the
+  `mermaid-text` workspace dependency bump to 0.19.0. User-journey diagrams
+  (`journey … section … task: score: actor`) now render as a section/task
+  tree with star-bar satisfaction scores instead of falling back to an error.
+
 ## [Unreleased] — 1.34.4
 
 ### Fixed — Hybrid mode now recognises readline-style `Alt+f` / `Alt+b` / `Alt+d`

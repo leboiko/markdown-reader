@@ -20,6 +20,9 @@ pub enum DiagramKind {
     /// `classDiagram` (UML class diagram). Render as a layered box-table
     /// diagram with boxes per class and labelled relationship lines.
     Class,
+    /// `journey` (user-journey) diagrams. Render as a section/task tree
+    /// with filled-star satisfaction scores per step.
+    Journey,
 }
 
 /// Detect the kind of Mermaid diagram described by `input`.
@@ -69,6 +72,7 @@ pub fn detect(input: &str) -> Result<DiagramKind, Error> {
         "pie" => Ok(DiagramKind::Pie),
         "erdiagram" => Ok(DiagramKind::Er),
         "classdiagram" => Ok(DiagramKind::Class),
+        "journey" => Ok(DiagramKind::Journey),
         other => Err(Error::UnsupportedDiagram(other.to_string())),
     }
 }
@@ -154,5 +158,15 @@ mod tests {
         );
         // Case-insensitive.
         assert_eq!(detect("ClassDiagram").unwrap(), DiagramKind::Class);
+    }
+
+    #[test]
+    fn detects_journey_keyword() {
+        assert_eq!(
+            detect("journey\ntitle My Day").unwrap(),
+            DiagramKind::Journey
+        );
+        // Case-insensitive.
+        assert_eq!(detect("Journey").unwrap(), DiagramKind::Journey);
     }
 }
