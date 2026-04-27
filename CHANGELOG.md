@@ -5,7 +5,19 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — 1.33.0
+## [Unreleased] — 1.33.1
+
+### Fixed — Hybrid mode shows ex-command line in the status bar
+
+Typing `:` in hybrid mode opens an ex-command buffer (`:w` / `:wq` / `:q` /
+`:q!`) but provided no on-screen feedback — users were typing blind and had
+no way to confirm the command-line had even opened. The status bar now
+shows the live `:cmd` text (and any pending status message such as
+"unsaved changes — use :q! to discard") in place of the generic hint
+strip while the buffer is open. Mirrors the legacy fullscreen editor's
+footer.
+
+## [1.33.0] — 2026-04-27
 
 ### Added — Hybrid live-preview editing sub-phase 9 (i becomes hybrid by default — project complete)
 

@@ -69,6 +69,29 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         String::new()
     };
 
+    // In hybrid mode, surface the ex-command buffer (`:w`, `:wq`, `:q`, `:q!`)
+    // and any pending status message in place of the generic hint line. Without
+    // this users typing `:` see no feedback and have no way to know the
+    // command-line is even open.
+    let hybrid_overlay: Option<String> = if app.focus == Focus::HybridEditor {
+        app.tabs
+            .active_tab()
+            .and_then(|t| t.hybrid.as_ref())
+            .and_then(|h| {
+                h.command_line
+                    .as_ref()
+                    .map(|cmd| format!(":{cmd}"))
+                    .or_else(|| h.status_message.clone())
+            })
+    } else {
+        None
+    };
+
+    let trailing = hybrid_overlay.unwrap_or_else(|| {
+        " Tab:panel  t:new-tab  T:picker  x:close-tab  f:links  /:search  c:settings  q:quit  ?:help "
+            .to_string()
+    });
+
     let line = Line::from(vec![
         Span::styled(
             format!(" {focus_label} "),
@@ -79,10 +102,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         ),
         Span::styled(file_info, Style::default().fg(p.status_bar_fg)),
         Span::raw("  "),
-        Span::styled(
-            " Tab:panel  t:new-tab  T:picker  x:close-tab  f:links  /:search  c:settings  q:quit  ?:help ",
-            Style::default().fg(p.dim),
-        ),
+        Span::styled(trailing, Style::default().fg(p.dim)),
     ]);
 
     let paragraph = Paragraph::new(line).style(Style::default().bg(p.status_bar_bg));
