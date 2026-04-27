@@ -217,21 +217,12 @@ pub fn byte_to_visual_raw(
     inner_width: u16,
     byte: usize,
 ) -> (u32, u16) {
-    let block_start = block_byte_start(block) as usize;
+    let (block_start, block_end) = block.source_byte_range();
     // byte_within_block: offset of `byte` relative to the start of this block's
     // source slice.
     let byte_within_block = byte.saturating_sub(block_start);
 
     // Slice the raw source for just this block.
-    let block_end = match block {
-        DocBlock::Text {
-            source_byte_end, ..
-        } => *source_byte_end as usize,
-        DocBlock::Mermaid {
-            source_byte_end, ..
-        } => *source_byte_end as usize,
-        DocBlock::Table(t) => t.source_byte_end as usize,
-    };
     let slice = &source[block_start.min(source.len())..block_end.min(source.len())];
 
     // Locate the byte within the raw slice by directly replicating wrap_spans'

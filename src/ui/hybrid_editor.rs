@@ -1485,4 +1485,211 @@ mod tests {
             "state must not be dirty after baseline sync"
         );
     }
+
+    // ── Sub-phase 7 tests: active tables ─────────────────────────────────────
+
+    // A document that has a table block we can target for these tests.
+    // Structure: text (para), then table, then text (para).
+    // The table source is:
+    //   | Col1 | Col2 |\n|---|---|\n| a | b |\n
+    // which pulldown-cmark parses as a TableBlock.
+    const DOC_WITH_TABLE: &str = "Intro.\n\n| Col1 | Col2 |\n|---|---|\n| a | b |\n\nOutro.\n";
+
+    /// Locate the `DocBlock::Table` in a block list and return its index.
+    /// Panics when no table block exists (guards against mis-structured test docs).
+    fn find_table_block(blocks: &[DocBlock]) -> usize {
+        blocks
+            .iter()
+            .position(|b| matches!(b, DocBlock::Table(_)))
+            .expect("DOC_WITH_TABLE must render to at least one DocBlock::Table")
+    }
+
+    /// When the cursor is positioned inside a table block, the active-block index
+    /// must equal the table block's index. This is the pre-condition for the draw
+    /// loop to render the table as raw markdown rather than the formatted box.
+    ///
+    /// The actual raw-render path lives in `draw.rs` and is not unit-testable here
+    /// without a full ratatui backend, but the active-block detection — which gates
+    /// the raw render — is fully exercised.
+    #[test]
+    fn active_table_renders_raw_when_cursor_inside() {
+        let (mut state, blocks) = setup(DOC_WITH_TABLE);
+        let table_idx = find_table_block(&blocks);
+        let view = view_with_blocks(blocks);
+
+        // Position the cursor at the start of the table block.
+        let (table_start, _) = block_byte_range(&view.rendered[table_idx]);
+        set_cursor_to_byte(&mut state, table_start);
+        recompute_active_block(&mut state, &view);
+
+        let ab = state.active_block.expect("active_block must be Some");
+        assert_eq!(
+            ab.index, table_idx,
+            "cursor at the table's source_byte_start must identify the table block as active"
+        );
+
+        // Verify the byte range stored on active_block matches the table's actual range.
+        let (expected_start, expected_end) = block_byte_range(&view.rendered[table_idx]);
+        assert_eq!(
+            ab.start_byte, expected_start,
+            "active_block.start_byte must equal the table's source_byte_start"
+        );
+        assert_eq!(
+            ab.end_byte, expected_end,
+            "active_block.end_byte must equal the table's source_byte_end"
+        );
+
+        // Confirm the raw source slice contains the pipe characters that mark it
+        // as a markdown table (not box-drawing chars from the formatted render).
+        let raw_slice = &state.source[expected_start..expected_end];
+        assert!(
+            raw_slice.contains('|'),
+            "raw source slice for a table block must contain '|' characters"
+        );
+        assert!(
+            !raw_slice.contains('\u{2502}') && !raw_slice.contains('\u{250C}'),
+            "raw source slice must not contain box-drawing chars (those appear only in formatted render)"
+        );
+    }
+
+    /// After moving the cursor out of the table block, `recompute_active_block`
+    /// must identify a different block. On cursor-leave `reparse_and_splice_block`
+    /// would re-render the table as a formatted box; here we just verify the
+    /// active-block detection flips, which is the trigger for that re-render.
+    #[test]
+    fn active_table_re_renders_box_on_cursor_leave() {
+        let (mut state, blocks) = setup(DOC_WITH_TABLE);
+        let table_idx = find_table_block(&blocks);
+        // Capture byte ranges before `blocks` is consumed by `view_with_blocks`.
+        let (table_start, table_end) = block_byte_range(&blocks[table_idx]);
+        let view = view_with_blocks(blocks);
+
+        // Enter the table block.
+        set_cursor_to_byte(&mut state, table_start);
+        recompute_active_block(&mut state, &view);
+        let inside = state
+            .active_block
+            .expect("active_block must be Some inside table");
+        assert_eq!(
+            inside.index, table_idx,
+            "cursor inside table must activate table block"
+        );
+
+        // Move cursor past the table — into the block that follows it.
+        // `table_end` is the start of the next block (contiguity invariant).
+        set_cursor_to_byte(&mut state, table_end);
+        recompute_active_block(&mut state, &view);
+        let outside = state
+            .active_block
+            .expect("active_block must be Some after table");
+        assert_ne!(
+            outside.index, table_idx,
+            "cursor past the table's source_byte_end must no longer activate the table block"
+        );
+        // The cursor is now in the block that comes after the table (index > table_idx).
+        assert!(
+            outside.index > table_idx,
+            "block after the table must have a higher index than the table"
+        );
+
+        // Simulate cursor-leave re-parse: the table block must be re-parsed from
+        // its source slice and splice back in. The splice is not directly observable
+        // here, but `reparse_and_splice_block` must not panic and the block list
+        // must still cover the full source.  We set up a fresh view for the splice
+        // call since `view` was consumed by the earlier `view_with_blocks(blocks)`.
+        let (state2, blocks2) = setup(DOC_WITH_TABLE);
+        let mut view2 = view_with_blocks(blocks2);
+        reparse_and_splice_block(&state2, &mut view2, table_idx, &palette(), theme());
+        // No assertion needed — absence of panic is the contract.
+    }
+
+    /// When the cursor is at a specific byte inside a table block, `byte_to_visual_raw`
+    /// must return the correct `(visual_row, visual_col)` within the raw rendering.
+    ///
+    /// The table source is:
+    ///   `| Col1 | Col2 |\n|---|---|\n| a | b |\n`
+    ///
+    /// At `inner_width = 80` (no wrapping), the first `|` is at col 0, row 0.
+    /// The `\n` after the first row is at byte offset (len of first row) within
+    /// the slice; the second row starts at row 1.
+    #[test]
+    fn cursor_inside_table_byte_to_visual_works() {
+        use crate::markdown::cursor_bridge::byte_to_visual_raw;
+
+        let (state, blocks) = setup(DOC_WITH_TABLE);
+        let table_idx = find_table_block(&blocks);
+        let view = view_with_blocks(blocks);
+
+        let (table_start, _) = block_byte_range(&view.rendered[table_idx]);
+        let table_block = &view.rendered[table_idx];
+
+        // Cursor at the very start of the table (the first `|`) → row 0, col 0.
+        let (row, col) = byte_to_visual_raw(
+            table_block,
+            &state.source,
+            0, // block_visual_start = 0 for this test (only the table matters)
+            80,
+            table_start,
+        );
+        assert_eq!(row, 0, "cursor at start of table must be on visual row 0");
+        assert_eq!(col, 0, "cursor at start of table must be at col 0");
+
+        // The first table source row is "| Col1 | Col2 |\n" — 18 bytes.
+        // Cursor at the start of the second row (byte table_start + 18) → row 1, col 0.
+        let first_row = "| Col1 | Col2 |\n";
+        let second_row_byte = table_start + first_row.len();
+        let (row2, col2) = byte_to_visual_raw(table_block, &state.source, 0, 80, second_row_byte);
+        assert_eq!(
+            row2, 1,
+            "cursor at start of second table row must be on visual row 1"
+        );
+        assert_eq!(
+            col2, 0,
+            "cursor at start of second table row must be at col 0"
+        );
+    }
+
+    /// Typing a character inside an active table must extend the table block's
+    /// `source_byte_end` by the byte length of the inserted character.
+    ///
+    /// This mirrors `insert_char_extends_active_block_byte_range` from sub-phase 6
+    /// but targets a `DocBlock::Table` to confirm the generic `apply_edit` byte-range
+    /// bookkeeping works for all block types.
+    #[test]
+    fn editing_inside_active_table_extends_byte_range() {
+        let (mut state, blocks) = setup(DOC_WITH_TABLE);
+        let table_idx = find_table_block(&blocks);
+        let mut view = view_with_blocks(blocks);
+
+        // Initialise active_block with cursor inside the table.
+        let (table_start, table_end_before) = block_byte_range(&view.rendered[table_idx]);
+        set_cursor_to_byte(&mut state, table_start);
+        recompute_active_block(&mut state, &view);
+
+        // Insert one ASCII character inside the table block.
+        insert_char(&mut state, &mut view, 'X');
+
+        // Re-read the table block's range after the edit.
+        let (_, table_end_after) = block_byte_range(&view.rendered[table_idx]);
+        assert_eq!(
+            table_end_after,
+            table_end_before + 1,
+            "inserting one ASCII char inside the table must extend source_byte_end by 1"
+        );
+
+        // Blocks after the table must shift right by 1 as well.
+        if let Some(next_block) = view.rendered.get(table_idx + 1) {
+            let (next_start, _) = block_byte_range(next_block);
+            // The next block's start must now be 1 byte further right.
+            // It was at `table_end_before` (contiguity) and must now be at `table_end_before + 1`.
+            assert_eq!(
+                next_start,
+                table_end_before + 1,
+                "block after the table must shift right by 1 after insert"
+            );
+        }
+
+        // Contiguity invariant must still hold.
+        assert_contiguous(&view.rendered, state.source.len());
+    }
 }

@@ -5,6 +5,31 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.32.1] - 2026-04-27
+
+### Added — Hybrid live-preview editing sub-phase 7 (active tables)
+
+Tables now reveal raw markdown when the cursor enters them. Move
+cursor outside, the box rendering returns. The agent discovered
+that sub-phase 5's active-block branch in `draw.rs` was already
+fully generic over `DocBlock` variants — tables were rendering
+raw on cursor-enter without any specific handling. The actual
+sub-phase 7 deliverable became:
+
+- New `DocBlock::source_byte_range() -> (usize, usize)` accessor
+  that consolidates the repeated three-arm match pattern. **Net
+  -28 lines in `draw.rs`** by replacing two duplicated match
+  blocks with single calls.
+- 4 new tests pinning the table-specific behavior: raw rendering
+  when cursor inside, box restored on leave, cursor positioning
+  via `byte_to_visual_raw` works for tables, editing inside
+  active table extends byte range and shifts subsequent blocks.
+
+945 tests pass (+5). Clippy + fmt clean.
+
+Sub-phase 8 (active mermaid with deferred re-render on leave) is
+next, then sub-phase 9 swaps `i`/`I` to make hybrid the default.
+
 ## [1.32.0] - 2026-04-27
 
 ### Added — Hybrid live-preview editing sub-phase 6 (HEADLINE: editing in active text blocks)

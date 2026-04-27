@@ -184,6 +184,31 @@ impl DocBlock {
         }
     }
 
+    /// Return the `(source_byte_start, source_byte_end)` pair for this block.
+    ///
+    /// Both values are byte offsets into the raw markdown source string.  The
+    /// range is half-open: `[source_byte_start, source_byte_end)`.
+    ///
+    /// This accessor eliminates repetitive three-arm `match` blocks at call sites
+    /// that only need the byte range and do not care about block-type-specific
+    /// fields.
+    #[inline]
+    pub fn source_byte_range(&self) -> (usize, usize) {
+        match self {
+            DocBlock::Text {
+                source_byte_start,
+                source_byte_end,
+                ..
+            } => (*source_byte_start as usize, *source_byte_end as usize),
+            DocBlock::Mermaid {
+                source_byte_start,
+                source_byte_end,
+                ..
+            } => (*source_byte_start as usize, *source_byte_end as usize),
+            DocBlock::Table(t) => (t.source_byte_start as usize, t.source_byte_end as usize),
+        }
+    }
+
     /// Number of display rows this block occupies in the current viewport.
     ///
     /// Always returns visual rows, not logical lines: a Text block whose

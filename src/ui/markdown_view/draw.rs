@@ -348,24 +348,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
             // Compute raw height if this is the active block and we have the source.
             let raw_height_opt: Option<u32> = if is_active_block {
                 hybrid_source.as_deref().map(|src| {
-                    let b_start = match doc_block {
-                        DocBlock::Text {
-                            source_byte_start, ..
-                        } => *source_byte_start as usize,
-                        DocBlock::Mermaid {
-                            source_byte_start, ..
-                        } => *source_byte_start as usize,
-                        DocBlock::Table(t) => t.source_byte_start as usize,
-                    };
-                    let b_end = match doc_block {
-                        DocBlock::Text {
-                            source_byte_end, ..
-                        } => *source_byte_end as usize,
-                        DocBlock::Mermaid {
-                            source_byte_end, ..
-                        } => *source_byte_end as usize,
-                        DocBlock::Table(t) => t.source_byte_end as usize,
-                    };
+                    let (b_start, b_end) = doc_block.source_byte_range();
                     let slice = &src[b_start.min(src.len())..b_end.min(src.len())];
                     let raw_span = Span::raw(slice);
                     let wrapped = crate::text_layout::wrap_spans(&[raw_span], effective_width);
@@ -420,24 +403,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                     // paths below are identical to the pre-sub-phase-5 behaviour.
                     if is_active_block {
                         if let Some(src) = hybrid_source.as_deref() {
-                            let b_start = match doc_block {
-                                DocBlock::Text {
-                                    source_byte_start, ..
-                                } => *source_byte_start as usize,
-                                DocBlock::Mermaid {
-                                    source_byte_start, ..
-                                } => *source_byte_start as usize,
-                                DocBlock::Table(t) => t.source_byte_start as usize,
-                            };
-                            let b_end = match doc_block {
-                                DocBlock::Text {
-                                    source_byte_end, ..
-                                } => *source_byte_end as usize,
-                                DocBlock::Mermaid {
-                                    source_byte_end, ..
-                                } => *source_byte_end as usize,
-                                DocBlock::Table(t) => t.source_byte_end as usize,
-                            };
+                            let (b_start, b_end) = doc_block.source_byte_range();
                             let slice = &src[b_start.min(src.len())..b_end.min(src.len())];
                             let raw_span = Span::raw(slice);
                             let wrapped =
