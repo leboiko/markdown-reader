@@ -1241,6 +1241,93 @@ mod tests {
         );
     }
 
+    /// Regression for "I press chars but the active block doesn't update on
+    /// screen". The active block in hybrid mode is rendered from the slice
+    /// `hybrid.source[block.source_byte_start..block.source_byte_end]`. After
+    /// each insert the slice MUST contain the newly typed character — if it
+    /// doesn't, the renderer keeps drawing the pre-edit content and the user
+    /// sees the cursor advance with no visible change.
+    #[test]
+    fn insert_char_active_block_slice_includes_new_char() {
+        let source = "Hello\n";
+        let (mut state, blocks) = setup(source);
+        let mut view = view_with_blocks(blocks);
+
+        // Cursor at byte 5 (just before the trailing newline).
+        set_cursor_to_byte(&mut state, 5);
+        recompute_active_block(&mut state, &view);
+
+        insert_char(&mut state, &mut view, 'X');
+
+        let ab = state
+            .active_block
+            .expect("active_block must be Some after insert");
+        let slice = &state.source[ab.start_byte..ab.end_byte];
+        assert_eq!(
+            slice, "HelloX\n",
+            "active block slice must reflect the inserted X — got {slice:?}"
+        );
+    }
+
+    /// Cursor in the middle of a block: the inserted char must land between
+    /// the existing characters in the active block's slice (not appended at
+    /// the end).
+    #[test]
+    fn insert_char_in_middle_of_active_block_appears_in_slice() {
+        let source = "Hello\n";
+        let (mut state, blocks) = setup(source);
+        let mut view = view_with_blocks(blocks);
+
+        // Cursor between the two `l`s.
+        set_cursor_to_byte(&mut state, 3);
+        recompute_active_block(&mut state, &view);
+
+        insert_char(&mut state, &mut view, 'X');
+
+        let ab = state.active_block.expect("active_block must be Some");
+        let slice = &state.source[ab.start_byte..ab.end_byte];
+        assert_eq!(
+            slice, "HelXlo\n",
+            "mid-block insert must show X between the ls — got {slice:?}"
+        );
+    }
+
+    /// When the cursor sits at the *start* of a non-first block, `apply_edit`'s
+    /// "insert-at-block-end" convention attributes the insert to the previous
+    /// block. The active block (the one the cursor is in) does NOT grow, so its
+    /// slice doesn't change; the user sees no visible update in the active block
+    /// even though the source mutated. This test pins that behaviour so we
+    /// notice if it ever changes — it's the most likely UX-confusion path.
+    #[test]
+    fn insert_at_active_block_start_lands_in_previous_block() {
+        let (mut state, blocks) = setup(DOC_3);
+        assert!(blocks.len() >= 3, "DOC_3 must render to at least 3 blocks");
+        let mut view = view_with_blocks(blocks);
+
+        // Position cursor at the start of block 2 (the "Para two." text block).
+        let (b2_start, b2_end) = block_byte_range(&view.rendered[2]);
+        set_cursor_to_byte(&mut state, b2_start);
+        recompute_active_block(&mut state, &view);
+        assert_eq!(
+            state.active_block.unwrap().index,
+            2,
+            "cursor must be in block 2"
+        );
+
+        let len_before = b2_end - b2_start;
+        insert_char(&mut state, &mut view, 'X');
+
+        // After insert: block 2's slice did NOT grow — the X went to block 1.
+        let ab = state.active_block.expect("active_block must be Some");
+        let slice = &state.source[ab.start_byte..ab.end_byte];
+        let len_after = ab.end_byte - ab.start_byte;
+        assert_eq!(
+            len_after, len_before,
+            "insert at block 2 start must NOT extend block 2 (the X goes to block 1) — \
+             this is the apply_edit insert-at-end convention; got slice {slice:?}"
+        );
+    }
+
     /// Backspace at byte 0 must leave the source unchanged.
     #[test]
     fn backspace_at_byte_zero_does_nothing() {

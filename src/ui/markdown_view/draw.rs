@@ -405,7 +405,14 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                         if let Some(src) = hybrid_source.as_deref() {
                             let (b_start, b_end) = doc_block.source_byte_range();
                             let slice = &src[b_start.min(src.len())..b_end.min(src.len())];
-                            let raw_span = Span::raw(slice);
+                            // Anchor the raw text to the theme's primary text colour.
+                            // Without an explicit fg, terminals fall back to their own
+                            // default (often green on classic schemes) which clashes
+                            // hard with most light themes.
+                            let raw_span = Span::styled(
+                                slice.to_string(),
+                                Style::default().fg(app.tokens.text.primary),
+                            );
                             let wrapped =
                                 crate::text_layout::wrap_spans(&[raw_span], effective_width);
                             // Convert WrappedLine to ratatui Lines (plain, no styling).

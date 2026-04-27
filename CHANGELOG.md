@@ -5,7 +5,27 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — 1.33.1
+## [Unreleased] — 1.33.2
+
+### Fixed — Active block raw text now uses the theme's primary text colour
+
+The hybrid active block's raw render emitted unstyled `Span::raw(slice)`,
+so the text inherited whatever default foreground the user's terminal had
+configured. On terminals with a coloured default fg (classic green-on-black
+schemes, certain light themes) the active-block text appeared in a colour
+unrelated to the active markdown-reader theme — sometimes nearly unreadable
+against the theme's background. The raw render now explicitly anchors to
+`tokens.text.primary`, matching how all other rendered blocks present body
+text.
+
+Also adds 3 new regression tests pinning the
+`hybrid.source[active_block.range]` slice contents after `insert_char` —
+including the apply_edit "insert-at-block-start" UX corner case where the
+character is attributed to the previous (formatted) block, which can read
+as "nothing happened" until the cursor leaves and the cached layout
+re-parses.
+
+## [1.33.1] — 2026-04-27
 
 ### Fixed — Hybrid mode shows ex-command line in the status bar
 
