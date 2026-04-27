@@ -13,7 +13,48 @@ the CHANGELOG be the historical record).
 
 ## In progress
 
-_Nothing actively in progress._
+### Hybrid live-preview editing — `markdown-tui-explorer`
+
+Obsidian Live Preview / iA Writer-style hybrid editing. Cursor lives
+in source-byte coordinates; the block containing the cursor renders
+as raw markdown; all other blocks render formatted (current viewer
+pipeline). Cursor-leave triggers per-block re-parse via pulldown-cmark.
+
+Design choices (locked in 2026-04-27):
+- **Block-level reveal** (not continuous inline styling, not
+  Typora-style hidden marks). The whole active block shows raw;
+  others stay formatted. Discrete "compile" event on cursor-leave.
+- **Per-block re-parse on leave** (not per-keystroke). Mermaid
+  blocks specifically depend on this — never re-render charts on
+  keystrokes.
+- **Keep edtui as text-editing primitive** (cursor, undo/redo,
+  vim-mode); viewer pipeline draws everything. No vendoring.
+
+9 sub-phases, ~13-17 engineering days total:
+
+| # | Sub-phase | Status | Effort |
+|---|---|---|---|
+| 1 | Block source byte ranges + cursor model | not started | 1.5-2d |
+| 2 | Source buffer + apply_edit bookkeeping | not started | 2-3d |
+| 3 | Render-block-from-slice helper | not started | 1d |
+| 4 | `I` enters hybrid mode (read-only) | not started | 1.5d |
+| 5 | Active block reveal (the "wow") | not started | 2.5-3d |
+| 6 | Editing in active text blocks | not started | 3-4d |
+| 7 | Active tables | not started | 0.5-1d |
+| 8 | Active mermaid (deferred re-render on leave) | not started | 0.5-1d |
+| 9 | `i`/`I` swap (hybrid becomes default) | not started | 0.5d |
+
+Sub-phases must ship sequentially (each builds on previous data
+model). Each sub-phase is one agent dispatch + own release.
+
+Out of scope, deliberately deferred to follow-up tickets:
+- Continuous inline syntax styling (live `**bold**`); incoherent
+  UX in TUI per design pass.
+- Line-level reveal (raw line, formatted neighbors); architectural
+  shift not justified unless block-level reveal proves unsatisfying.
+- True hidden-mark dimming (iA Writer style); not cleanly
+  expressible in ratatui at character granularity.
+- Inline cell editing inside rendered tables; UX questions.
 
 ---
 
