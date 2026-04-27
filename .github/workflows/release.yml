@@ -1,6 +1,65 @@
+# release.yml — markdown-tui-explorer binary release pipeline
+#
+# WHEN IT FIRES
+#   Push of a tag matching v*.*.* (e.g. v1.35.0). Arbitrary pushes and
+#   branch pushes are ignored. A `workflow_dispatch` trigger is also present
+#   so any tag can be back-filled manually from the Actions UI.
+#
+# WHAT IT PRODUCES
+#   Per-platform release archives uploaded to the corresponding GitHub Release:
+#     markdown-reader-<version>-x86_64-unknown-linux-gnu.tar.gz
+#     markdown-reader-<version>-aarch64-unknown-linux-gnu.tar.gz
+#     markdown-reader-<version>-x86_64-unknown-linux-musl.tar.gz
+#     markdown-reader-<version>-x86_64-apple-darwin.tar.gz
+#     markdown-reader-<version>-aarch64-apple-darwin.tar.gz
+#     markdown-reader-<version>-x86_64-pc-windows-msvc.zip
+#     SHA256SUMS
+#
+#   Each archive also contains LICENSE and README.md.
+#
+# MACOS SIGNING STATUS — UNSIGNED (Gatekeeper warning expected)
+#   The macOS binaries are NOT code-signed or notarized. Users on macOS will
+#   see a Gatekeeper warning ("cannot be opened because it is from an
+#   unidentified developer") and must right-click → Open to proceed once.
+#
+# TODO: Adding Apple Developer ID signing + notarization
+#   1. Obtain an Apple Developer ID Application certificate from
+#      https://developer.apple.com/account/resources/certificates/
+#   2. Export the certificate + private key as a .p12 and base64-encode it:
+#        base64 -i cert.p12 | pbcopy
+#   3. Add these repository secrets:
+#        APPLE_DEVELOPER_ID_CERT   — the base64-encoded .p12
+#        APPLE_DEVELOPER_ID_PASS   — the .p12 export password
+#        APPLE_NOTARY_PROFILE      — name of the notarytool credential
+#                                    (see `xcrun notarytool store-credentials`)
+#        APPLE_TEAM_ID             — your 10-character Apple Team ID
+#   4. In the build-macos job, after the "Strip binary" step, add:
+#        - name: Sign binary
+#          run: |
+#            echo "$APPLE_DEVELOPER_ID_CERT" | base64 --decode > cert.p12
+#            security create-keychain -p "" build.keychain
+#            security import cert.p12 -k build.keychain \
+#              -P "$APPLE_DEVELOPER_ID_PASS" -T /usr/bin/codesign
+#            security set-key-partition-list -S apple-tool:,apple: \
+#              -s -k "" build.keychain
+#            codesign --force --options runtime \
+#              --sign "Developer ID Application: <Your Name> ($APPLE_TEAM_ID)" \
+#              target/${{ matrix.target }}/release/markdown-reader
+#          env:
+#            APPLE_DEVELOPER_ID_CERT: ${{ secrets.APPLE_DEVELOPER_ID_CERT }}
+#            APPLE_DEVELOPER_ID_PASS: ${{ secrets.APPLE_DEVELOPER_ID_PASS }}
+#            APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+#        - name: Notarize binary
+#          run: |
+#            xcrun notarytool submit target/${{ matrix.target }}/release/markdown-reader \
+#              --keychain-profile "$APPLE_NOTARY_PROFILE" --wait
+#            xcrun stapler staple target/${{ matrix.target }}/release/markdown-reader
+#          env:
+#            APPLE_NOTARY_PROFILE: ${{ secrets.APPLE_NOTARY_PROFILE }}
+
 name: Release
 
-# Triggered by `v*` tags (the parent crate `markdown-tui-explorer`'s
+# Triggered by `v*.*.*` tags (the parent crate `markdown-tui-explorer`'s
 # version line). Builds cross-platform binaries of `markdown-reader`,
 # attaches them to a GitHub Release, publishes the parent crate to
 # crates.io, and updates the Homebrew tap formula.
@@ -12,9 +71,12 @@ name: Release
 on:
   push:
     tags:
-      - "v*"
+      - "v[0-9]*.[0-9]*.[0-9]*"
   workflow_dispatch:
     inputs:
+      tag:
+        description: "Tag to build (e.g. v1.35.0) — used for manual back-fills"
+        required: false
       publish_crate:
         description: "Publish to crates.io"
         type: boolean
@@ -55,6 +117,10 @@ jobs:
         # `--package markdown-tui-explorer` ensures we don't try to build
         # mermaid-text's binary (which is a separate workspace member
         # released on its own tag pattern).
+        #
+        # `cross` handles cross-compilation for aarch64-unknown-linux-gnu
+        # via a Docker image with the correct GCC cross-toolchain — no
+        # manual linker setup required.
         run: cross build --release --target ${{ matrix.target }} --package markdown-tui-explorer
 
       - name: Strip binary
@@ -74,8 +140,12 @@ jobs:
       - name: Package tarball
         run: |
           VERSION=${GITHUB_REF_NAME#v}
-          TARBALL="markdown-reader-${VERSION}-${{ matrix.target }}.tar.gz"
-          tar -czf "$TARBALL" -C target/${{ matrix.target }}/release markdown-reader
+          STAGING="markdown-reader-${VERSION}-${{ matrix.target }}"
+          mkdir -p "$STAGING"
+          cp target/${{ matrix.target }}/release/markdown-reader "$STAGING/"
+          cp LICENSE README.md "$STAGING/"
+          TARBALL="${STAGING}.tar.gz"
+          tar -czf "$TARBALL" "$STAGING"
           echo "TARBALL=$TARBALL" >> "$GITHUB_ENV"
 
       - name: Upload artifact
@@ -90,6 +160,9 @@ jobs:
     # Both targets build on macos-latest (Apple Silicon). The x86_64
     # target cross-compiles via `rustup target add x86_64-apple-darwin`
     # — the host toolchain and `strip` both handle it natively.
+    #
+    # NOTE: Binaries are NOT signed or notarized. See the comment block at
+    # the top of this file for instructions on adding signing later.
     runs-on: macos-latest
     strategy:
       fail-fast: false
@@ -117,8 +190,12 @@ jobs:
       - name: Package tarball
         run: |
           VERSION=${GITHUB_REF_NAME#v}
-          TARBALL="markdown-reader-${VERSION}-${{ matrix.target }}.tar.gz"
-          tar -czf "$TARBALL" -C target/${{ matrix.target }}/release markdown-reader
+          STAGING="markdown-reader-${VERSION}-${{ matrix.target }}"
+          mkdir -p "$STAGING"
+          cp target/${{ matrix.target }}/release/markdown-reader "$STAGING/"
+          cp LICENSE README.md "$STAGING/"
+          TARBALL="${STAGING}.tar.gz"
+          tar -czf "$TARBALL" "$STAGING"
           echo "TARBALL=$TARBALL" >> "$GITHUB_ENV"
 
       - name: Upload artifact
@@ -128,9 +205,46 @@ jobs:
           path: ${{ env.TARBALL }}
           retention-days: 1
 
+  build-windows:
+    name: Build Windows (x86_64-pc-windows-msvc)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-x86_64-pc-windows-msvc
+
+      - name: Build binary
+        run: cargo build --release --target x86_64-pc-windows-msvc --package markdown-tui-explorer
+
+      - name: Package zip
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v',''
+          $staging = "markdown-reader-${version}-x86_64-pc-windows-msvc"
+          New-Item -ItemType Directory -Path $staging | Out-Null
+          Copy-Item "target\x86_64-pc-windows-msvc\release\markdown-reader.exe" $staging\
+          Copy-Item "LICENSE" $staging\
+          Copy-Item "README.md" $staging\
+          $zipName = "${staging}.zip"
+          Compress-Archive -Path $staging -DestinationPath $zipName
+          "ZIPFILE=$zipName" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: markdown-reader-x86_64-pc-windows-msvc
+          path: ${{ env.ZIPFILE }}
+          retention-days: 1
+
   release:
     name: Create GitHub Release
-    needs: [build-linux, build-macos]
+    needs: [build-linux, build-macos, build-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -147,7 +261,7 @@ jobs:
 
       - name: Generate SHA-256 checksums
         working-directory: artifacts
-        run: sha256sum *.tar.gz > SHA256SUMS
+        run: sha256sum *.tar.gz *.zip > SHA256SUMS
 
       - name: Extract changelog section
         id: changelog
@@ -167,6 +281,7 @@ jobs:
           body_path: release_notes.md
           files: |
             artifacts/*.tar.gz
+            artifacts/*.zip
             artifacts/SHA256SUMS
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -185,9 +300,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Publish parent crate
-        # Only the parent (markdown-tui-explorer) ships on `v*` tags.
+        # Only the parent (markdown-tui-explorer) ships on `v*.*.*` tags.
         # The library (mermaid-text) is released independently via
-        # `mermaid-text-*` tags; if a `v*` release depends on a new
+        # `mermaid-text-*` tags; if a `v*.*.*` release depends on a new
         # mermaid-text version, tag mermaid-text first.
         run: cargo publish --package markdown-tui-explorer --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
 

@@ -132,23 +132,35 @@ impl App {
 
     /// Open `path` in a tab, optionally jumping to a source line after load.
     ///
-    /// `new_tab == true` pushes a new tab (or focuses an existing one with the
-    /// same path). `new_tab == false` replaces the active tab's content.
-    ///
-    /// If the file is already open the switch is instantaneous (no I/O).
-    /// Otherwise the read is dispatched to a background thread and the result
-    /// arrives as [`Action::FileLoaded`].
+    /// Delegates to [`open_or_focus_named`] with no display-name override.
+    /// When a custom tab label is needed (e.g. `"<stdin>"`), use
+    /// [`open_or_focus_named`] directly.
     ///
     /// # Arguments
     ///
     /// * `path`           – file to open (directories are silently ignored).
     /// * `new_tab`        – when `true`, push or focus a tab; when `false`,
     ///   replace the active tab's content.
-    /// * `jump_to_source` – when `Some(line)`, the viewer cursor will be
-    ///   positioned at the rendered logical line that corresponds to the given
-    ///   0-indexed source line once the file finishes loading.  If the tab is
-    ///   already open (i.e. `Focused` outcome), the jump is applied immediately.
-    pub fn open_or_focus(&mut self, path: PathBuf, new_tab: bool, jump_to_source: Option<u32>) {
+    /// * `jump_to_source` – when `Some(line)`, position the cursor at the
+    ///   rendered logical line matching the given 0-indexed source line after
+    ///   the file loads (or immediately when already open).
+    pub fn open_or_focus(
+        &mut self,
+        path: PathBuf,
+        new_tab: bool,
+        jump_to_source: Option<u32>,
+    ) {
+        self.open_or_focus_named(path, new_tab, jump_to_source, None);
+    }
+
+    /// Like [`open_or_focus`] but allows an explicit `display_name` for the tab bar.
+    pub fn open_or_focus_named(
+        &mut self,
+        path: PathBuf,
+        new_tab: bool,
+        jump_to_source: Option<u32>,
+        display_name: Option<String>,
+    ) {
         if path.is_dir() {
             return;
         }
@@ -193,6 +205,7 @@ impl App {
                         path,
                         content,
                         new_tab,
+                        display_name,
                     });
                 }
                 Err(_) => {
@@ -213,12 +226,23 @@ impl App {
     /// cursor is positioned at the logical line that corresponds to the stored
     /// 0-indexed source line.
     #[allow(clippy::needless_pass_by_value)]
-    pub(super) fn apply_file_loaded(&mut self, path: PathBuf, content: String, _new_tab: bool) {
-        let name = path
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
+    pub(super) fn apply_file_loaded(
+        &mut self,
+        path: PathBuf,
+        content: String,
+        _new_tab: bool,
+        display_name: Option<String>,
+    ) {
+        // Use the caller-supplied display name when present (e.g. `<stdin>`);
+        // otherwise fall back to the file's basename.  This lets stdin tabs
+        // show a conventional Unix sentinel in the tab bar instead of the
+        // generated temp-file name.
+        let name = display_name.unwrap_or_else(|| {
+            path.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string()
+        });
 
         // Find the placeholder tab that open_or_focus reserved (it has
         // current_path set but no content yet) and load the file into it.

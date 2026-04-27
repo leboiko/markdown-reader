@@ -102,6 +102,12 @@ pub enum Action {
         content: String,
         /// `true` → open in a new tab; `false` → replace the active tab.
         new_tab: bool,
+        /// Override the display name shown in the tab bar.
+        ///
+        /// When `None` (the normal case), the name is derived from `path.file_name()`.
+        /// Set to `Some("<stdin>")` when the content came from piped stdin so the
+        /// tab strip shows a conventional Unix sentinel instead of the temp-file name.
+        display_name: Option<String>,
     },
 
     /// A watched file was reloaded asynchronously; update all matching tabs.

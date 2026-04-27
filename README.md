@@ -5,7 +5,9 @@
 <h1 align="center">markdown-reader</h1>
 
 <p align="center">
-  Terminal markdown repo browser with tabs, search, Mermaid, math, and tables.
+  The terminal markdown reader with hybrid live-preview editing, inline
+  Mermaid diagrams, and LaTeX math — built for whole documentation
+  repositories, not just single-file preview.
 </p>
 
 <p align="center">
@@ -13,15 +15,53 @@
   <code>markdown-tui-explorer</code>.
 </p>
 
-A terminal markdown repo browser and viewer built with Rust and
-[ratatui](https://github.com/ratatui/ratatui). Open docs-heavy repositories
-with a file tree and tabs, search across markdown content, render Mermaid,
-math, code, and tables inline, and jump straight into editing at the source
-line you were reading.
+<!--
+  TODO: record an asciinema cast or screen recording showing:
+    1. Open a doc with mixed content (heading, paragraph, mermaid block, table)
+    2. Press `o` for outline navigation
+    3. Press `i` for hybrid editing — show a block transitioning from rendered to raw and back
+    4. Open the table modal
+    5. Render to HTML with --export-html
+  Save as docs/assets/demo.gif (or .mp4) and replace this placeholder.
+-->
+![markdown-reader in action — live preview editing of a doc with Mermaid diagrams](docs/assets/demo.gif)
 
-- Built for large markdown repositories, not just single-file preview
-- Pure-Rust rendering stack, including Mermaid fallback paths and inline math
-- Tabs, global search, table expansion, themes, session restore, and edit mode
+`markdown-reader` is a TUI for reading and editing docs-heavy repositories.
+Open a folder, browse the file tree, fan documents into tabs, and search
+across every markdown file in the project. Mermaid diagrams (10 types),
+LaTeX math, fenced code, and tables all render inline — and pressing `i`
+flips into a hybrid mode where the block under your cursor reveals its
+raw markdown source while every other block stays formatted.
+
+- **Repository-first**, not single-file — file tree, tabs, global content
+  search, session restore, and a `.gitignore`-aware reader
+- **Pure-Rust rendering stack** — Mermaid (Kitty / Sixel / iTerm2 graphics
+  with a Unicode halfblock fallback), LaTeX math, syntax-highlighted code,
+  and wide-table layout, with no Node, Chromium, or C dependencies
+- **Beyond just viewing** — outline navigator (`o`), full-screen table
+  modal, HTML export (`--export-html`), broken-link checker
+  (`--check-links`), and git-status colours in the tree
+- **Hybrid live-preview editing** (`i`) — block-level reveal: the block
+  under the cursor shows raw markdown for editing while the rest of the
+  document stays fully rendered. Tables open a dedicated editor; Mermaid
+  blocks re-render the moment you leave them.
+
+## vs other terminal markdown tools
+
+| Feature | markdown-reader | treemd | glow | bat |
+|---|---|---|---|---|
+| Repository browser (tree + tabs) | Yes | No | No | No |
+| Mermaid diagrams (inline Unicode) | Yes (10 types) | No | No | No |
+| Mermaid as terminal images | Yes (Kitty/Sixel/iTerm) | No | No | No |
+| LaTeX math | Yes | No | No | No |
+| Live-preview editing | Yes (block-level reveal) | No (external editor) | No | No |
+| Outline navigation | Yes (popup) | Yes (panel) | No | No |
+| Tabs + session restore | Yes | No | No | No |
+| Wide-table fullscreen modal | Yes | No | No | No |
+| HTML export | Yes | No | No | No |
+| Link validator (CLI) | Yes | No | No | No |
+| jq-like query language | No | Yes | No | No |
+| Pre-built binaries | Coming | Yes | Yes | Yes |
 
 ## Screenshots
 
@@ -164,6 +204,50 @@ drawn on the left of the viewer content when enabled.
 
 ## Installation
 
+### Pre-built binaries
+
+Download a pre-built binary for your platform from the
+[GitHub Releases page](https://github.com/leboiko/markdown-reader/releases/latest)
+— no Rust toolchain required.
+
+**Linux x86_64**
+```sh
+curl -L https://github.com/leboiko/markdown-reader/releases/latest/download/markdown-reader-x86_64-unknown-linux-gnu.tar.gz | tar xz
+sudo mv markdown-reader-*/markdown-reader /usr/local/bin/
+```
+
+**Linux ARM64**
+```sh
+curl -L https://github.com/leboiko/markdown-reader/releases/latest/download/markdown-reader-aarch64-unknown-linux-gnu.tar.gz | tar xz
+sudo mv markdown-reader-*/markdown-reader /usr/local/bin/
+```
+
+**macOS Intel (x86_64)**
+```sh
+curl -L https://github.com/leboiko/markdown-reader/releases/latest/download/markdown-reader-x86_64-apple-darwin.tar.gz | tar xz
+sudo mv markdown-reader-*/markdown-reader /usr/local/bin/
+```
+
+**macOS Apple Silicon (ARM64)**
+```sh
+curl -L https://github.com/leboiko/markdown-reader/releases/latest/download/markdown-reader-aarch64-apple-darwin.tar.gz | tar xz
+sudo mv markdown-reader-*/markdown-reader /usr/local/bin/
+```
+
+> **macOS Gatekeeper note**: the binaries are currently unsigned. On first
+> run macOS will show a security warning. Right-click (or Control-click) the
+> binary and select **Open** once to allow it. Subsequent launches work
+> normally.
+
+**Windows x86_64**
+
+Download `markdown-reader-<version>-x86_64-pc-windows-msvc.zip` from the
+[Releases page](https://github.com/leboiko/markdown-reader/releases/latest),
+extract it, and place `markdown-reader.exe` somewhere on your `%PATH%`.
+
+Each archive also contains `LICENSE` and `README.md`. SHA256 checksums for
+every archive are provided in the `SHA256SUMS` file on the same release.
+
 ### Prerequisites
 
 - [Rust toolchain](https://rustup.rs/) (1.85+ recommended, edition 2024)
@@ -299,6 +383,33 @@ What is skipped:
 
 Exit codes: `0` when all links are valid, `1` when any broken links are found.
 The TUI is not launched in this mode.
+
+### Stdin support
+
+`markdown-reader` accepts piped content — no file path needed:
+
+```sh
+cat README.md | markdown-reader
+curl -s https://raw.githubusercontent.com/leboiko/markdown-reader/master/README.md | markdown-reader
+```
+
+The piped content opens in the TUI exactly as if it were a file. The tab strip
+shows `<stdin>` as the document name (a conventional Unix sentinel). The tab is
+not persisted in the session file, so it will not be restored on next launch.
+
+### Section extraction
+
+Extract a single heading section and print it to stdout — no TUI launched:
+
+```sh
+markdown-reader --section "Installation" docs/guide.md
+cat docs/guide.md | markdown-reader --section "Usage"
+```
+
+The first heading whose text **contains** `NAME` (case-insensitive) is selected.
+Output is the heading line plus all body lines until the next heading of the
+same or higher level (lower H-number = higher level). Exit code `0` on success,
+`1` when no matching heading is found.
 
 Once inside the TUI, press `?` at any time for the keyboard help overlay.
 Press `c` to open the settings modal (themes, line numbers, tree

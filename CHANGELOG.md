@@ -5,6 +5,36 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.34.17] — 2026-04-27
+
+### Added — Distribution + scriptability
+
+- **Pre-built binaries via GitHub Actions release pipeline** — `.github/workflows/release.yml`
+  triggers on `v[0-9]*.[0-9]*.[0-9]*` tag pushes and produces signed tarballs/zips for 6
+  targets (Linux x86_64 / ARM64 / musl, macOS Intel / Apple Silicon, Windows x86_64) attached
+  to the corresponding GitHub Release with SHA256 checksums. macOS binaries currently ship
+  unsigned (Apple notarization stub documented in the workflow header for future enable).
+  Closes the biggest distribution gap vs `cargo install` only.
+
+- **Stdin support** — `cat foo.md | markdown-reader` opens piped markdown in the TUI. The
+  tab is named `<stdin>`. Stdin tabs are not persisted to the session.
+
+- **`--section <NAME>`** — extract a heading section (case-insensitive substring match,
+  body extends to the next same-or-higher-level heading) and print to stdout. No TUI.
+  Exit code 1 on no match. Mirrors the `--export-html` and `--check-links` early-return
+  CLI pattern.
+
+### Changed — README marketing repositioning
+
+- New elevator pitch leading with the actual differentiators (hybrid live-preview editing,
+  inline Mermaid diagrams, LaTeX math).
+- New "vs other terminal markdown tools" comparison table (vs `treemd`, `glow`, `bat`).
+- GIF placeholder added (`docs/assets/demo.gif`) with recording instructions in an HTML
+  comment — replace with an actual screen capture for a 10x readability win.
+- New "Pre-built binaries" subsection at the top of Installation with one-line download
+  commands per platform.
+- New "Stdin support" + "Section extraction" CLI subsections.
+
 ## [1.34.16] — 2026-04-27
 
 ### Changed

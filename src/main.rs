@@ -8,6 +8,7 @@ mod export;
 mod fs;
 mod markdown;
 mod mermaid;
+mod section_extract;
 mod state;
 mod text_layout;
 mod theme;
@@ -92,6 +93,19 @@ struct Cli {
     /// validation. No HTTP client requests are made in this release.
     #[arg(long, requires = "check_links")]
     check_external: bool,
+
+    /// Extract a named heading section and print it to stdout, then exit.
+    ///
+    /// The first heading whose text contains NAME (case-insensitive substring
+    /// match) is selected. Output is the heading line plus all body lines up to
+    /// the next same-or-higher-level heading. The TUI is not launched.
+    ///
+    /// Exit code 0 if a matching heading was found; 1 if not.
+    ///
+    /// Reads from the positional FILE argument if given, or from stdin when
+    /// the binary is piped to (e.g. `cat doc.md | markdown-reader --section NAME`).
+    #[arg(long, value_name = "NAME", conflicts_with_all = ["export_html", "check_links"])]
+    section: Option<String>,
 }
 
 /// Read all of stdin into a freshly-created temp file with a `.md` suffix.
@@ -203,6 +217,52 @@ async fn main() -> Result<()> {
         std::process::exit(exit_code);
     }
 
+    // ── Section extraction mode ──────────────────────────────────────────────
+    // When `--section NAME` is supplied, extract the named heading section from
+    // the file (or stdin) and print it to stdout — no TUI is launched.
+    // Exit 0 on success, exit 1 when no matching heading exists.
+    if let Some(ref name) = cli.section {
+        // Decide whether to read from the positional FILE argument or from stdin.
+        //
+        // Priority: if a real file path was supplied (i.e. `cli.path` differs from
+        // the clap default `"."`), always read that file regardless of stdin TTY
+        // status. This lets `--section NAME file.md` work correctly even when run
+        // inside a pipeline (e.g. `some-cmd | markdown-reader --section NAME file.md`).
+        //
+        // When no file is given (`cli.path == "."`), fall back to stdin. If stdin
+        // is also a TTY at that point there is nothing to read, so we print an error.
+        let file_given = cli.path.as_os_str() != ".";
+        let source = if file_given {
+            let path = &cli.path;
+            std::fs::read_to_string(path)
+                .with_context(|| format!("failed to read {}", path.display()))?
+        } else if !std::io::stdin().is_terminal() {
+            // stdin is a pipe with no explicit file: drain it.
+            let mut buf = String::new();
+            std::io::stdin()
+                .read_to_string(&mut buf)
+                .context("failed to read piped markdown from stdin")?;
+            buf
+        } else {
+            // Neither a file argument nor piped stdin: nothing to extract from.
+            eprintln!("error: --section requires a FILE argument or piped input");
+            std::process::exit(1);
+        };
+
+        match section_extract::extract_section(&source, name) {
+            Some(text) => {
+                // `print!` rather than `println!` because `extract_section`
+                // already preserves the trailing newline from the source.
+                print!("{text}");
+                std::process::exit(0);
+            }
+            None => {
+                eprintln!("no heading matching '{name}' found");
+                std::process::exit(1);
+            }
+        }
+    }
+
     // ── stdin piping ─────────────────────────────────────────────────
     // When stdin is a pipe (`cat foo.md | markdown-reader`), drain it to
     // a temp file and open THAT — the path argument is ignored in this
@@ -219,7 +279,10 @@ async fn main() -> Result<()> {
 
     // Resolve symlinks and relative components so all path comparisons inside
     // the app use the same canonical form.
-    let (root, initial_file) = if let Some(temp) = stdin_temp.as_ref() {
+    //
+    // When stdin was piped, `initial_display_name` is set to `"<stdin>"` so the
+    // tab bar shows a conventional Unix sentinel instead of the temp-file name.
+    let (root, initial_file, initial_display_name) = if let Some(temp) = stdin_temp.as_ref() {
         // stdin mode: temp file's parent (typically /tmp) is the tree
         // root, and the temp file is the initial focused tab.
         let path = temp.path().canonicalize()?;
@@ -227,7 +290,7 @@ async fn main() -> Result<()> {
             .parent()
             .unwrap_or(std::path::Path::new("."))
             .to_path_buf();
-        (parent, Some(path))
+        (parent, Some(path), Some("<stdin>".to_string()))
     } else {
         let canonical = cli.path.canonicalize()?;
         // When the user passes a file, root the tree at its parent directory
@@ -241,9 +304,9 @@ async fn main() -> Result<()> {
                 // is only None for the filesystem root itself.
                 .unwrap_or(std::path::Path::new("."))
                 .to_path_buf();
-            (parent, Some(canonical))
+            (parent, Some(canonical), None)
         } else {
-            (canonical, None)
+            (canonical, None, None)
         }
     };
 
@@ -274,7 +337,9 @@ async fn main() -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = App::new(root, initial_file).run(&mut terminal).await;
+    let result = App::new(root, initial_file, initial_display_name)
+        .run(&mut terminal)
+        .await;
     // Keep `stdin_temp` alive until after the App exits so the file
     // doesn't get unlinked while the App is reading it. Dropping it
     // here removes the temp file on disk.

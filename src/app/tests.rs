@@ -255,7 +255,7 @@ fn collect_matches_mermaid_absent_shows_source() {
 /// widths and initial scroll positions.  Uses `"."` as the root so it runs
 /// without a special directory.
 fn make_app_with_modal(natural_widths: Vec<usize>, h_scroll: u16, v_scroll: u16) -> App {
-    let mut app = App::new(std::path::PathBuf::from("."), None);
+    let mut app = App::new(std::path::PathBuf::from("."), None, None);
     app.table_modal = Some(TableModalState {
         tab_id: crate::ui::tabs::TabId(0),
         h_scroll,
@@ -427,7 +427,7 @@ fn collect_matches_absolute_offsets_across_blocks() {
 /// Open a tab with known content and put the app in a state suitable for
 /// editor tests.  Returns the `App` and the path used.
 fn make_app_with_tab(content: &str) -> (App, PathBuf) {
-    let mut app = App::new(PathBuf::from("."), None);
+    let mut app = App::new(PathBuf::from("."), None, None);
     let path = PathBuf::from("/fake/test.md");
     // Use open_or_focus to create the tab, then manually set content.
     app.tabs.open_or_focus(&path, true);
@@ -597,7 +597,7 @@ fn enter_edit_mode_uses_cursor_for_source_line() {
     use crate::markdown::{DocBlock, HeadingAnchor, LinkInfo};
     use ratatui::text::{Line, Span, Text};
 
-    let mut app = App::new(std::path::PathBuf::from("."), None);
+    let mut app = App::new(std::path::PathBuf::from("."), None, None);
 
     // Open a tab with dummy content that has as many newlines as the
     // highest source line we reference (line 11 → 12 lines).
@@ -682,7 +682,7 @@ fn enter_edit_mode_uses_cursor_for_source_line() {
 /// configured `view_height`.  Cheaper than `make_app_with_tab` because it
 /// does not load + render real markdown content.
 fn make_app_with_view(total_lines: u32, view_height: u32) -> App {
-    let mut app = App::new(PathBuf::from("."), None);
+    let mut app = App::new(PathBuf::from("."), None, None);
     let path = PathBuf::from("/fake/nav_test.md");
     app.tabs.open_or_focus(&path, true);
     app.tabs.view_height = view_height;
@@ -747,7 +747,7 @@ fn shift_g_jumps_cursor_to_bottom() {
 /// table rather than the first table visible on screen.
 #[test]
 fn try_open_table_modal_picks_table_under_cursor() {
-    let mut app = App::new(PathBuf::from("."), None);
+    let mut app = App::new(PathBuf::from("."), None, None);
     let path = PathBuf::from("/fake/tables.md");
     app.tabs.open_or_focus(&path, true);
     app.tabs.view_height = 30;
@@ -790,7 +790,7 @@ fn try_open_table_modal_picks_table_under_cursor() {
 /// fall back to the first table intersecting the viewport (old behaviour).
 #[test]
 fn try_open_table_modal_falls_back_to_first_visible_table() {
-    let mut app = App::new(PathBuf::from("."), None);
+    let mut app = App::new(PathBuf::from("."), None, None);
     let path = PathBuf::from("/fake/tables.md");
     app.tabs.open_or_focus(&path, true);
     app.tabs.view_height = 30;
@@ -823,7 +823,7 @@ fn try_open_table_modal_falls_back_to_first_visible_table() {
 #[test]
 fn d_key_moves_cursor_with_real_loaded_content() {
     use crate::theme::{Palette, Theme};
-    let mut app = App::new(PathBuf::from("."), None);
+    let mut app = App::new(PathBuf::from("."), None, None);
     let path = PathBuf::from("/fake/nav_test.md");
     app.tabs.open_or_focus(&path, true);
     let content: String = {
@@ -873,7 +873,7 @@ fn d_key_moves_cursor_with_real_loaded_content() {
 /// given match lines and `current_match`, and whose view has the given
 /// `total_lines`.  `view_height` defaults to 20.
 fn make_app_with_doc_search(match_lines: Vec<u32>, current_match: usize, total_lines: u32) -> App {
-    let mut app = App::new(PathBuf::from("."), None);
+    let mut app = App::new(PathBuf::from("."), None, None);
     let path = PathBuf::from("/fake/ds_test.md");
     app.tabs.open_or_focus(&path, true);
     app.tabs.view_height = 20;
@@ -946,7 +946,7 @@ fn perform_doc_search_first_match_moves_cursor() {
     let lines: Vec<&str> = (0..10)
         .map(|i| if i == 4 { "hello world" } else { "other" })
         .collect();
-    let mut app = App::new(PathBuf::from("."), None);
+    let mut app = App::new(PathBuf::from("."), None, None);
     let path = PathBuf::from("/fake/search_test.md");
     app.tabs.open_or_focus(&path, true);
     app.tabs.view_height = 20;
@@ -1010,7 +1010,7 @@ fn reload_with_unchanged_content_preserves_cursor() {
     };
     let path = PathBuf::from("/fake/unchanged.md");
 
-    let mut app = App::new(PathBuf::from("."), None);
+    let mut app = App::new(PathBuf::from("."), None, None);
     app.tabs.open_or_focus(&path, true);
     if let Some(tab) = app.tabs.active_tab_mut() {
         tab.view.load(
@@ -1055,7 +1055,7 @@ fn reload_with_changed_content_restores_cursor_when_in_range() {
     };
     let path = PathBuf::from("/fake/changed.md");
 
-    let mut app = App::new(PathBuf::from("."), None);
+    let mut app = App::new(PathBuf::from("."), None, None);
     app.tabs.open_or_focus(&path, true);
     if let Some(tab) = app.tabs.active_tab_mut() {
         tab.view.load(
@@ -1128,7 +1128,7 @@ fn make_rendered_app(content: &str) -> (App, PathBuf) {
     use crate::theme::{Palette, Theme};
     let palette = Palette::from_theme(Theme::Default);
     let path = PathBuf::from("/fake/yank_test.md");
-    let mut app = App::new(PathBuf::from("."), None);
+    let mut app = App::new(PathBuf::from("."), None, None);
     app.tabs.open_or_focus(&path, true);
     app.tabs.view_height = 20;
     if let Some(tab) = app.tabs.active_tab_mut() {
@@ -1231,7 +1231,7 @@ fn esc_in_visual_mode_exits_visual_mode() {
 #[test]
 fn j_in_visual_mode_extends_range() {
     // Use a controlled tab with known total_lines to avoid renderer side-effects.
-    let mut app = App::new(PathBuf::from("."), None);
+    let mut app = App::new(PathBuf::from("."), None, None);
     let path = PathBuf::from("/fake/visual_j.md");
     app.tabs.open_or_focus(&path, true);
     app.tabs.view_height = 20;
@@ -1261,7 +1261,7 @@ fn y_in_visual_mode_yanks_and_exits() {
     // Use a controlled tab with predictable source_lines mapping.
     // make_text_block assigns source_lines = [0, 1, 2, ...] sequentially.
     let content = "alpha\nbeta\ngamma\ndelta";
-    let mut app = App::new(PathBuf::from("."), None);
+    let mut app = App::new(PathBuf::from("."), None, None);
     let path = PathBuf::from("/fake/visual_yank.md");
     app.tabs.open_or_focus(&path, true);
     app.tabs.view_height = 20;
@@ -1306,7 +1306,7 @@ fn y_in_visual_mode_yanks_and_exits() {
 
 #[test]
 fn h_moves_cursor_col_left() {
-    let mut app = App::new(PathBuf::from("."), None);
+    let mut app = App::new(PathBuf::from("."), None, None);
     let path = PathBuf::from("/fake/hl_test.md");
     app.tabs.open_or_focus(&path, true);
     app.tabs.view_height = 20;
@@ -1325,7 +1325,7 @@ fn h_moves_cursor_col_left() {
 
 #[test]
 fn l_moves_cursor_col_right_clamped() {
-    let mut app = App::new(PathBuf::from("."), None);
+    let mut app = App::new(PathBuf::from("."), None, None);
     let path = PathBuf::from("/fake/hl_clamp.md");
     app.tabs.open_or_focus(&path, true);
     app.tabs.view_height = 20;
@@ -1358,13 +1358,13 @@ fn pending_jump_cleared_after_apply() {
     // Set a pending jump and simulate a FileLoaded action for the same path.
     let path = PathBuf::from("/fake/jump_test.md");
     let content = "line0\nline1\nline2\nline3\nline4";
-    let mut app = App::new(PathBuf::from("."), None);
+    let mut app = App::new(PathBuf::from("."), None, None);
     app.tabs.open_or_focus(&path, true);
     // Seed the tab as empty (simulates a pending load).
     // pending_jump is set to source line 2.
     app.pending_jump = Some((path.clone(), 2));
     // Now simulate FileLoaded arriving.
-    app.apply_file_loaded(path.clone(), content.to_string(), true);
+    app.apply_file_loaded(path.clone(), content.to_string(), true, None);
     assert!(
         app.pending_jump.is_none(),
         "pending_jump must be cleared after apply_file_loaded"
@@ -1376,7 +1376,7 @@ fn confirm_search_filename_result_no_jump() {
     // A filename-mode result has first_match_line = None;
     // after the search confirm, pending_jump should remain None.
     use crate::ui::search_modal::{SearchMode, SearchResult};
-    let mut app = App::new(PathBuf::from("."), None);
+    let mut app = App::new(PathBuf::from("."), None, None);
     let path = PathBuf::from("/fake/fn_result.md");
     app.search.active = true;
     app.search.mode = SearchMode::FileName;
@@ -1399,7 +1399,7 @@ fn confirm_search_filename_result_no_jump() {
 fn apply_file_loaded_jumps_cursor_to_source_line() {
     let content = "alpha\nbeta\ngamma\ndelta\nepsilon";
     let path = PathBuf::from("/fake/jump_cursor.md");
-    let mut app = App::new(PathBuf::from("."), None);
+    let mut app = App::new(PathBuf::from("."), None, None);
     app.tabs.open_or_focus(&path, true);
     app.tabs.view_height = 20;
 
@@ -1424,7 +1424,7 @@ fn apply_file_loaded_jumps_cursor_to_source_line() {
     );
 
     app.pending_jump = Some((path.clone(), 2));
-    app.apply_file_loaded(path.clone(), content.to_string(), true);
+    app.apply_file_loaded(path.clone(), content.to_string(), true, None);
 
     let tab = app.tabs.active_tab().unwrap();
     assert_eq!(
@@ -1438,7 +1438,7 @@ fn apply_file_loaded_jumps_cursor_to_source_line() {
 fn pending_jump_cleared_on_file_load_failure() {
     // A FileLoadFailed for the matching path must clear pending_jump.
     let path = PathBuf::from("/fake/nonexistent.md");
-    let mut app = App::new(PathBuf::from("."), None);
+    let mut app = App::new(PathBuf::from("."), None, None);
     app.pending_jump = Some((path.clone(), 5));
     app.handle_action(Action::FileLoadFailed { path: path.clone() });
     assert!(
@@ -1452,7 +1452,7 @@ fn pending_jump_not_cleared_on_different_path_failure() {
     // A FileLoadFailed for a different path must not touch pending_jump.
     let path = PathBuf::from("/fake/target.md");
     let other = PathBuf::from("/fake/other.md");
-    let mut app = App::new(PathBuf::from("."), None);
+    let mut app = App::new(PathBuf::from("."), None, None);
     app.pending_jump = Some((path.clone(), 3));
     app.handle_action(Action::FileLoadFailed { path: other });
     assert!(
@@ -1475,7 +1475,7 @@ fn open_link_picker_real_doc_repro() {
     let palette = Palette::from_theme(Theme::Default);
     let blocks = render_markdown(&src, &palette, Theme::Default);
 
-    let mut app = App::new(PathBuf::from("."), None);
+    let mut app = App::new(PathBuf::from("."), None, None);
     app.tabs
         .open_or_focus(&PathBuf::from("/fake/personal_notes.md"), true);
     if let Some(tab) = app.tabs.active_tab_mut() {
@@ -1560,7 +1560,7 @@ See [BadFirst](#real) and [GoodSecond](#real).
     let palette = Palette::from_theme(Theme::Default);
     let blocks = render_markdown(src, &palette, Theme::Default);
 
-    let mut app = App::new(PathBuf::from("."), None);
+    let mut app = App::new(PathBuf::from("."), None, None);
     app.tabs
         .open_or_focus(&PathBuf::from("/fake/dedup.md"), true);
     if let Some(tab) = app.tabs.active_tab_mut() {
@@ -1614,7 +1614,7 @@ Final prose link: [Fig](#fig).
     let palette = Palette::from_theme(Theme::Default);
     let blocks = render_markdown(src, &palette, Theme::Default);
 
-    let mut app = App::new(PathBuf::from("."), None);
+    let mut app = App::new(PathBuf::from("."), None, None);
     app.tabs
         .open_or_focus(&PathBuf::from("/fake/lists.md"), true);
     if let Some(tab) = app.tabs.active_tab_mut() {
@@ -1660,7 +1660,7 @@ Skim [System overview](#system-overview) first. End-of-doc has [appendix](#appen
     let palette = Palette::from_theme(Theme::Default);
     let blocks = render_markdown(src, &palette, Theme::Default);
 
-    let mut app = App::new(PathBuf::from("."), None);
+    let mut app = App::new(PathBuf::from("."), None, None);
     app.tabs
         .open_or_focus(&PathBuf::from("/fake/intro_links.md"), true);
     if let Some(tab) = app.tabs.active_tab_mut() {
@@ -1719,7 +1719,7 @@ Finally [Cherry](#cherry).
     let palette = Palette::from_theme(Theme::Default);
     let blocks = render_markdown(src, &palette, Theme::Default);
 
-    let mut app = App::new(PathBuf::from("."), None);
+    let mut app = App::new(PathBuf::from("."), None, None);
     app.tabs
         .open_or_focus(&PathBuf::from("/fake/links.md"), true);
     if let Some(tab) = app.tabs.active_tab_mut() {
@@ -1759,7 +1759,7 @@ fn make_mermaid_block(id: u64, source: &str, height: u32) -> DocBlock {
 /// Cursor inside a mermaid block: Enter must open THAT block.
 #[test]
 fn try_open_mermaid_modal_picks_block_under_cursor() {
-    let mut app = App::new(PathBuf::from("."), None);
+    let mut app = App::new(PathBuf::from("."), None, None);
     app.tabs
         .open_or_focus(&PathBuf::from("/fake/diagrams.md"), true);
     app.tabs.view_height = 30;
@@ -1790,7 +1790,7 @@ fn try_open_mermaid_modal_picks_block_under_cursor() {
 /// Cursor on prose: fall back to the first mermaid block in viewport.
 #[test]
 fn try_open_mermaid_modal_falls_back_to_first_visible_block() {
-    let mut app = App::new(PathBuf::from("."), None);
+    let mut app = App::new(PathBuf::from("."), None, None);
     app.tabs
         .open_or_focus(&PathBuf::from("/fake/diagrams.md"), true);
     app.tabs.view_height = 30;
@@ -1820,7 +1820,7 @@ fn try_open_mermaid_modal_falls_back_to_first_visible_block() {
 /// No mermaid blocks → modal stays closed and focus unchanged.
 #[test]
 fn try_open_mermaid_modal_noop_when_no_blocks() {
-    let mut app = App::new(PathBuf::from("."), None);
+    let mut app = App::new(PathBuf::from("."), None, None);
     app.tabs
         .open_or_focus(&PathBuf::from("/fake/no_diagrams.md"), true);
     app.tabs.view_height = 30;
@@ -1845,7 +1845,7 @@ fn handle_mermaid_modal_key_close() {
         crossterm::event::KeyCode::Esc,
         crossterm::event::KeyCode::Enter,
     ] {
-        let mut app = App::new(PathBuf::from("."), None);
+        let mut app = App::new(PathBuf::from("."), None, None);
         app.mermaid_modal = Some(MermaidModalState {
             tab_id: crate::ui::tabs::TabId(0),
             block_id: MermaidBlockId(1),
@@ -1866,7 +1866,7 @@ fn handle_mermaid_modal_key_close() {
 #[test]
 fn handle_mermaid_modal_key_scroll() {
     use crossterm::event::KeyCode;
-    let mut app = App::new(PathBuf::from("."), None);
+    let mut app = App::new(PathBuf::from("."), None, None);
     app.mermaid_modal = Some(MermaidModalState {
         tab_id: crate::ui::tabs::TabId(0),
         block_id: MermaidBlockId(1),
@@ -1904,7 +1904,7 @@ fn handle_mermaid_modal_key_scroll() {
 #[test]
 fn handle_mermaid_modal_key_scroll_saturating() {
     use crossterm::event::KeyCode;
-    let mut app = App::new(PathBuf::from("."), None);
+    let mut app = App::new(PathBuf::from("."), None, None);
     app.mermaid_modal = Some(MermaidModalState {
         tab_id: crate::ui::tabs::TabId(0),
         block_id: MermaidBlockId(1),
@@ -1931,7 +1931,7 @@ fn handle_mermaid_modal_key_scroll_saturating() {
 #[test]
 fn handle_mermaid_modal_key_zoom_adjusts_text_zoom() {
     use crossterm::event::KeyCode;
-    let mut app = App::new(PathBuf::from("."), None);
+    let mut app = App::new(PathBuf::from("."), None, None);
     app.mermaid_modal = Some(MermaidModalState {
         tab_id: crate::ui::tabs::TabId(0),
         block_id: MermaidBlockId(1),
@@ -1968,7 +1968,7 @@ fn handle_mermaid_modal_key_zoom_adjusts_text_zoom() {
 /// The tab is given the fake path `/fake/hybrid_test.md`; focus starts at
 /// `Focus::Viewer` with the cursor at the top of the document.
 fn make_app_with_rendered_tab(source: &str) -> (App, PathBuf) {
-    let mut app = App::new(PathBuf::from("."), None);
+    let mut app = App::new(PathBuf::from("."), None, None);
     let path = PathBuf::from("/fake/hybrid_test.md");
     app.tabs.open_or_focus(&path, true);
     if let Some(tab) = app.tabs.active_tab_mut() {
@@ -2240,7 +2240,7 @@ fn pressing_o_opens_outline_picker() {
     let palette = Palette::from_theme(Theme::Default);
     let blocks = render_markdown(src, &palette, Theme::Default);
 
-    let mut app = App::new(PathBuf::from("."), None);
+    let mut app = App::new(PathBuf::from("."), None, None);
     app.tabs
         .open_or_focus(&PathBuf::from("/fake/outline_test.md"), true);
     if let Some(tab) = app.tabs.active_tab_mut() {

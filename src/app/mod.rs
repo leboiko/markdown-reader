@@ -465,6 +465,12 @@ pub struct App {
     /// so [`run`] can open it once `action_tx` is wired up.  `None` when the
     /// CLI path was a directory (the normal case).
     pub initial_file: Option<PathBuf>,
+    /// Optional display name for the initial tab.
+    ///
+    /// When `Some`, overrides `initial_file.file_name()` in the tab bar.
+    /// Used to show `<stdin>` when the content was piped via stdin so the
+    /// tab strip shows a conventional Unix sentinel instead of the temp-file name.
+    pub initial_display_name: Option<String>,
 }
 
 impl App {
@@ -475,11 +481,18 @@ impl App {
     ///
     /// # Arguments
     ///
-    /// * `root`         – directory used as the tree root.
-    /// * `initial_file` – when the user passes a *file* path on the CLI, that
-    ///   path is stored here and opened at the start of [`run`] once `action_tx`
-    ///   is available.  Pass `None` when the CLI argument is a directory.
-    pub fn new(root: PathBuf, initial_file: Option<PathBuf>) -> Self {
+    /// * `root`                – directory used as the tree root.
+    /// * `initial_file`        – when the user passes a *file* path on the CLI,
+    ///   that path is stored here and opened at the start of [`run`] once
+    ///   `action_tx` is available. Pass `None` when the CLI argument is a directory.
+    /// * `initial_display_name` – optional override for the tab-bar label of the
+    ///   initial file (e.g. `"<stdin>"` when content came from a pipe). When
+    ///   `None`, the label is derived from the path's filename.
+    pub fn new(
+        root: PathBuf,
+        initial_file: Option<PathBuf>,
+        initial_display_name: Option<String>,
+    ) -> Self {
         let config = Config::load();
         let palette = Palette::from_theme(config.theme);
         let tokens = Tokens::from_theme(config.theme);
@@ -540,6 +553,7 @@ impl App {
             status_message: None,
             pending_jump: None,
             initial_file,
+            initial_display_name,
         };
 
         app.restore_session();
@@ -666,6 +680,12 @@ impl App {
             .tabs
             .iter()
             .filter_map(|t| {
+                // Skip stdin tabs — their path is a temp file that will be
+                // deleted by the time the session is restored next time, and
+                // the `<stdin>` display name signals "no meaningful path".
+                if t.view.file_name == "<stdin>" {
+                    return None;
+                }
                 t.view.current_path.as_ref().map(|p| TabSession {
                     file: p.clone(),
                     scroll: t.view.scroll_offset,
@@ -739,12 +759,14 @@ impl App {
         // potentially slow `git status` subprocess call.
         self.refresh_git_status();
 
-        // If the user passed a file path on the CLI, open it now that action_tx
-        // is wired up (open_or_focus spawns a background read that requires it).
-        // reveal_path selects the file in the tree so it isn't left blank.
+        // If the user passed a file path on the CLI (or stdin was piped), open
+        // it now that action_tx is wired up.  When a display name override was
+        // provided (e.g. `<stdin>`), use `open_or_focus_named` so the tab bar
+        // shows the sentinel instead of the generated temp-file name.
         if let Some(file) = self.initial_file.take() {
             self.expand_and_select(&file);
-            self.open_or_focus(file, true, None);
+            let display_name = self.initial_display_name.take();
+            self.open_or_focus_named(file, true, None, display_name);
         }
 
         let root_clone = self.root.clone();
@@ -916,8 +938,9 @@ impl App {
                 path,
                 content,
                 new_tab,
+                display_name,
             } => {
-                self.apply_file_loaded(path, content, new_tab);
+                self.apply_file_loaded(path, content, new_tab, display_name);
             }
             Action::FileReloaded { path, content } => {
                 self.apply_file_reloaded(path, content);
