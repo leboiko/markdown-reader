@@ -569,6 +569,11 @@ impl App {
             self.focus = Focus::Viewer;
         }
 
+        // Also handle the hybrid-mode save path: update hybrid.baseline and
+        // optionally exit hybrid mode (`:wq`).  `apply_hybrid_saved` is a
+        // no-op when the tab is not in hybrid mode.
+        self.apply_hybrid_saved(&path, &saved_content);
+
         self.last_file_save_at = Some((path, Instant::now()));
 
         // Refresh git status so the file tree recolors to reflect the save
@@ -678,6 +683,127 @@ impl App {
                 tab2.view.cursor_line = visual_row;
                 tab2.view.scroll_to_cursor(vh);
             }
+        }
+    }
+
+    // ── Hybrid editor save ────────────────────────────────────────────────────
+
+    /// Initiate an async write of the active tab's hybrid source buffer to disk.
+    ///
+    /// Mirrors [`save_editor_content`] but reads from `hybrid.source` instead of
+    /// the edtui buffer.  On completion, sends [`Action::FileSaved`] or
+    /// [`Action::FileSaveError`].
+    ///
+    /// If `close_after_save` is `true`, `hybrid.close_after_save` is set so the
+    /// `FileSaved` handler knows to call `exit_hybrid_mode` (`:wq` behaviour).
+    ///
+    /// # Arguments
+    ///
+    /// * `close_after_save` – when `true`, exit hybrid mode after the write
+    ///   succeeds (`:wq` path).
+    pub(super) fn save_hybrid_content(&mut self, close_after_save: bool) {
+        let Some(tab) = self.tabs.active_tab() else {
+            return;
+        };
+        let Some(hybrid) = tab.hybrid.as_ref() else {
+            return;
+        };
+        let Some(path) = tab.view.current_path.clone() else {
+            return;
+        };
+
+        let content = hybrid.source.clone();
+        let Some(tx) = self.action_tx.clone() else {
+            return;
+        };
+
+        let path_for_closure = path.clone();
+        tokio::task::spawn_blocking(move || {
+            let path = path_for_closure;
+            let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+            let result: anyhow::Result<()> = (|| {
+                use std::io::Write as _;
+                let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
+                tmp.write_all(content.as_bytes())?;
+                tmp.flush()?;
+                tmp.persist(&path)?;
+                Ok(())
+            })();
+
+            match result {
+                Ok(()) => {
+                    let _ = tx.send(Action::FileSaved {
+                        path,
+                        saved_content: content,
+                    });
+                }
+                Err(e) => {
+                    let _ = tx.send(Action::FileSaveError {
+                        path,
+                        error: e.to_string(),
+                    });
+                }
+            }
+        });
+
+        // Record save time before the async task finishes to start the watcher
+        // grace window early (avoids a race where the watcher fires before the
+        // action arrives).
+        self.last_file_save_at = Some((path, Instant::now()));
+
+        if close_after_save
+            && let Some(tab2) = self.tabs.active_tab_mut()
+            && let Some(h) = tab2.hybrid.as_mut()
+        {
+            h.close_after_save = true;
+        }
+    }
+
+    /// Apply a completed async hybrid-mode save.
+    ///
+    /// Updates `hybrid.baseline` so dirty detection is correct, refreshes
+    /// `tab.view.content` with the saved text, and exits hybrid mode if
+    /// `close_after_save` was set (`:wq` path).
+    ///
+    /// # Note
+    ///
+    /// This is called by `apply_file_saved`, which already handles the `editor`
+    /// (fullscreen edtui) side.  The hybrid side is a parallel update.
+    pub(super) fn apply_hybrid_saved(&mut self, path: &std::path::Path, saved_content: &str) {
+        let palette = self.palette;
+        let theme = self.theme;
+        let mut should_exit = false;
+
+        for tab in self.tabs.iter_mut() {
+            if tab.view.current_path.as_deref() != Some(path) {
+                continue;
+            }
+            if let Some(h) = tab.hybrid.as_mut() {
+                // Sync baseline so is_dirty() returns false after save.
+                saved_content.clone_into(&mut h.baseline);
+                h.status_message = Some("saved".to_string());
+                should_exit = h.close_after_save;
+            }
+            // Refresh the view content so the viewer shows the saved file.
+            let name = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            let scroll = tab.view.scroll_offset;
+            tab.view.load(
+                path.to_path_buf(),
+                name,
+                saved_content.to_string(),
+                &palette,
+                theme,
+            );
+            tab.view.scroll_offset = scroll.min(tab.view.total_lines.saturating_sub(1));
+            break;
+        }
+
+        if should_exit {
+            self.exit_hybrid_mode();
         }
     }
 

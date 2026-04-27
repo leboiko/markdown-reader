@@ -5,6 +5,79 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.32.0] - 2026-04-27
+
+### Added — Hybrid live-preview editing sub-phase 6 (HEADLINE: editing in active text blocks)
+
+**The headline ship.** Press `I` on a markdown file to enter
+hybrid mode — type into paragraphs, headings, lists, blockquotes,
+fenced code blocks. Characters insert in real time inside the
+active block (which displays as raw markdown). Press `Down` (or
+any cursor-move that crosses a block boundary) and the just-left
+block re-parses via pulldown-cmark and snaps to its formatted
+version: `**word**` becomes bold, `# Title` becomes a styled
+heading with the bar prefix, `- item` becomes a list bullet.
+
+The user perceives the cursor-leave as the discrete "compile"
+event. The active block always shows raw text; the rest of the
+doc always shows formatted. This is exactly the Obsidian Live
+Preview model the design pass committed to.
+
+**Editing keys** (in the normal mode of `Focus::HybridEditor`):
+- Char input — inserts at cursor
+- Backspace / Delete — removes
+- Enter — inserts `\n`
+- Tab — inserts `\t`
+- Cursor movement (sub-phase 5) — h/j/k/l, arrows, Page Up/Down,
+  Home/End. Crossing a block boundary triggers re-parse + splice
+  for the just-left block.
+
+**Ex-commands** (after `:`):
+- `:w` — full re-parse + write `hybrid.source` to disk; clears dirty.
+- `:wq` — `:w` then exit hybrid mode.
+- `:q` — exit if clean; refuse with status message if dirty.
+- `:q!` — exit unconditionally, discarding edits.
+
+**Implementation pipeline per keystroke** (text edit path):
+1. `apply_edit` mutates `hybrid.source` + shifts every affected
+   block's `source_byte_start/end` (sub-phase 2's bookkeeping).
+2. edtui's `Lines` is rebuilt from `hybrid.source` (~50KB allocation
+   for typical docs — acceptable, future optimization possible).
+3. `recompute_active_block` runs.
+4. Active block draws raw on next frame using its updated byte range
+   — no re-parse yet.
+
+**Cursor-leave path:**
+1. After the key handler runs, `prev_active_block_index` (snapshotted
+   before the key) is compared to the new `active_block.index`.
+2. If different: `reparse_and_splice_block` runs on `prev_active_block_index`.
+   - `render_block_from_slice(slice, byte_offset, palette, theme)` produces
+     1+ replacement `DocBlock`s with absolute byte ranges.
+   - `splice_blocks(prev_index..prev_index+1, replacement)` swaps them in,
+     evicting orphaned cache entries, recomputing positions.
+3. The just-left block re-renders formatted next frame.
+
+**Save path:**
+- `:w` runs `full_reparse` (rebuilds `view.rendered` from `hybrid.source`
+  via `render_markdown` — eliminates any drift between incremental
+  bookkeeping and pulldown-cmark's view) before writing the file.
+- `apply_hybrid_saved` syncs `baseline = source` so `is_dirty()` correctly
+  reflects "no unsaved changes."
+
+16 new tests pin: char insert extends byte range, backspace at byte 0
+no-op, backspace decrements ranges, enter splits paragraph on leave,
+cursor-leave reparses block, double-newline splits paragraph,
+save writes file + clears dirty, q-refuses-when-dirty, UTF-8-safe
+editing, undo/redo via edtui (verified working).
+
+940 tests pass (+10). Clippy + fmt clean.
+
+The `i` keybinding is unchanged (still enters legacy fullscreen
+edtui mode). Sub-phase 9 will swap them to make hybrid the default.
+
+Sub-phase 7 (active tables) and 8 (active mermaid) are next —
+each ~half-day. Then sub-phase 9 flips the default.
+
 ## [1.31.0] - 2026-04-27
 
 ### Added — Hybrid live-preview editing sub-phase 5 (active block reveal — the "wow")

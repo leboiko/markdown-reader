@@ -883,17 +883,24 @@ impl App {
 
     /// Handle a key event while [`Focus::HybridEditor`] is active.
     ///
-    /// Sub-phase 4 is intentionally minimal: only `:q` does anything.  All
-    /// other keystrokes are silently consumed (no-ops).  Sub-phase 5 will wire
-    /// up arrow keys / hjkl for cursor movement; sub-phase 6 will add editing.
-    ///
-    /// Two sub-modes mirror the editor:
+    /// Two sub-modes mirror the classic editor:
     /// - **Command-line mode** (`hybrid.command_line.is_some()`): we capture
-    ///   chars ourselves to build an ex command (`:q`).
-    /// - **Normal mode**: `:` opens the command line; everything else is a no-op.
+    ///   chars ourselves to build an ex command (`:w`, `:wq`, `:q`, `:q!`).
+    /// - **Normal mode**: `:` opens the command line; character input inserts
+    ///   into the source; Backspace/Delete remove; Enter inserts a newline.
+    ///
+    /// Cursor-leave re-parse: the active block index is captured BEFORE the key
+    /// is processed.  After the key changes the cursor position,
+    /// `recompute_active_block` is called to detect whether the cursor left the
+    /// block.  If so, `reparse_and_splice_block` re-parses the just-left block
+    /// with pulldown-cmark and splices the result into `view.rendered`.  This is
+    /// the "compile" event the user perceives — `**bold**` snaps to bold text,
+    /// `# Heading` snaps to the heading glyph, etc.
     pub(super) fn handle_hybrid_key(&mut self, key: crossterm::event::KeyEvent) {
-        // Read view_height before any mutable borrows of self.tabs.
+        // Read view_height and theme/palette before any mutable borrows.
         let view_height = self.tabs.view_height as usize;
+        let palette = self.palette;
+        let theme = self.theme;
 
         let Some(tab) = self.tabs.active_tab_mut() else {
             return;
@@ -905,7 +912,7 @@ impl App {
         };
 
         if hybrid.command_line.is_some() {
-            // Command-line capture mode — handle in-place to avoid borrow issues.
+            // ── Command-line capture mode ────────────────────────────────────
             match key.code {
                 KeyCode::Esc => {
                     hybrid.command_line = None;
@@ -919,19 +926,10 @@ impl App {
                 KeyCode::Enter => {
                     let cmd = hybrid.command_line.take().unwrap_or_default();
                     hybrid.status_message = None;
-                    // Drop the borrow on `tab` before calling `exit_hybrid_mode`,
-                    // which needs `&mut self`.
-                    let should_exit = matches!(cmd.trim(), "q" | "q!");
-                    if should_exit {
-                        self.exit_hybrid_mode();
-                    } else {
-                        // Unknown command — set a status message.
-                        if let Some(tab2) = self.tabs.active_tab_mut()
-                            && let Some(h) = tab2.hybrid.as_mut()
-                        {
-                            h.status_message = Some(format!("unknown command: :{}", cmd.trim()));
-                        }
-                    }
+                    // End the borrow of `tab.hybrid` before calling dispatch_hybrid_command,
+                    // which needs `&mut self` for file I/O helpers.
+                    let _ = hybrid;
+                    self.dispatch_hybrid_command(cmd.trim(), palette, theme);
                 }
                 KeyCode::Char(c) => {
                     if let Some(ref mut cmd) = hybrid.command_line {
@@ -941,43 +939,142 @@ impl App {
                 _ => {}
             }
         } else {
-            // Normal mode — cursor movement keys (sub-phase 5) + `:` command line.
-            // Text-input keys remain no-ops; sub-phase 6 adds editing.
+            // ── Normal mode — editing + cursor movement ───────────────────────
             //
-            // Each movement helper needs `&mut HybridState` and `&MarkdownViewState`.
-            // `Tab` stores these as disjoint fields (`hybrid: Option<HybridState>`
-            // and `view: MarkdownViewState`).  Rust's NLL (non-lexical lifetimes)
-            // lets us split-borrow them from a single `&mut Tab`: we hold
-            // `hybrid: &mut HybridState` (from the outer `tab.hybrid.as_mut()`
-            // guard) and simultaneously take `view: &MarkdownViewState` (a shared
-            // borrow of the other field).  The compiler accepts this because the
-            // two borrows cover disjoint paths through the struct.
+            // We snapshot `active_block.index` BEFORE the key is processed so
+            // that after processing we can detect whether the cursor left a block.
+            // If the index changed, the just-left block is re-parsed via
+            // pulldown-cmark and spliced back into `view.rendered`.
             //
-            // The `:` and `Esc` arms use only `hybrid` (no split needed).
-            // All movement arms use both `hybrid` (already bound above) and
-            // `&tab.view` (taken in-arm; Rust's NLL sees no conflict).
-            // Re-obtain tab so we can reference both fields cleanly.
-            // (The outer `hybrid` borrow ended its useful lifetime at the
-            // `} else {` point; dropping it here lets us borrow `tab` again.)
+            // Borrow structure: `Tab` stores `hybrid: Option<HybridState>` and
+            // `view: MarkdownViewState` as disjoint fields.  Rust's NLL allows us
+            // to hold `hybrid: &mut HybridState` and `view: &mut MarkdownViewState`
+            // simultaneously because they come from different fields of the same
+            // struct.  The `:` arm only needs `hybrid`; all other arms need both.
+
+            // Snapshot the active block index before the key lands.
+            let prev_block_index = hybrid.active_block.map(|ab| ab.index);
+
             match key.code {
                 KeyCode::Char(':') => {
                     hybrid.command_line = Some(String::new());
+                    // No cursor move → no block-leave possible.
+                    return;
                 }
                 KeyCode::Esc => {
-                    // Already in normal (read-only) mode — no-op.
+                    // Already in normal mode — no-op.
+                    return;
                 }
                 _ => {
-                    // All movement keys drop into this arm and re-acquire a
-                    // fresh `&mut tab` so we can split the borrow cleanly.
-                    let _ = hybrid; // end the mutable borrow of `tab.hybrid`
+                    // All editing and movement keys re-acquire a fresh `&mut tab`
+                    // so we can split-borrow `hybrid` and `view` as mutable.
+                    let _ = hybrid; // release the outer borrow of `tab.hybrid`
                     if let Some(tab2) = self.tabs.active_tab_mut()
                         && let Some(h) = tab2.hybrid.as_mut()
                     {
-                        // Split-borrow: `h` mutably borrows `tab2.hybrid` while
-                        // `view` shares `tab2.view`.  Disjoint fields — safe.
-                        let view = &tab2.view;
-                        dispatch_hybrid_movement(h, view, key.code, view_height);
+                        // Split-borrow: `h` mutably borrows `tab2.hybrid`;
+                        // `view` mutably borrows `tab2.view`.  Disjoint — safe.
+                        let view = &mut tab2.view;
+                        dispatch_hybrid_key(h, view, key.code, view_height);
                     }
+                }
+            }
+
+            // ── Cursor-leave re-parse ────────────────────────────────────────
+            // After the key was processed, check whether the cursor left the
+            // previously active block.  If it did, re-parse that block with
+            // pulldown-cmark so markdown styling (bold, headings, code) appears
+            // in the just-left block.
+            //
+            // This is the design's "compile on leave" event: while the cursor is
+            // inside a block it shows raw source; on departure it gets the full
+            // rendered treatment from pulldown-cmark's structural output.
+            if let Some(prev_idx) = prev_block_index
+                && let Some(tab2) = self.tabs.active_tab_mut()
+            {
+                let new_idx = tab2
+                    .hybrid
+                    .as_ref()
+                    .and_then(|h| h.active_block)
+                    .map(|ab| ab.index);
+                if new_idx != Some(prev_idx) {
+                    // Cursor moved to a different block — re-parse the one we left.
+                    if let Some(h) = tab2.hybrid.as_ref() {
+                        crate::ui::hybrid_editor::reparse_and_splice_block(
+                            h,
+                            &mut tab2.view,
+                            prev_idx,
+                            &palette,
+                            theme,
+                        );
+                    }
+                    // After splicing the block list may have grown/shrunk;
+                    // recompute the active block from the current cursor byte.
+                    if let Some(h) = tab2.hybrid.as_mut() {
+                        crate::ui::hybrid_editor::recompute_active_block(h, &tab2.view);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Dispatch a hybrid-mode ex command (the text after `:`).
+    ///
+    /// Called from `handle_hybrid_key` after the command string is complete.
+    /// Needs `&mut self` so it can initiate async saves and call `exit_hybrid_mode`.
+    fn dispatch_hybrid_command(
+        &mut self,
+        cmd: &str,
+        palette: crate::theme::Palette,
+        theme: crate::theme::Theme,
+    ) {
+        match cmd {
+            "w" => {
+                // Full re-parse before save to eliminate any incremental drift,
+                // then kick off the async write.
+                if let Some(tab) = self.tabs.active_tab_mut()
+                    && let Some(h) = tab.hybrid.as_mut()
+                {
+                    crate::ui::hybrid_editor::full_reparse(h, &mut tab.view, &palette, theme);
+                    h.status_message = Some("saving…".to_string());
+                }
+                self.save_hybrid_content(false);
+            }
+            "wq" => {
+                if let Some(tab) = self.tabs.active_tab_mut()
+                    && let Some(h) = tab.hybrid.as_mut()
+                {
+                    crate::ui::hybrid_editor::full_reparse(h, &mut tab.view, &palette, theme);
+                    h.close_after_save = true;
+                }
+                self.save_hybrid_content(true);
+            }
+            "q" => {
+                // Refuse to quit if there are unsaved edits — mirror vim semantics.
+                let dirty = self
+                    .tabs
+                    .active_tab()
+                    .and_then(|t| t.hybrid.as_ref())
+                    .map(|h| h.is_dirty())
+                    .unwrap_or(false);
+                if dirty {
+                    if let Some(tab) = self.tabs.active_tab_mut()
+                        && let Some(h) = tab.hybrid.as_mut()
+                    {
+                        h.status_message = Some("unsaved changes — use :q! to discard".to_string());
+                    }
+                } else {
+                    self.exit_hybrid_mode();
+                }
+            }
+            "q!" => {
+                self.exit_hybrid_mode();
+            }
+            other => {
+                if let Some(tab) = self.tabs.active_tab_mut()
+                    && let Some(h) = tab.hybrid.as_mut()
+                {
+                    h.status_message = Some(format!("unknown command: :{other}"));
                 }
             }
         }
@@ -1063,53 +1160,57 @@ impl App {
 
 // ── Free functions ────────────────────────────────────────────────────────────
 
-/// Dispatch a cursor-movement key in hybrid normal mode.
+/// Dispatch a key event in hybrid normal mode (editing + cursor movement).
 ///
 /// Called from `handle_hybrid_key` after splitting the `Tab` into a mutable
-/// `HybridState` borrow and a shared `MarkdownViewState` borrow.  Routing the
+/// `HybridState` borrow and a mutable `MarkdownViewState` borrow.  Routing the
 /// dispatch through a free function keeps the per-arm logic out of the key
 /// handler and avoids repeating the `if let Some(tab) … if let Some(h) …`
-/// boilerplate for every movement key.
+/// boilerplate for every key.
 ///
 /// # Arguments
 ///
-/// * `hybrid`      – mutable hybrid state (cursor position, active_block).
-/// * `view`        – markdown view state (block list for recompute_active_block).
-/// * `code`        – the key code that triggered this movement.
+/// * `hybrid`      – mutable hybrid state (cursor, source buffer, active_block).
+/// * `view`        – mutable view state (block list modified by editing helpers).
+/// * `code`        – the key code that triggered this call.
 /// * `view_height` – viewport height in lines (used for Page Up/Down).
-fn dispatch_hybrid_movement(
+fn dispatch_hybrid_key(
     hybrid: &mut crate::ui::hybrid_editor::HybridState,
-    view: &crate::ui::markdown_view::MarkdownViewState,
+    view: &mut crate::ui::markdown_view::MarkdownViewState,
     code: KeyCode,
     view_height: usize,
 ) {
+    use crate::ui::hybrid_editor::{
+        delete_char_after, delete_char_before, insert_char, move_cursor_down, move_cursor_left,
+        move_cursor_line_end, move_cursor_line_start, move_cursor_page_down, move_cursor_page_up,
+        move_cursor_right, move_cursor_up,
+    };
+
     match code {
-        KeyCode::Char('h') | KeyCode::Left => {
-            crate::ui::hybrid_editor::move_cursor_left(hybrid, view);
-        }
-        KeyCode::Char('l') | KeyCode::Right => {
-            crate::ui::hybrid_editor::move_cursor_right(hybrid, view);
-        }
-        KeyCode::Char('j') | KeyCode::Down => {
-            crate::ui::hybrid_editor::move_cursor_down(hybrid, view);
-        }
-        KeyCode::Char('k') | KeyCode::Up => {
-            crate::ui::hybrid_editor::move_cursor_up(hybrid, view);
-        }
-        KeyCode::PageDown => {
-            crate::ui::hybrid_editor::move_cursor_page_down(hybrid, view, view_height);
-        }
-        KeyCode::PageUp => {
-            crate::ui::hybrid_editor::move_cursor_page_up(hybrid, view, view_height);
-        }
-        KeyCode::Home => {
-            crate::ui::hybrid_editor::move_cursor_line_start(hybrid, view);
-        }
-        KeyCode::End => {
-            crate::ui::hybrid_editor::move_cursor_line_end(hybrid, view);
-        }
-        // Unknown key codes reach this arm when the outer `_ =>` catches
-        // keys that are neither `:` nor `Esc`. No-op for sub-phase 5.
+        // ── Editing keys ──────────────────────────────────────────────────────
+        // Characters are inserted literally at the cursor.  The active block
+        // renders raw while the cursor is inside it; pulldown-cmark styling
+        // only appears after the cursor leaves (cursor-leave re-parse).
+        KeyCode::Char(c) => insert_char(hybrid, view, c),
+        KeyCode::Enter => insert_char(hybrid, view, '\n'),
+        KeyCode::Tab => insert_char(hybrid, view, '\t'),
+        KeyCode::Backspace => delete_char_before(hybrid, view),
+        KeyCode::Delete => delete_char_after(hybrid, view),
+
+        // ── Cursor movement ───────────────────────────────────────────────────
+        // These mirror sub-phase 5 but now take `&mut view` so that the editing
+        // helpers above can also receive a `&mut view`.  The movement helpers
+        // themselves only need `&view` internally, but accepting `&mut` here
+        // avoids having two incompatible call signatures.
+        KeyCode::Left => move_cursor_left(hybrid, view),
+        KeyCode::Right => move_cursor_right(hybrid, view),
+        KeyCode::Down => move_cursor_down(hybrid, view),
+        KeyCode::Up => move_cursor_up(hybrid, view),
+        KeyCode::PageDown => move_cursor_page_down(hybrid, view, view_height),
+        KeyCode::PageUp => move_cursor_page_up(hybrid, view, view_height),
+        KeyCode::Home => move_cursor_line_start(hybrid, view),
+        KeyCode::End => move_cursor_line_end(hybrid, view),
+        // Unknown keys are no-ops.
         _ => {}
     }
 }

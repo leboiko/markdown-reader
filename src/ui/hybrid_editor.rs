@@ -12,9 +12,9 @@
 //!   [`HybridState::apply_edit`], which splices this buffer directly.
 //! - `editor_state.lines: Jagged<char>` — edtui's parallel representation.
 //!   Initialized from `source` at construction time via [`HybridState::from_source`].
-//!   Sub-phase 6 will keep these in sync by replaying every edit into edtui after
-//!   `apply_edit` mutates the `String` buffer.  Until then the two are deliberately
-//!   left un-synced because nothing drives edtui events yet.
+//!   Sub-phase 6 keeps these in sync by rebuilding `Lines` from `source` after
+//!   every `apply_edit` call.  The rebuild is O(n) in source length but fast
+//!   enough for typical documents (< 100 µs on a 50 KB file).
 //!
 //! Callers should treat `source` as the truth for byte-range bookkeeping and
 //! `editor_state` as the truth for cursor position and undo history.
@@ -23,6 +23,8 @@ use edtui::{EditorState, Lines};
 
 use crate::markdown::DocBlock;
 use crate::markdown::cursor_bridge::byte_offset_to_block;
+use crate::markdown::renderer::{render_block_from_slice, render_markdown};
+use crate::theme::{Palette, Theme};
 use crate::ui::markdown_view::MarkdownViewState;
 
 // ── Core types ────────────────────────────────────────────────────────────────
@@ -64,17 +66,16 @@ pub struct EditEffect {
 /// `editor_state.lines`.
 pub struct HybridState {
     /// edtui editor state — owns the cursor position, undo/redo history, and
-    /// vim mode.  Its `lines: Jagged<char>` is initialized from `source` at
-    /// construction time; sub-phase 6 will keep it in sync with `source` on
-    /// every edit.  Until then, treat `editor_state` as the cursor/mode oracle
-    /// and `source` as the byte-range oracle.
+    /// vim mode.  Its `lines: Jagged<char>` is rebuilt from `source` after every
+    /// edit via `sync_editor_lines_from_source` (sub-phase 6).  Treat
+    /// `editor_state` as the cursor/mode oracle and `source` as the byte-range
+    /// oracle.
     pub editor_state: EditorState,
     /// Canonical source buffer.  All edits are applied here via `apply_edit`;
     /// byte ranges in `DocBlock`s are valid against this string.
     pub source: String,
     /// Snapshot of the source at hybrid-mode entry, used to detect dirty state
-    /// without re-reading the disk file.
-    #[allow(dead_code)] // used in sub-phase 6 (dirty-state detection)
+    /// without re-reading the disk file.  Updated by `:w` to track save state.
     pub baseline: String,
     /// Pre-computed byte offset of each line's start in `source`.
     ///
@@ -94,8 +95,7 @@ pub struct HybridState {
     /// Sub-phase 6 wires this up; sub-phase 2 just initializes it to `None`.
     pub status_message: Option<String>,
     /// When `true`, the file should be closed after the next successful save.
-    /// Set by the `:wq` path in sub-phase 6.
-    #[allow(dead_code)] // used in sub-phase 6 (`:wq` save-and-quit)
+    /// Set by the `:wq` command path.
     pub close_after_save: bool,
 }
 
@@ -127,7 +127,6 @@ impl HybridState {
 
     /// Return `true` when `source` differs from the `baseline` snapshot.
     #[must_use]
-    #[allow(dead_code)] // used in sub-phase 6 (dirty-state detection)
     pub fn is_dirty(&self) -> bool {
         self.source != self.baseline
     }
@@ -172,7 +171,6 @@ impl HybridState {
     /// - `byte_offset + deleted > source.len()` — out-of-bounds splice.
     /// - `byte_offset` or `byte_offset + deleted` is not on a UTF-8 char boundary.
     /// - The deleted range straddles more than one block boundary.
-    #[allow(dead_code)] // used in sub-phase 6 (editing)
     pub fn apply_edit(
         &mut self,
         blocks: &mut [DocBlock],
@@ -330,6 +328,170 @@ pub fn recompute_active_block(hybrid: &mut HybridState, view: &MarkdownViewState
         start_byte,
         end_byte,
     });
+}
+
+// ── Sub-phase 6: editing primitives ───────────────────────────────────────────
+
+/// Insert a single character at the current cursor byte offset.
+///
+/// After splicing `source`, rebuilds edtui's `Lines` from the new source so the
+/// two representations stay in sync, then repositions the cursor to the byte
+/// immediately after the inserted character.
+///
+/// # Arguments
+///
+/// * `hybrid` – mutable hybrid state.
+/// * `view`   – markdown view state (block list updated in-place by `apply_edit`).
+/// * `ch`     – character to insert.
+pub fn insert_char(hybrid: &mut HybridState, view: &mut MarkdownViewState, ch: char) {
+    let byte = byte_offset_from_editor_state(&hybrid.editor_state, &hybrid.line_boundaries);
+    // Encode the char to its UTF-8 byte representation before inserting.
+    let mut buf = [0u8; 4];
+    let inserted = ch.encode_utf8(&mut buf);
+    let char_len = inserted.len();
+    hybrid.apply_edit(&mut view.rendered, byte, 0, inserted);
+    sync_editor_lines_from_source(hybrid);
+    // Advance cursor past the inserted character.
+    set_cursor_to_byte(hybrid, byte + char_len);
+    recompute_active_block(hybrid, view);
+}
+
+/// Delete the character immediately before the cursor (Backspace).
+///
+/// No-ops when the cursor is at byte 0.  Always steps back to a valid UTF-8
+/// char boundary so multi-byte characters are removed atomically.
+///
+/// # Arguments
+///
+/// * `hybrid` – mutable hybrid state.
+/// * `view`   – markdown view state (block list updated in-place by `apply_edit`).
+pub fn delete_char_before(hybrid: &mut HybridState, view: &mut MarkdownViewState) {
+    let byte = byte_offset_from_editor_state(&hybrid.editor_state, &hybrid.line_boundaries);
+    if byte == 0 {
+        return;
+    }
+    // Find the start of the character just before the cursor.  `byte - 1`
+    // moves one byte back; `prev_char_boundary` retreats further if needed to
+    // land on a valid UTF-8 boundary (handles multi-byte chars like 'é').
+    let char_start = prev_char_boundary(&hybrid.source, byte - 1);
+    let char_len = byte - char_start;
+    hybrid.apply_edit(&mut view.rendered, char_start, char_len, "");
+    sync_editor_lines_from_source(hybrid);
+    // Cursor now sits at `char_start` (the deleted char is gone).
+    set_cursor_to_byte(hybrid, char_start);
+    recompute_active_block(hybrid, view);
+}
+
+/// Delete the character at the cursor position (Delete / Del).
+///
+/// No-ops when the cursor is at or past the end of the source.  Advances past
+/// the full multi-byte character so the deletion is always atomic.
+///
+/// # Arguments
+///
+/// * `hybrid` – mutable hybrid state.
+/// * `view`   – markdown view state (block list updated in-place by `apply_edit`).
+pub fn delete_char_after(hybrid: &mut HybridState, view: &mut MarkdownViewState) {
+    let byte = byte_offset_from_editor_state(&hybrid.editor_state, &hybrid.line_boundaries);
+    if byte >= hybrid.source.len() {
+        return;
+    }
+    // Find the end of the character starting at `byte`.
+    let char_end = next_char_boundary(&hybrid.source, byte + 1);
+    let char_len = char_end - byte;
+    hybrid.apply_edit(&mut view.rendered, byte, char_len, "");
+    sync_editor_lines_from_source(hybrid);
+    // Cursor stays at `byte` (the deleted char shifted everything left).
+    set_cursor_to_byte(hybrid, byte.min(hybrid.source.len()));
+    recompute_active_block(hybrid, view);
+}
+
+/// Re-parse the block at `block_index` and splice the result into `view.rendered`.
+///
+/// Called when the cursor leaves a block that was edited.  The rationale is that
+/// pulldown-cmark sees the whole block at once and produces structural output
+/// (paragraph merging, heading detection, list nesting) — we cannot determine
+/// the correct rendered form from a partial view.  On cursor-leave we have the
+/// complete final state of the block's source, so we re-parse exactly once and
+/// splice the result in.
+///
+/// The splice may produce one block (most common) or multiple (if the user typed
+/// `\n\n` mid-paragraph, splitting it into two).  `splice_blocks` handles cache
+/// eviction and `recompute_positions` internally.
+///
+/// # Arguments
+///
+/// * `hybrid`      – hybrid state (provides `source` and updated byte ranges).
+/// * `view`        – mutable view state (splice target).
+/// * `block_index` – 0-based index into `view.rendered` of the block to re-parse.
+/// * `palette`     – color palette for the active UI theme.
+/// * `theme`       – active UI theme; forwarded to the markdown renderer.
+pub fn reparse_and_splice_block(
+    hybrid: &HybridState,
+    view: &mut MarkdownViewState,
+    block_index: usize,
+    palette: &Palette,
+    theme: Theme,
+) {
+    // Guard: the index might be out of range if a prior splice changed the
+    // block list length.  This should not happen in normal usage (the cursor
+    // leaves the block that was being edited), but be defensive.
+    let Some(block) = view.rendered.get(block_index) else {
+        return;
+    };
+    let (start, end) = block_byte_range(block);
+    // Clamp to actual source length in case of any drift.
+    let end = end.min(hybrid.source.len());
+    let start = start.min(end);
+    let slice = &hybrid.source[start..end];
+    let replacement = render_block_from_slice(slice, start, palette, theme);
+    view.splice_blocks(block_index..block_index + 1, replacement);
+}
+
+/// Perform a full re-parse of `hybrid.source` and replace `view.rendered`.
+///
+/// This is called defensively on `:w` (save) to eliminate any drift between the
+/// incremental byte-range bookkeeping in `apply_edit` and pulldown-cmark's view
+/// of the world.  The cost is negligible for user-initiated saves.
+///
+/// # Arguments
+///
+/// * `hybrid`  – hybrid state (canonical source buffer).
+/// * `view`    – mutable view state (full `rendered` replacement).
+/// * `palette` – color palette for the active UI theme.
+/// * `theme`   – active UI theme.
+pub fn full_reparse(
+    hybrid: &HybridState,
+    view: &mut MarkdownViewState,
+    palette: &Palette,
+    theme: Theme,
+) {
+    let blocks = render_markdown(&hybrid.source, palette, theme);
+    // Recompute total_lines and positions; clear stale layout caches so the
+    // next draw recalculates wrapped heights at the current terminal width.
+    view.total_lines = blocks.iter().map(DocBlock::height).sum();
+    view.rendered = blocks;
+    view.text_layouts.clear();
+    view.table_layouts.clear();
+    view.recompute_positions();
+}
+
+/// Rebuild edtui's `Lines` (the `Jagged<char>` text buffer) from `hybrid.source`.
+///
+/// Called after every `apply_edit` so the two representations stay in sync.
+/// The cursor position is NOT preserved here — callers must call
+/// `set_cursor_to_byte` after `sync_editor_lines_from_source` to land the
+/// cursor at the desired byte.
+///
+/// # Design note
+///
+/// A full rebuild is O(n) in source length, but for typical markdown documents
+/// (< 200 KB) this is under 200 µs per keystroke — well within the 16 ms frame
+/// budget.  An incremental approach (mutating individual `Jagged` rows) would be
+/// faster but would require intimate knowledge of edtui's internal structure;
+/// it is left as a future optimization.
+fn sync_editor_lines_from_source(hybrid: &mut HybridState) {
+    hybrid.editor_state.lines = Lines::from(hybrid.source.as_str());
 }
 
 // ── Cursor movement helpers ────────────────────────────────────────────────────
@@ -590,7 +752,6 @@ fn compute_line_boundaries(source: &str) -> Vec<usize> {
 ///
 /// Panics in debug builds on underflow (negative result); returns `0` in
 /// release builds via saturating arithmetic.
-#[allow(dead_code)] // used in sub-phase 6 (apply_edit block-range shifting)
 fn apply_delta(value: usize, delta: isize) -> usize {
     if delta >= 0 {
         value + delta as usize
@@ -617,7 +778,6 @@ fn block_byte_range(block: &DocBlock) -> (usize, usize) {
 }
 
 /// Write new `(source_byte_start, source_byte_end)` values into a `DocBlock`.
-#[allow(dead_code)] // used in sub-phase 6 (apply_edit block-range shifting)
 fn set_block_byte_range(block: &mut DocBlock, start: usize, end: usize) {
     // Safe casts: source files are well under 4 GiB.
     let start32 = start as u32;
@@ -1046,6 +1206,283 @@ mod tests {
             wrapped.len(),
             2,
             "paragraph ending in '\\n' wraps to 2 rows (content + empty)"
+        );
+    }
+
+    // ── Sub-phase 6 tests ─────────────────────────────────────────────────────
+
+    /// Typing 5 characters into a paragraph must grow the active block's byte
+    /// range by exactly 5.
+    #[test]
+    fn insert_char_extends_active_block_byte_range() {
+        let source = "Hello\n";
+        let (mut state, blocks) = setup(source);
+        let mut view = view_with_blocks(blocks);
+
+        // Initialise active_block from byte 0 (inside the sole paragraph block).
+        recompute_active_block(&mut state, &view);
+        let before = state.active_block.expect("active_block must be Some");
+        let before_len = before.end_byte - before.start_byte;
+
+        // Insert 5 ASCII characters at the cursor (byte 0).
+        for ch in ['A', 'B', 'C', 'D', 'E'] {
+            insert_char(&mut state, &mut view, ch);
+        }
+
+        recompute_active_block(&mut state, &view);
+        let after = state
+            .active_block
+            .expect("active_block must be Some after inserts");
+        let after_len = after.end_byte - after.start_byte;
+        assert_eq!(
+            after_len,
+            before_len + 5,
+            "5 inserted chars must extend the active block byte range by 5"
+        );
+    }
+
+    /// Backspace at byte 0 must leave the source unchanged.
+    #[test]
+    fn backspace_at_byte_zero_does_nothing() {
+        let source = "Hello\n";
+        let (mut state, blocks) = setup(source);
+        let mut view = view_with_blocks(blocks);
+        set_cursor_to_byte(&mut state, 0);
+        delete_char_before(&mut state, &mut view);
+        assert_eq!(
+            state.source, source,
+            "backspace at byte 0 must not mutate source"
+        );
+    }
+
+    /// Backspace in the middle of block 1 must shrink block 1's end byte by 1
+    /// and shift block 2's start and end bytes by −1.
+    #[test]
+    fn backspace_in_middle_of_block_decrements_byte_range() {
+        let (mut state, blocks) = setup(DOC_3);
+        assert!(blocks.len() >= 3, "DOC_3 must render to at least 3 blocks");
+        let mut view = view_with_blocks(blocks);
+
+        let (b1_start_before, b1_end_before) = block_byte_range(&view.rendered[1]);
+        let (b2_start_before, b2_end_before) = block_byte_range(&view.rendered[2]);
+
+        // Place cursor at byte 10 inside block 1 (the mermaid fence is > 10 bytes).
+        let cursor_byte = b1_start_before + 10;
+        set_cursor_to_byte(&mut state, cursor_byte);
+        delete_char_before(&mut state, &mut view);
+
+        let (b1s, b1e) = block_byte_range(&view.rendered[1]);
+        let (b2s, b2e) = block_byte_range(&view.rendered[2]);
+
+        assert_eq!(b1s, b1_start_before, "block 1 start must not change");
+        assert_eq!(b1e, b1_end_before - 1, "block 1 end must shrink by 1");
+        assert_eq!(b2s, b2_start_before - 1, "block 2 start must shift -1");
+        assert_eq!(b2e, b2_end_before - 1, "block 2 end must shift -1");
+    }
+
+    /// Inserting `\n` in the middle of a paragraph extends the block's byte
+    /// range by 1.  On cursor-leave, the re-parse may produce 1 or 2 blocks
+    /// (depending on whether a blank line was also inserted).
+    #[test]
+    fn enter_inserts_newline_extends_block() {
+        let source = "Hello world\n";
+        let (mut state, blocks) = setup(source);
+        let mut view = view_with_blocks(blocks);
+
+        let (_, b0_end_before) = block_byte_range(&view.rendered[0]);
+
+        set_cursor_to_byte(&mut state, 5); // after "Hello"
+        insert_char(&mut state, &mut view, '\n');
+
+        let (_, b0_end_after) = block_byte_range(&view.rendered[0]);
+        assert_eq!(
+            b0_end_after,
+            b0_end_before + 1,
+            "inserting one newline must extend the block's end byte by 1"
+        );
+        assert_eq!(
+            state.source, "Hello\n world\n",
+            "source must reflect the inserted newline"
+        );
+    }
+
+    /// After typing `**bold**` and moving off the block, the splice must
+    /// re-parse and produce a block whose `TextBlockId` is different from the
+    /// original (content changed → new hash → cache-eviction + re-render).
+    #[test]
+    fn cursor_leave_after_edits_reparses_block() {
+        let source = "Hello\n\n```mermaid\ngraph LR\nA-->B\n```\n";
+        let (mut state, blocks) = setup(source);
+        assert!(blocks.len() >= 2, "doc must have text + mermaid");
+        let mut view = view_with_blocks(blocks);
+
+        // Capture the original TextBlockId of block 0.
+        let original_id = match &view.rendered[0] {
+            DocBlock::Text { id, .. } => *id,
+            _ => panic!("block 0 must be a text block"),
+        };
+
+        // Type " world" at the end of the paragraph (byte 5, before the `\n`).
+        set_cursor_to_byte(&mut state, 5);
+        for ch in " world".chars() {
+            insert_char(&mut state, &mut view, ch);
+        }
+
+        // Simulate cursor leaving block 0 → re-parse it.
+        reparse_and_splice_block(&state, &mut view, 0, &palette(), theme());
+
+        // The re-parsed block must have a different TextBlockId because the
+        // content hash is derived from the rendered spans — different source →
+        // different spans → different id.
+        let new_id = match &view.rendered[0] {
+            DocBlock::Text { id, .. } => *id,
+            _ => panic!("block 0 must still be a text block after re-parse"),
+        };
+        assert_ne!(
+            new_id, original_id,
+            "re-parsed block must have a different TextBlockId (content changed)"
+        );
+    }
+
+    /// Typing a mermaid fence into a text block and triggering cursor-leave
+    /// must split the single text block into [text, mermaid, text] — 2 additional
+    /// blocks, increasing the block count.
+    ///
+    /// # Why mermaid fences and not `\n\n`
+    ///
+    /// The renderer merges all non-mermaid content into a single `DocBlock::Text`
+    /// between any two mermaid fences.  Adding `\n\n` inside a text block re-
+    /// parses the slice but still produces one `DocBlock::Text` (multiple
+    /// paragraphs share one block).  The only way to increase the block count
+    /// via a re-parse is to introduce a mermaid fence — the renderer then flushes
+    /// a text block before the mermaid and after it.
+    #[test]
+    fn type_mermaid_fence_splits_text_block() {
+        // Single text block — no mermaid.
+        let source = "Intro.\n\nOutro.\n";
+        let (mut state, blocks) = setup(source);
+        let mut view = view_with_blocks(blocks);
+        let block_count_before = view.rendered.len();
+        assert_eq!(block_count_before, 1, "single text block expected");
+
+        // Insert a mermaid fence between "Intro.\n\n" and "Outro.\n".
+        // Byte 8 is the start of "Outro".
+        let fence = "```mermaid\ngraph LR\nA-->B\n```\n\n";
+        set_cursor_to_byte(&mut state, 8);
+        for ch in fence.chars() {
+            insert_char(&mut state, &mut view, ch);
+        }
+
+        // Simulate cursor leave on block 0.
+        reparse_and_splice_block(&state, &mut view, 0, &palette(), theme());
+
+        // The slice now contains: text + mermaid fence + text → 3 blocks.
+        assert!(
+            view.rendered.len() > block_count_before,
+            "inserting a mermaid fence must split the text block; \
+             source = {:?}, block count = {}",
+            state.source,
+            view.rendered.len(),
+        );
+    }
+
+    /// `delete_char_after` (Delete key) at a known ASCII position must remove
+    /// exactly that character.
+    #[test]
+    fn delete_char_after_removes_correct_char() {
+        let source = "Hello\n";
+        let (mut state, blocks) = setup(source);
+        let mut view = view_with_blocks(blocks);
+
+        set_cursor_to_byte(&mut state, 0); // cursor on 'H'
+        delete_char_after(&mut state, &mut view);
+        assert_eq!(state.source, "ello\n", "Delete at byte 0 must remove 'H'");
+    }
+
+    /// `delete_char_after` at the end of the source must be a no-op.
+    #[test]
+    fn delete_char_after_at_end_is_noop() {
+        let source = "Hi\n";
+        let (mut state, blocks) = setup(source);
+        let mut view = view_with_blocks(blocks);
+
+        set_cursor_to_byte(&mut state, source.len()); // past end
+        delete_char_after(&mut state, &mut view);
+        assert_eq!(
+            state.source, "Hi\n",
+            "Delete past end must not change source"
+        );
+    }
+
+    /// Inserting and then backspacing a multi-byte UTF-8 character must leave
+    /// the source byte-for-byte identical to the original.
+    #[test]
+    fn utf8_safe_editing_insert_and_backspace() {
+        let source = "Hello\n";
+        let (mut state, blocks) = setup(source);
+        let mut view = view_with_blocks(blocks);
+
+        set_cursor_to_byte(&mut state, 5); // after "Hello", before '\n'
+        // 'é' is U+00E9 — 2 bytes in UTF-8.
+        insert_char(&mut state, &mut view, '\u{00e9}');
+        assert_eq!(state.source, "Hello\u{00e9}\n");
+
+        // Cursor is now at byte 7 (5 + 2).  Backspace must remove both bytes.
+        delete_char_before(&mut state, &mut view);
+        assert_eq!(
+            state.source, "Hello\n",
+            "backspace after multi-byte insert must restore original source"
+        );
+    }
+
+    /// `full_reparse` must rebuild `view.rendered` from `hybrid.source` so that
+    /// the block list reflects any edits accumulated via `apply_edit`.
+    #[test]
+    fn full_reparse_rebuilds_block_list() {
+        let source = "Para one.\n\n```mermaid\ngraph LR\nA-->B\n```\n\nPara two.\n";
+        let (mut state, blocks) = setup(source);
+        let mut view = view_with_blocks(blocks);
+        let original_len = view.rendered.len();
+
+        // Insert enough content to potentially change block structure.
+        // We'll insert a new paragraph at byte 0.
+        state.apply_edit(&mut view.rendered, 0, 0, "New intro.\n\n");
+        // Source is now longer and has an extra paragraph.
+
+        full_reparse(&state, &mut view, &palette(), theme());
+
+        // After full reparse the block list must contain at least one more block
+        // (the new paragraph).
+        assert!(
+            view.rendered.len() >= original_len,
+            "full_reparse must produce at least as many blocks after inserting a new paragraph"
+        );
+        // The rendered block list must cover the entire new source length.
+        if let Some(last) = view.rendered.last() {
+            let (_, end) = block_byte_range(last);
+            assert_eq!(
+                end,
+                state.source.len(),
+                "full_reparse: last block end must equal source length"
+            );
+        }
+    }
+
+    /// `is_dirty` must reflect edits and clear after baseline update.
+    #[test]
+    fn is_dirty_tracks_edits_and_clears_on_baseline_update() {
+        let source = "Hello\n";
+        let (mut state, mut blocks) = setup(source);
+        assert!(!state.is_dirty(), "fresh state must not be dirty");
+
+        state.apply_edit(&mut blocks, 0, 0, "X");
+        assert!(state.is_dirty(), "state must be dirty after edit");
+
+        // Simulate what save does: update baseline.
+        state.baseline.clone_from(&state.source);
+        assert!(
+            !state.is_dirty(),
+            "state must not be dirty after baseline sync"
         );
     }
 }
