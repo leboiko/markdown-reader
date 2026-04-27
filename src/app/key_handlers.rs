@@ -1211,9 +1211,11 @@ fn dispatch_hybrid_key(
     let ctrl = m.contains(KeyModifiers::CONTROL);
 
     match code {
-        // ── Word-level motion (Option/Alt) ────────────────────────────────────
-        KeyCode::Left if alt => move_cursor_word_left(hybrid, view),
-        KeyCode::Right if alt => move_cursor_word_right(hybrid, view),
+        // ── Word-level motion (Option/Alt OR Ctrl) ────────────────────────────
+        // Ctrl+arrow is the cross-platform convention (VS Code, browsers,
+        // GitHub). Always works regardless of terminal Option-key quirks.
+        KeyCode::Left if alt || ctrl => move_cursor_word_left(hybrid, view),
+        KeyCode::Right if alt || ctrl => move_cursor_word_right(hybrid, view),
 
         // ── Line-level motion (Cmd) ───────────────────────────────────────────
         // Most macOS terminals capture Cmd themselves so these usually never

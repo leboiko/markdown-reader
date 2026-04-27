@@ -290,7 +290,8 @@ In addition to arrows, Home/End, Page Up/Down, Backspace and Delete:
 
 | Keys | Action |
 |---|---|
-| `Option+Left` / `Option+Right` | Word back / forward |
+| `Option+Left` / `Option+Right` | Word back / forward (macOS) |
+| `Ctrl+Left` / `Ctrl+Right` | Word back / forward (cross-platform, terminal-independent) |
 | `Cmd+Left` / `Cmd+Right` | Line start / end |
 | `Cmd+Up` / `Cmd+Down` | Document start / end |
 | `Option+Backspace` / `Ctrl+W` | Delete previous word |

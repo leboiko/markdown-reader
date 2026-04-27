@@ -5,7 +5,24 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — 1.34.2
+## [Unreleased] — 1.34.3
+
+### Added — Ctrl+Left/Right as terminal-independent word jump in hybrid mode
+
+`Ctrl+Left` / `Ctrl+Right` now jump by word in hybrid mode, matching the
+VS Code / browser / GitHub convention. Crossterm reports `CONTROL` reliably
+on every terminal, so this works regardless of Option-key configuration.
+Use it as the always-on fallback when Option-modifier reporting isn't set
+up in your terminal preferences.
+
+### Added — `cargo run --example key_debug` for diagnosing terminal modifier reporting
+
+A tiny standalone tool that prints the `KeyCode` and `KeyModifiers`
+crossterm receives for every keystroke. Useful when "Option doesn't word-jump"
+or similar — run it, press the keys in question, and see exactly which
+modifier flags (or none) the terminal forwards. Press Ctrl+C / Ctrl+D to exit.
+
+## [1.34.2] — 2026-04-27
 
 ### Fixed — Hybrid mode now recognises Option as `META` modifier too
 
