@@ -680,7 +680,178 @@ pub fn move_cursor_line_end(hybrid: &mut HybridState, view: &MarkdownViewState) 
     recompute_active_block(hybrid, view);
 }
 
+/// Move the cursor one word to the right (Option/Alt+Right on macOS).
+///
+/// Convention: skip any non-word characters under the cursor (whitespace,
+/// punctuation), then skip the following word characters, landing at the
+/// next non-word boundary or EOF. Word characters = alphanumeric + `_`.
+pub fn move_cursor_word_right(hybrid: &mut HybridState, view: &MarkdownViewState) {
+    let byte = byte_offset_from_editor_state(&hybrid.editor_state, &hybrid.line_boundaries);
+    let new_byte = next_word_boundary(&hybrid.source, byte);
+    if new_byte == byte {
+        return;
+    }
+    set_cursor_to_byte(hybrid, new_byte);
+    recompute_active_block(hybrid, view);
+}
+
+/// Move the cursor one word to the left (Option/Alt+Left on macOS).
+///
+/// Mirror of `move_cursor_word_right`: skip trailing non-word chars, then
+/// skip the preceding word, landing at the start of that word.
+pub fn move_cursor_word_left(hybrid: &mut HybridState, view: &MarkdownViewState) {
+    let byte = byte_offset_from_editor_state(&hybrid.editor_state, &hybrid.line_boundaries);
+    let new_byte = prev_word_boundary(&hybrid.source, byte);
+    if new_byte == byte {
+        return;
+    }
+    set_cursor_to_byte(hybrid, new_byte);
+    recompute_active_block(hybrid, view);
+}
+
+/// Move the cursor to the very first byte of the document (Cmd+Up on macOS).
+pub fn move_cursor_doc_start(hybrid: &mut HybridState, view: &MarkdownViewState) {
+    set_cursor_to_byte(hybrid, 0);
+    recompute_active_block(hybrid, view);
+}
+
+/// Move the cursor to the very last byte of the document (Cmd+Down on macOS).
+pub fn move_cursor_doc_end(hybrid: &mut HybridState, view: &MarkdownViewState) {
+    let end = hybrid.source.len();
+    set_cursor_to_byte(hybrid, end);
+    recompute_active_block(hybrid, view);
+}
+
+/// Delete the word immediately before the cursor (Option/Alt+Backspace,
+/// Ctrl+W). Removes characters up to the previous word boundary.
+pub fn delete_word_before(hybrid: &mut HybridState, view: &mut MarkdownViewState) {
+    let byte = byte_offset_from_editor_state(&hybrid.editor_state, &hybrid.line_boundaries);
+    let target = prev_word_boundary(&hybrid.source, byte);
+    if target == byte {
+        return;
+    }
+    let len = byte - target;
+    hybrid.apply_edit(&mut view.rendered, target, len, "");
+    sync_editor_lines_from_source(hybrid);
+    set_cursor_to_byte(hybrid, target);
+    recompute_active_block(hybrid, view);
+}
+
+/// Delete the word immediately after the cursor (Option/Alt+Delete).
+pub fn delete_word_after(hybrid: &mut HybridState, view: &mut MarkdownViewState) {
+    let byte = byte_offset_from_editor_state(&hybrid.editor_state, &hybrid.line_boundaries);
+    let target = next_word_boundary(&hybrid.source, byte);
+    if target == byte {
+        return;
+    }
+    let len = target - byte;
+    hybrid.apply_edit(&mut view.rendered, byte, len, "");
+    sync_editor_lines_from_source(hybrid);
+    set_cursor_to_byte(hybrid, byte);
+    recompute_active_block(hybrid, view);
+}
+
+/// Delete from the cursor back to the start of the line (Cmd+Backspace,
+/// Ctrl+U).
+pub fn delete_to_line_start(hybrid: &mut HybridState, view: &mut MarkdownViewState) {
+    let byte = byte_offset_from_editor_state(&hybrid.editor_state, &hybrid.line_boundaries);
+    let row = hybrid.editor_state.cursor.row;
+    let line_start = hybrid.line_boundaries.get(row).copied().unwrap_or(0);
+    if line_start == byte {
+        return;
+    }
+    let len = byte - line_start;
+    hybrid.apply_edit(&mut view.rendered, line_start, len, "");
+    sync_editor_lines_from_source(hybrid);
+    set_cursor_to_byte(hybrid, line_start);
+    recompute_active_block(hybrid, view);
+}
+
+/// Delete from the cursor to the end of the line (Ctrl+K). Stops at the
+/// trailing newline so the line break itself stays intact.
+pub fn delete_to_line_end(hybrid: &mut HybridState, view: &mut MarkdownViewState) {
+    let byte = byte_offset_from_editor_state(&hybrid.editor_state, &hybrid.line_boundaries);
+    let row = hybrid.editor_state.cursor.row;
+    // End of line = byte before the next line's `\n`, or source.len() on the
+    // final line. `next_line_start - 1` is the `\n` itself; we delete up to
+    // (but not including) it.
+    let line_end = hybrid
+        .line_boundaries
+        .get(row + 1)
+        .map(|&next| next.saturating_sub(1))
+        .unwrap_or(hybrid.source.len());
+    if line_end == byte {
+        return;
+    }
+    let len = line_end - byte;
+    hybrid.apply_edit(&mut view.rendered, byte, len, "");
+    sync_editor_lines_from_source(hybrid);
+    set_cursor_to_byte(hybrid, byte);
+    recompute_active_block(hybrid, view);
+}
+
 // ── Private helpers ───────────────────────────────────────────────────────────
+
+/// Return true when `c` should be considered part of a word for word-motion
+/// shortcuts. Mirrors the macOS Cocoa convention: alphanumeric + `_`.
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// Find the byte offset of the next word boundary after `byte`. Skips
+/// non-word chars under the cursor, then skips the word, lands at the next
+/// non-word boundary or `source.len()`.
+fn next_word_boundary(source: &str, byte: usize) -> usize {
+    let mut i = next_char_boundary(source, byte);
+    // Skip non-word chars.
+    while i < source.len() {
+        let c = source[i..].chars().next().unwrap_or('\0');
+        if is_word_char(c) {
+            break;
+        }
+        i += c.len_utf8();
+    }
+    // Skip word chars.
+    while i < source.len() {
+        let c = source[i..].chars().next().unwrap_or('\0');
+        if !is_word_char(c) {
+            break;
+        }
+        i += c.len_utf8();
+    }
+    i
+}
+
+/// Find the byte offset of the previous word boundary before `byte`.
+fn prev_word_boundary(source: &str, byte: usize) -> usize {
+    let mut i = byte.min(source.len());
+    let step_back = |source: &str, mut pos: usize| -> Option<(usize, char)> {
+        if pos == 0 {
+            return None;
+        }
+        pos -= 1;
+        while pos > 0 && !source.is_char_boundary(pos) {
+            pos -= 1;
+        }
+        let c = source[pos..].chars().next()?;
+        Some((pos, c))
+    };
+    // Skip non-word chars going back.
+    loop {
+        match step_back(source, i) {
+            Some((new_pos, c)) if !is_word_char(c) => i = new_pos,
+            _ => break,
+        }
+    }
+    // Skip word chars going back.
+    loop {
+        match step_back(source, i) {
+            Some((new_pos, c)) if is_word_char(c) => i = new_pos,
+            _ => break,
+        }
+    }
+    i
+}
 
 /// Return the largest byte index `<= byte` that is a valid UTF-8 char boundary
 /// in `s`.  When `byte == 0` this is always 0.
@@ -2048,5 +2219,110 @@ mod tests {
 
         // Contiguity invariant must still hold.
         assert_contiguous(&view.rendered, state.source.len());
+    }
+
+    // ── Word / line motion + deletion (Option / Cmd / Ctrl shortcuts) ────────
+
+    /// `move_cursor_word_right` skips non-word chars then a word, landing
+    /// after the word.
+    #[test]
+    fn word_right_lands_after_current_word() {
+        let source = "alpha beta gamma\n";
+        let (mut state, blocks) = setup(source);
+        let view = view_with_blocks(blocks);
+        set_cursor_to_byte(&mut state, 0);
+        super::move_cursor_word_right(&mut state, &view);
+        let byte =
+            byte_offset_from_editor_state(&state.editor_state, &state.line_boundaries);
+        assert_eq!(byte, 5, "should land at the space after 'alpha', got {byte}");
+    }
+
+    /// From the middle of a word, `move_cursor_word_right` finishes the
+    /// current word before advancing.
+    #[test]
+    fn word_right_from_middle_of_word_finishes_it() {
+        let source = "alpha beta gamma\n";
+        let (mut state, blocks) = setup(source);
+        let view = view_with_blocks(blocks);
+        set_cursor_to_byte(&mut state, 2); // inside "alpha"
+        super::move_cursor_word_right(&mut state, &view);
+        let byte =
+            byte_offset_from_editor_state(&state.editor_state, &state.line_boundaries);
+        assert_eq!(byte, 5, "should finish 'alpha', got {byte}");
+    }
+
+    /// `move_cursor_word_left` from EOL retreats to the start of the last word.
+    #[test]
+    fn word_left_lands_at_start_of_previous_word() {
+        let source = "alpha beta\n";
+        let (mut state, blocks) = setup(source);
+        let view = view_with_blocks(blocks);
+        // Cursor at end of "beta" (byte 10 = '\n').
+        set_cursor_to_byte(&mut state, 10);
+        super::move_cursor_word_left(&mut state, &view);
+        let byte =
+            byte_offset_from_editor_state(&state.editor_state, &state.line_boundaries);
+        assert_eq!(byte, 6, "should land at start of 'beta', got {byte}");
+    }
+
+    /// `delete_word_before` removes characters back to the previous word
+    /// boundary and leaves the source mutated accordingly.
+    #[test]
+    fn delete_word_before_removes_one_word() {
+        let source = "alpha beta gamma\n";
+        let (mut state, blocks) = setup(source);
+        let mut view = view_with_blocks(blocks);
+        set_cursor_to_byte(&mut state, 10); // end of "beta"
+        super::delete_word_before(&mut state, &mut view);
+        assert_eq!(state.source, "alpha  gamma\n", "got {:?}", state.source);
+        let byte =
+            byte_offset_from_editor_state(&state.editor_state, &state.line_boundaries);
+        assert_eq!(byte, 6, "cursor should sit where 'beta' started");
+    }
+
+    /// `delete_to_line_start` clears everything from the cursor to column 0
+    /// of the current line.
+    #[test]
+    fn delete_to_line_start_clears_to_column_zero() {
+        let source = "first line\nsecond line\n";
+        let (mut state, blocks) = setup(source);
+        let mut view = view_with_blocks(blocks);
+        // Cursor at byte 13 = the 'c' in "second" on line 1
+        // (line 1 starts at byte 11, so 13 - 11 = col 2).
+        set_cursor_to_byte(&mut state, 13);
+        super::delete_to_line_start(&mut state, &mut view);
+        assert_eq!(state.source, "first line\ncond line\n", "got {:?}", state.source);
+    }
+
+    /// `delete_to_line_end` removes from the cursor up to (but not including)
+    /// the trailing newline.
+    #[test]
+    fn delete_to_line_end_keeps_trailing_newline() {
+        let source = "first line\nsecond\n";
+        let (mut state, blocks) = setup(source);
+        let mut view = view_with_blocks(blocks);
+        set_cursor_to_byte(&mut state, 6); // mid-"first"
+        super::delete_to_line_end(&mut state, &mut view);
+        assert_eq!(state.source, "first \nsecond\n", "got {:?}", state.source);
+    }
+
+    /// `move_cursor_doc_start` and `move_cursor_doc_end` jump to the
+    /// document boundaries regardless of starting position.
+    #[test]
+    fn doc_start_and_doc_end_jump_to_boundaries() {
+        let source = "abc\ndef\nghi\n";
+        let (mut state, blocks) = setup(source);
+        let view = view_with_blocks(blocks);
+        set_cursor_to_byte(&mut state, 5);
+        super::move_cursor_doc_start(&mut state, &view);
+        assert_eq!(
+            byte_offset_from_editor_state(&state.editor_state, &state.line_boundaries),
+            0
+        );
+        super::move_cursor_doc_end(&mut state, &view);
+        assert_eq!(
+            byte_offset_from_editor_state(&state.editor_state, &state.line_boundaries),
+            source.len()
+        );
     }
 }

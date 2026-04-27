@@ -283,6 +283,22 @@ reopening the same directory resumes where you left off.
 | `G` | Jump to bottom |
 | `i` | Enter hybrid live-preview mode |
 | `I` | Enter legacy fullscreen edit mode |
+
+#### Hybrid mode shortcuts
+
+In addition to arrows, Home/End, Page Up/Down, Backspace and Delete:
+
+| Keys | Action |
+|---|---|
+| `Option+Left` / `Option+Right` | Word back / forward |
+| `Cmd+Left` / `Cmd+Right` | Line start / end |
+| `Cmd+Up` / `Cmd+Down` | Document start / end |
+| `Option+Backspace` / `Ctrl+W` | Delete previous word |
+| `Option+Delete` | Delete next word |
+| `Cmd+Backspace` / `Ctrl+U` | Delete to line start |
+| `Ctrl+K` | Delete to line end |
+| `Ctrl+A` / `Ctrl+E` | Line start / end (works over SSH) |
+| `:w` / `:wq` / `:q` / `:q!` | Save / save+quit / quit / force quit |
 | `V` | Enter visual-line selection mode |
 | `yy` | Copy current line to clipboard |
 | `y` (visual) | Copy selected range to clipboard and exit visual mode |

@@ -5,7 +5,36 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — 1.34.0
+## [Unreleased] — 1.34.1
+
+### Added — Hybrid mode word-, line-, and document-level navigation shortcuts
+
+Hybrid mode now understands the macOS Option / Command modifiers and the
+Unix-style Ctrl shortcuts most editors use, so navigation feels native
+instead of one-character-at-a-time.
+
+**Motion:**
+- `Option + Left` / `Option + Right` — jump one word back / forward.
+- `Cmd + Left` / `Cmd + Right` — jump to line start / end.
+- `Cmd + Up` / `Cmd + Down` — jump to document start / end.
+- `Ctrl + A` / `Ctrl + E` — line start / end (works over SSH and inside
+  terminals that swallow Cmd).
+
+**Editing:**
+- `Option + Backspace` / `Ctrl + W` — delete the previous word.
+- `Option + Delete` — delete the next word.
+- `Cmd + Backspace` / `Ctrl + U` — delete to line start.
+- `Ctrl + K` — delete to line end.
+
+Modifier-bearing `Char` events no longer fall through to the default
+"insert this letter literally" arm — chord shortcuts that don't match a
+binding are now silently dropped instead of injecting stray letters.
+
+7 new tests in `ui::hybrid_editor::tests` cover word navigation in both
+directions, mid-word entry, the three deletion helpers, and the
+document-start/end jumps. 377 tests total (was 370).
+
+## [1.34.0] — 2026-04-27
 
 ### Fixed — Hybrid mode block-level reveal now operates per structural element
 

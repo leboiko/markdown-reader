@@ -981,7 +981,7 @@ impl App {
                         // Split-borrow: `h` mutably borrows `tab2.hybrid`;
                         // `view` mutably borrows `tab2.view`.  Disjoint — safe.
                         let view = &mut tab2.view;
-                        dispatch_hybrid_key(h, view, key.code, view_height);
+                        dispatch_hybrid_key(h, view, key, view_height);
                     }
                 }
             }
@@ -1183,31 +1183,68 @@ impl App {
 fn dispatch_hybrid_key(
     hybrid: &mut crate::ui::hybrid_editor::HybridState,
     view: &mut crate::ui::markdown_view::MarkdownViewState,
-    code: KeyCode,
+    key: crossterm::event::KeyEvent,
     view_height: usize,
 ) {
     use crate::ui::hybrid_editor::{
-        delete_char_after, delete_char_before, insert_char, move_cursor_down, move_cursor_left,
-        move_cursor_line_end, move_cursor_line_start, move_cursor_page_down, move_cursor_page_up,
-        move_cursor_right, move_cursor_up,
+        delete_char_after, delete_char_before, delete_to_line_end, delete_to_line_start,
+        delete_word_after, delete_word_before, insert_char, move_cursor_doc_end,
+        move_cursor_doc_start, move_cursor_down, move_cursor_left, move_cursor_line_end,
+        move_cursor_line_start, move_cursor_page_down, move_cursor_page_up, move_cursor_right,
+        move_cursor_up, move_cursor_word_left, move_cursor_word_right,
     };
+    use crossterm::event::KeyModifiers;
+
+    let code = key.code;
+    let m = key.modifiers;
+    // Aggregate modifier flags so the match below can read like a keymap.
+    let alt = m.contains(KeyModifiers::ALT); // macOS Option
+    let cmd = m.contains(KeyModifiers::SUPER); // macOS Command (rarely passes through)
+    let ctrl = m.contains(KeyModifiers::CONTROL);
 
     match code {
+        // ── Word-level motion (Option/Alt) ────────────────────────────────────
+        KeyCode::Left if alt => move_cursor_word_left(hybrid, view),
+        KeyCode::Right if alt => move_cursor_word_right(hybrid, view),
+
+        // ── Line-level motion (Cmd) ───────────────────────────────────────────
+        // Most macOS terminals capture Cmd themselves so these usually never
+        // fire; the Home/End and Ctrl+A/E paths below are the reliable ones.
+        KeyCode::Left if cmd => move_cursor_line_start(hybrid, view),
+        KeyCode::Right if cmd => move_cursor_line_end(hybrid, view),
+
+        // ── Document-level motion (Cmd) ───────────────────────────────────────
+        KeyCode::Up if cmd => move_cursor_doc_start(hybrid, view),
+        KeyCode::Down if cmd => move_cursor_doc_end(hybrid, view),
+
+        // ── Word-level deletion ───────────────────────────────────────────────
+        KeyCode::Backspace if alt => delete_word_before(hybrid, view),
+        KeyCode::Delete if alt => delete_word_after(hybrid, view),
+
+        // ── Line-level deletion ───────────────────────────────────────────────
+        KeyCode::Backspace if cmd => delete_to_line_start(hybrid, view),
+
+        // ── Unix-style Ctrl shortcuts (work everywhere, including over SSH) ──
+        KeyCode::Char('a') if ctrl => move_cursor_line_start(hybrid, view),
+        KeyCode::Char('e') if ctrl => move_cursor_line_end(hybrid, view),
+        KeyCode::Char('w') if ctrl => delete_word_before(hybrid, view),
+        KeyCode::Char('u') if ctrl => delete_to_line_start(hybrid, view),
+        KeyCode::Char('k') if ctrl => delete_to_line_end(hybrid, view),
+
         // ── Editing keys ──────────────────────────────────────────────────────
         // Characters are inserted literally at the cursor.  The active block
         // renders raw while the cursor is inside it; pulldown-cmark styling
         // only appears after the cursor leaves (cursor-leave re-parse).
+        // Skip insertion when a non-Shift modifier is held — those combinations
+        // either matched a shortcut above or are intentionally unbound.
+        KeyCode::Char(_) if alt || cmd || ctrl => {}
         KeyCode::Char(c) => insert_char(hybrid, view, c),
         KeyCode::Enter => insert_char(hybrid, view, '\n'),
         KeyCode::Tab => insert_char(hybrid, view, '\t'),
         KeyCode::Backspace => delete_char_before(hybrid, view),
         KeyCode::Delete => delete_char_after(hybrid, view),
 
-        // ── Cursor movement ───────────────────────────────────────────────────
-        // These mirror sub-phase 5 but now take `&mut view` so that the editing
-        // helpers above can also receive a `&mut view`.  The movement helpers
-        // themselves only need `&view` internally, but accepting `&mut` here
-        // avoids having two incompatible call signatures.
+        // ── Plain cursor movement ─────────────────────────────────────────────
         KeyCode::Left => move_cursor_left(hybrid, view),
         KeyCode::Right => move_cursor_right(hybrid, view),
         KeyCode::Down => move_cursor_down(hybrid, view),
@@ -1216,6 +1253,7 @@ fn dispatch_hybrid_key(
         KeyCode::PageUp => move_cursor_page_up(hybrid, view, view_height),
         KeyCode::Home => move_cursor_line_start(hybrid, view),
         KeyCode::End => move_cursor_line_end(hybrid, view),
+
         // Unknown keys are no-ops.
         _ => {}
     }

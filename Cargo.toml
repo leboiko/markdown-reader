@@ -3,7 +3,7 @@ members = [".", "crates/mermaid-text"]
 
 [package]
 name = "markdown-tui-explorer"
-version = "1.34.0"
+version = "1.34.1"
 edition = "2024"
 description = "A terminal-based markdown file browser and viewer with search, syntax highlighting, and live reload"
 license = "MIT"
