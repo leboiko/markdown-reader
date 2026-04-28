@@ -3,6 +3,48 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.28.0 — 2026-04-28 — Width-budget label wrapping (md-tui integration request)
+
+### Added — Label-wrap fallback in `render_with_width`
+
+Reported by henriklovhaug, maintainer of `md-tui`, in
+https://github.com/henriklovhaug/md-tui/issues/76.
+
+**Problem**: `render_with_width(source, Some(N))` is documented to produce
+output that fits within N columns, but when individual node labels are wider
+than the budget the progressive-compaction passes (gap 4/2→2/1→1/0) cannot
+help — the renderer returned the most-compact attempt as-is, which could
+exceed the budget by a substantial margin.
+
+**Repro**:
+```
+flowchart LR
+    A[A long node label that probably exceeds the budget] --> B[Another wide one] --> C[Yet another]
+```
+Previously rendered at 82 display columns under `--width 80` (2 over budget).
+Now renders at 74 display columns — within budget.
+
+**Mechanism**: After the gap-reduction loop completes without meeting the
+budget, the renderer now:
+1. Computes the widest node label across all nodes and the actual output width.
+2. Derives a target max-label width by scaling proportionally:
+   `target = max_label_width * budget / actual_width` (floor: 6 display cols).
+3. Clones the graph with all labels word-wrapped to that target width using a
+   greedy whitespace-split strategy (hard mid-word break for tokens wider than
+   the target).
+4. Re-renders with the most-compact gap configuration and returns the result if
+   it fits, or the wrapped version as best-effort if it is narrower than the
+   unwrapped fallback.
+
+**Invariant preserved**: Diagrams that already fit within the budget at any
+compaction level return without any label modification — the wrap pass is only
+triggered as a last resort.
+
+**Corpus diff**: 1 snapshot changed (Bucket B improvement):
+- `state_circuit_breaker.width80`: reduced from 412 display columns to 129.
+  Long edge labels still exceed budget (edge labels are not wrapped in this
+  release), but node labels are now wrapped correctly.
+
 ## 0.27.3 — 2026-04-28 — Fix B12 rounded-box bottom pierce
 
 ### Fixed — B12: `┬` glyph stamped onto rounded-box bottom border row

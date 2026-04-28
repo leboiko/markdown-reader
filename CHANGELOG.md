@@ -5,7 +5,21 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — 1.34.21
+## [Unreleased] — 1.34.22
+
+### Changed — mermaid-text 0.28.0 (width-budget label wrapping)
+
+Bumped `mermaid-text` dependency to 0.28.0. Adds label-wrap fallback to
+`render_with_width`: when gap reduction alone cannot meet the column budget,
+node labels are now word-wrapped to a proportionally scaled target width and
+re-rendered at minimum gap. Diagrams that already fit the budget are unaffected.
+Fixes the md-tui integration request:
+https://github.com/henriklovhaug/md-tui/issues/76.
+1 corpus snapshot improved (Bucket B: `state_circuit_breaker.width80`
+reduced from 412 to 129 display columns), 0 regressions.
+See `crates/mermaid-text/CHANGELOG.md §0.28.0` for full mechanism details.
+
+## [1.34.21] — 2026-04-28
 
 ### Changed — mermaid-text 0.27.3 (B12 rounded-box bottom pierce fix)
 

@@ -332,6 +332,33 @@ pub fn render_with_width(input: &str, max_width: Option<usize>) -> Result<String
         best = candidate;
     }
 
+    // 5. Label-wrap fallback: gap reduction alone couldn't meet the budget.
+    //    Estimate a target max label width that would allow the diagram to fit,
+    //    then re-render with labels wrapped to that width.
+    let actual_w = max_line_width(&best);
+    if actual_w > budget {
+        let max_lbl = max_node_label_width(&graph);
+        if max_lbl > 0 {
+            // Scale the widest label proportionally: target = max_lbl * budget /
+            // actual_w. Apply a conservative floor of 6 display columns so we
+            // never produce a degenerate single-character-per-line result.
+            let target_lbl = ((max_lbl * budget) / actual_w).max(6);
+            if target_lbl < max_lbl {
+                let wrapped = graph_with_wrapped_labels(&graph, target_lbl);
+                let min_cfg = COMPACT_CONFIGS.last().expect("non-empty");
+                let candidate = render_with_config(&wrapped, min_cfg);
+                if max_line_width(&candidate) <= budget {
+                    return Ok(candidate);
+                }
+                // Even with wrapping the diagram still overflows — return the
+                // wrapped version as best-effort (it's narrower than `best`).
+                if max_line_width(&candidate) < actual_w {
+                    best = candidate;
+                }
+            }
+        }
+    }
+
     Ok(best)
 }
 
@@ -614,8 +641,30 @@ fn render_flowchart_with_color(
             };
         }
     }
-    // Nothing fit; emit the most compact candidate.
+
+    // Label-wrap fallback: estimate a target label width and re-render.
     let last = compact_configs.last().expect("non-empty");
+    let best_plain = render_with_config(graph, last);
+    let actual_w = max_line_width(&best_plain);
+    if actual_w > budget {
+        let max_lbl = max_node_label_width(graph);
+        if max_lbl > 0 {
+            let target_lbl = ((max_lbl * budget) / actual_w).max(6);
+            if target_lbl < max_lbl {
+                let wrapped = graph_with_wrapped_labels(graph, target_lbl);
+                let candidate = render_with_config(&wrapped, last);
+                if max_line_width(&candidate) <= budget || max_line_width(&candidate) < actual_w {
+                    return if with_color {
+                        render_with_config_color(&wrapped, last, true)
+                    } else {
+                        candidate
+                    };
+                }
+            }
+        }
+    }
+
+    // Nothing fit; emit the most compact candidate.
     render_with_config_color(graph, last, with_color)
 }
 
@@ -821,6 +870,126 @@ fn max_line_width(text: &str) -> usize {
         .map(unicode_width::UnicodeWidthStr::width)
         .max()
         .unwrap_or(0)
+}
+
+/// Wrap a single label string to at most `max_chars` display columns per line.
+///
+/// Splitting strategy (greedy, word-boundary preferred):
+/// 1. Split on whitespace. Accumulate words onto the current line until
+///    adding the next word would exceed `max_chars`.
+/// 2. If a single word is wider than `max_chars`, break it mid-word at
+///    exactly `max_chars` characters (hard break).
+///
+/// Returns the same string unchanged when every line already fits within
+/// `max_chars`, so callers do not need to guard the call site.
+///
+/// `max_chars` is measured in Unicode display columns (via `unicode-width`).
+/// A minimum of 1 is enforced to avoid an infinite loop on degenerate inputs.
+fn wrap_label(text: &str, max_chars: usize) -> String {
+    use unicode_width::UnicodeWidthChar;
+    use unicode_width::UnicodeWidthStr;
+
+    // Clamp to at least 1 so we never spin forever.
+    let max_chars = max_chars.max(1);
+
+    // Fast path: already fits on every existing line.
+    if text.lines().all(|l| UnicodeWidthStr::width(l) <= max_chars) {
+        return text.to_owned();
+    }
+
+    let mut out = String::with_capacity(text.len());
+    // Process each pre-existing line separately so author-inserted `\n` are
+    // preserved (the state-diagram parser already produces multi-line labels).
+    for (line_idx, line) in text.lines().enumerate() {
+        if line_idx > 0 {
+            out.push('\n');
+        }
+        if UnicodeWidthStr::width(line) <= max_chars {
+            out.push_str(line);
+            continue;
+        }
+        // Word-wrap this line.
+        let mut current_w = 0usize;
+        let mut first_word_on_line = true;
+        for word in line.split_whitespace() {
+            let word_w = UnicodeWidthStr::width(word);
+            if first_word_on_line {
+                // First word on a fresh line: always emit it (possibly with a
+                // hard mid-word break if it alone exceeds the budget).
+                if word_w <= max_chars {
+                    out.push_str(word);
+                    current_w = word_w;
+                } else {
+                    // Hard break: emit max_chars columns, then push a newline
+                    // and continue with the remainder as a new "word".
+                    let mut col = 0usize;
+                    for ch in word.chars() {
+                        let ch_w = UnicodeWidthChar::width(ch).unwrap_or(1);
+                        if col + ch_w > max_chars {
+                            out.push('\n');
+                            col = 0;
+                        }
+                        out.push(ch);
+                        col += ch_w;
+                    }
+                    current_w = col;
+                }
+                first_word_on_line = false;
+            } else {
+                // Subsequent word: fits on current line with a space separator?
+                let needed = current_w + 1 + word_w;
+                if needed <= max_chars {
+                    out.push(' ');
+                    out.push_str(word);
+                    current_w = needed;
+                } else {
+                    // Start a new line.
+                    out.push('\n');
+                    if word_w <= max_chars {
+                        out.push_str(word);
+                        current_w = word_w;
+                    } else {
+                        // Hard break within this word too.
+                        let mut col = 0usize;
+                        for ch in word.chars() {
+                            let ch_w = UnicodeWidthChar::width(ch).unwrap_or(1);
+                            if col + ch_w > max_chars {
+                                out.push('\n');
+                                col = 0;
+                            }
+                            out.push(ch);
+                            col += ch_w;
+                        }
+                        current_w = col;
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Return the widest node label width (in display columns) across all nodes
+/// in `graph`. Returns 0 for graphs with no nodes.
+fn max_node_label_width(graph: &crate::types::Graph) -> usize {
+    graph
+        .nodes
+        .iter()
+        .map(|n| n.label_width())
+        .max()
+        .unwrap_or(0)
+}
+
+/// Clone `graph` and apply `wrap_label(label, max_chars)` to every node label.
+///
+/// Only nodes whose label already exceeds `max_chars` display columns are
+/// modified; shorter labels pass through unchanged.
+fn graph_with_wrapped_labels(graph: &crate::types::Graph, max_chars: usize) -> crate::types::Graph {
+    let mut g = graph.clone();
+    for node in &mut g.nodes {
+        node.label = wrap_label(&node.label, max_chars);
+    }
+    g
 }
 
 // ---------------------------------------------------------------------------
@@ -1895,5 +2064,98 @@ mod tests {
             !out.contains('▴'),
             "unexpected ▴ in forward-only LR graph:\n{out}"
         );
+    }
+
+    // ---- Width-budget label-wrap tests (0.28.0) ---------------------------
+
+    /// `render_with_width_respects_budget_via_label_wrap` — the primary regression
+    /// test for the width-budget label-wrapping feature (md-tui integration request,
+    /// https://github.com/henriklovhaug/md-tui/issues/76).
+    ///
+    /// The repro diagram has three nodes with labels wider than 80 cols combined.
+    /// After gap reduction alone fails, the label-wrap fallback must produce output
+    /// where every rendered line is <= 80 display columns.
+    #[test]
+    fn render_with_width_respects_budget_via_label_wrap() {
+        let src = "flowchart LR\n    \
+            A[A long node label that probably exceeds the budget] --> \
+            B[Another wide one] --> \
+            C[Yet another]";
+        let out = render_with_width(src, Some(80)).unwrap();
+        // All word fragments must still appear in the output.
+        assert!(out.contains("long node label"), "label fragment missing:\n{out}");
+        assert!(out.contains("Another"), "label fragment missing:\n{out}");
+        // Every rendered line must fit within the 80-column budget.
+        let max_w = out
+            .lines()
+            .map(unicode_width::UnicodeWidthStr::width)
+            .max()
+            .unwrap_or(0);
+        assert!(
+            max_w <= 80,
+            "output exceeds budget: max line width = {max_w}, expected <= 80:\n{out}"
+        );
+    }
+
+    /// Compact diagrams that already fit within the budget must NOT be affected
+    /// by the label-wrap fallback. Output must be byte-identical to the
+    /// natural-size rendering (no spurious wrapping introduced).
+    #[test]
+    fn compact_diagram_not_affected_by_label_wrap() {
+        let src = "graph LR\nA[Start] --> B[End]";
+        let natural = render(src).unwrap();
+        let constrained = render_with_width(src, Some(80)).unwrap();
+        assert_eq!(
+            natural, constrained,
+            "compact diagram output changed under width=80 constraint:\nnatural:\n{natural}\nconstrained:\n{constrained}"
+        );
+    }
+
+    /// `wrap_label` — unit tests for the greedy word-wrap helper.
+    #[test]
+    fn wrap_label_short_input_unchanged() {
+        assert_eq!(wrap_label("hello", 20), "hello");
+        assert_eq!(wrap_label("hello world", 20), "hello world");
+    }
+
+    #[test]
+    fn wrap_label_wraps_at_word_boundary() {
+        let result = wrap_label("hello world foo bar", 10);
+        // Each line must be <= 10 chars.
+        for line in result.lines() {
+            assert!(
+                line.len() <= 10,
+                "line too long: {line:?} in result: {result:?}"
+            );
+        }
+        // All words must appear.
+        assert!(result.contains("hello"));
+        assert!(result.contains("world"));
+        assert!(result.contains("foo"));
+        assert!(result.contains("bar"));
+    }
+
+    #[test]
+    fn wrap_label_hard_breaks_overlong_token() {
+        // A single word longer than the max must still be wrapped (hard break).
+        let result = wrap_label("abcdefghij", 4);
+        for line in result.lines() {
+            assert!(
+                line.len() <= 4,
+                "hard-break line too long: {line:?} in result: {result:?}"
+            );
+        }
+        // Reassembled must equal original (no chars dropped).
+        let reassembled: String = result.split('\n').collect();
+        assert_eq!(reassembled, "abcdefghij");
+    }
+
+    #[test]
+    fn wrap_label_preserves_existing_newlines() {
+        // Author-inserted \n (e.g. from state-diagram parser) must be kept.
+        let input = "line one\nline two\nline three";
+        let result = wrap_label(input, 30);
+        // Lines are shorter than 30 so no extra wrapping needed.
+        assert_eq!(result, input);
     }
 }
