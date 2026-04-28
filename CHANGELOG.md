@@ -5,7 +5,25 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — 1.34.24
+## [1.34.25] — 2026-04-28
+
+### Fixed — Search modal query text invisible on light themes
+
+The query bar in the global search modal used `Span::raw` for the typed
+query text — which inherits the terminal's default foreground (typically
+light) instead of the theme's `foreground` color. On light themes
+(Solarized Light, GitHub Light, Gruvbox Light) the text was invisible
+against the modal's elevated-surface background. Now uses
+`Span::styled(_, fg(p.foreground))` so the query text contrasts correctly
+against any theme.
+
+### Added — Demo GIF + vhs tape script
+
+`docs/assets/demo.md` curated demo content + `docs/assets/demo.tape` vhs
+script that produces `docs/assets/demo.gif` for the README. Re-recordable
+deterministically via `vhs docs/assets/demo.tape`.
+
+## [1.34.24] — 2026-04-28
 
 ### Changed — mermaid-text 0.28.2 (subgraph title pierce fix)
 

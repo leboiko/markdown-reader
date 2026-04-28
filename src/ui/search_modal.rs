@@ -272,7 +272,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     // ── Query bar ────────────────────────────────────────────────────────────
     let query_line = Line::from(vec![
         Span::styled(" / ", Style::default().fg(p.accent_alt)),
-        Span::raw(app.search.query.as_str()),
+        Span::styled(app.search.query.as_str(), Style::default().fg(p.foreground)),
         // Block cursor drawn with a blinking modifier.
         Span::styled(
             "█",
