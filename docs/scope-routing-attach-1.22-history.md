@@ -303,3 +303,100 @@ for a `Running` state-diagram box, is adjacent to the border cell.
    The roadmap describes the symptom (`┌─────┐────┐`) but does not name a snapshot
    or test fixture. Phase 3 should create a minimal snapshot for this diagram before
    any code is touched, to serve as the regression guard.
+
+---
+
+## Phase 3 Step 3 attempt notes (re-dispatch, 2026-04-28)
+
+### Hypothesis tried
+
+**Root-cause confirmed by tracing (no code changed):** The B3 bug is a routing
+*quality* issue — not an obstacle-map correctness bug. The exact chain:
+
+1. `spread_sources` (LR/RL, 3 forward-edges from App) assigns exit rows using
+   step=1 centered on the node: rows R, R+1, R+2 for a height-3 box.  Edge 0
+   (App→PostgreSQL, the longest edge) receives row R — the TOP border row of App.
+
+2. At exit cell `(app_width, R)`:
+   - **H-first L-route**: horizontal segment at row R hits RabbitMQ's NodeBox
+     (same row, columns to the right) → `l_cost` returns `None`.
+   - **V-first L-route**: corner at `(app_width, pg_row)`, vertical segment
+     then horizontal at pg_row — the horizontal segment passes through RabbitMQ's
+     NodeBox body → `l_cost` returns `None`.
+   - Both L-routes `None` → A\* takes over.
+
+3. A\* from `(app_width, R)` evaluates:
+   - UP to `(app_width, R-1)`: 1 step, free perimeter corridor — total UP cost ~1.
+   - DOWN to `(app_width, R+1)`: crosses EdgeOccupiedHorizontal from App→Cache
+     (cost 1+CROSS_AXIS=4), then App→Queue exit row (similar) — total DOWN cost ~4+
+     before reaching the below-RabbitMQ corridor (R+4).
+   - A\* rationally picks UP (total path: 1 up + ~40 right + ~3 down) over
+     DOWN (4 down + ~40 right + ~3 up), saving ~6 g-cost units.
+
+4. Result: the App→PostgreSQL route wraps OVER the top of the diagram via the
+   perimeter corridor, producing the `┌┼───────────────┐│` row above App.
+
+### Scope it expanded to
+
+Every candidate fix examined exceeded the 50-line / 5-snapshot limit:
+
+- **UP-penalty in A\***: adding a cost for going UP in LR forward-edge routing
+  biases A\* against the top perimeter for ALL LR diagrams, not just B3.
+  Estimated ≥15 LR corpus snapshots would change.  Scope: OVER LIMIT.
+
+- **Source-spread border-skip**: clamping spread to interior rows only
+  (skip top/bottom border rows) collapses all 3 exits to 1 interior row for
+  a height-3 box — no spread possible.  Doesn't fix B3 even in theory.
+  Scope: irrelevant.
+
+- **New U-route option in `try_l_route`**: adding a 3-segment "go below
+  RabbitMQ" route option is a new routing strategy requiring new logic in
+  `try_l_route` (or a new `try_u_route` helper) plus A\* fallback handling.
+  Scope: easily > 50 lines, unknown snapshot count.
+
+- **Routing order change (long edges first)**: reversing the shortest-first
+  ordering so long edges claim corridors before short edges is a global change
+  to `order_edges`.  Known to increase crossings on dense graphs (confirmed in
+  Phase 2 archaeology).  Scope: REGRESSION risk.
+
+### Why stopped
+
+No targeted fix within the 50-line / 5-snapshot scope boundary fixes B3 without
+simultaneously affecting many other LR diagrams.  The previous re-dispatch
+failure (170-line refactor) is explained: fixing B3 correctly requires one of:
+
+1. A new multi-segment route strategy (beyond the current straight/L/A\*
+   progression).
+2. An obstacle-map enhancement that makes the perimeter above a forward-edge
+   source more expensive *contextually* (i.e., only when that perimeter is
+   not on the natural flow path).
+3. A post-routing correction pass that detects "route wraps over source box"
+   and re-routes the specific edge with a different starting hint.
+
+### Recommendation
+
+Defer B3 to a **multi-day scoped initiative** with the following plan:
+
+- **Step 1**: Add a "U-route" candidate in `router.rs` that tries the 3-segment
+  path `exit → down N rows → right → up M rows → target` for LR/RL layouts when
+  both L-routes are None (blocked by NodeBox).  This is ~30 lines in `router.rs`
+  and is the most targeted mechanical fix for B3 specifically.
+
+- **Step 2**: Measure snapshot impact of Step 1 alone.  If ≤ 5 snapshots differ,
+  ship as B3 fix.  If more, investigate per-snapshot whether each change is an
+  Improvement or Regression before deciding.
+
+- **Step 3**: Only if Step 1 produces > 5 changes or regressions: consider the
+  perimeter-penalty approach with an additional obstacle classification
+  `PerimeterAbove`/`PerimeterBelow` that forward edges pay a moderate cost for
+  (say 4.0 — cheaper than SAME_AXIS but enough to prefer the below corridor
+  over the above when both are equidistant).
+
+The U-route approach (Step 1) is the minimum-risk angle because:
+- It only activates when BOTH L-routes return `None` (blocked by NodeBox) AND
+  the preferred path (H-first for LR) leads upward.
+- It does not change A\* cost weights, so dense-graph crossing counts are
+  unaffected.
+- It is additive: if the U-route fails, A\* still runs as fallback.
+
+Estimated effort: 1–2 focused hours for a careful implementation and harness run.
