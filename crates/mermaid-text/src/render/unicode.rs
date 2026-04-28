@@ -299,6 +299,25 @@ fn back_edge_border_cells(
     }
 }
 
+/// Return true for node shapes whose bottom border row contains `╰──╯` rounded
+/// corners rather than plain `└──┘` square corners.
+///
+/// For these shapes, stamping a `┬` junction ON the bottom border row (as
+/// `back_edge_border_joins` does for LR/RL source nodes) visually pierces the
+/// rounded arc.  The perimeter path row immediately below (which receives `┴`
+/// from `back_edge_path_joins`) already makes the connection clear, so the
+/// border-row `┬` stamp must be skipped (B12).
+fn has_rounded_bottom_border(shape: NodeShape) -> bool {
+    matches!(
+        shape,
+        NodeShape::Rounded
+            | NodeShape::Circle
+            | NodeShape::Stadium
+            | NodeShape::Note
+            | NodeShape::DoubleCircle
+    )
+}
+
 fn is_back_edge(from_pos: GridPos, to_pos: GridPos, dir: Direction) -> bool {
     let (fc, fr) = from_pos;
     let (tc, tr) = to_pos;
@@ -624,8 +643,12 @@ fn render_inner(
     // Back-edge connector points: where to stamp `┬` / `┴` (LR) or `├` / `┤`
     // (TD) after node boxes are drawn, so the perimeter back-edge path
     // connects visibly to its source and destination borders.
-    // Entries: `(border_col, border_row, is_destination)`.
-    let mut back_edge_border_joins: Vec<(usize, usize, bool)> = Vec::new();
+    // Entries: `(border_col, border_row, is_destination, skip_border_stamp)`.
+    // `skip_border_stamp` is set for source entries (LR/RL) where the source
+    // node has a rounded bottom border — in that case stamping `┬` onto the
+    // bottom border row would pierce the `╰──╯` arc (B12).  The `┴` on the
+    // path row (from `back_edge_path_joins`) already makes the connection.
+    let mut back_edge_border_joins: Vec<(usize, usize, bool, bool)> = Vec::new();
     // First-path-cell joins (source end only — destination end is the arrow tip).
     let mut back_edge_path_joins: Vec<(usize, usize)> = Vec::new();
     for (edge_idx, edge) in graph.edges.iter().enumerate() {
@@ -649,8 +672,18 @@ fn render_inner(
             }
             let (sb, sp) = back_edge_border_cells(fp, fg, graph.direction);
             let (db, _) = back_edge_border_cells(tp, tg, graph.direction);
-            back_edge_border_joins.push((sb.0, sb.1, false));
-            back_edge_border_joins.push((db.0, db.1, true));
+            // B12 guard: for LR/RL, the source border row is the bottom of the
+            // source box (`r + geom.height - 1`).  For rounded shapes that row is
+            // `╰──╯`; stamping `┬` there pierces the rounded arc.  Record whether
+            // to skip the border stamp for this source entry.
+            let skip_src_border = matches!(
+                graph.direction,
+                Direction::LeftToRight | Direction::RightToLeft
+            ) && graph
+                .node(&edge.from)
+                .is_some_and(|n| has_rounded_bottom_border(n.shape));
+            back_edge_border_joins.push((sb.0, sb.1, false, skip_src_border));
+            back_edge_border_joins.push((db.0, db.1, true, false));
             back_edge_path_joins.push(sp);
         }
     }
@@ -848,8 +881,13 @@ fn render_inner(
         Direction::TopToBottom | Direction::BottomToTop => '├',
     };
     let path_junction_lr = '┴'; // LR/RL: vertical adjacency, T-up reads fine
-    for (col, row, is_dest) in &back_edge_border_joins {
-        if *is_dest {
+    for (col, row, is_dest, skip_border_stamp) in &back_edge_border_joins {
+        if *is_dest || *skip_border_stamp {
+            // `is_dest`: destination border glyph is the arrow tip placed by
+            // the router — no junction stamp needed here.
+            // `skip_border_stamp` (B12): source has a rounded bottom border
+            // (`╰──╯`); the `┴` on the path row below makes the connection
+            // without piercing the rounded arc.
             continue;
         }
         grid.set(*col, *row, border_junction);
@@ -2985,14 +3023,34 @@ if_state --> False: !condition";
         // column) must be `┴` — not `├`.  `├` is the B9 bug glyph: it appears
         // as if the back-edge route is piercing through the box border.
         //
-        // Strategy: find the row immediately below `╰────┬────╯` (Running's
-        // bottom border) and assert `├` is absent from that row while `┴` is
-        // present at the same horizontal position.
+        // Strategy: find the row that contains Running's bottom rounded border
+        // (`╰` ... `╯`) and then inspect the row immediately below it.  After
+        // the B12 fix the border row no longer contains `┬` (that stamp is
+        // skipped for rounded shapes); we look for `╰` + `╯` + `Running` text
+        // in the vicinity instead.
         let lines: Vec<&str> = out.lines().collect();
-        let bottom_border_row = lines
+        // Find the Running node's box — the label row contains "Running".
+        // For a standard 3-row box the layout is: top border, label, bottom
+        // border.  "Running" appears on the LABEL row (top + 1), so the bottom
+        // border is one row further down (top + 2 = label + 1).
+        let label_row = lines
             .iter()
-            .position(|l| l.contains("╰") && l.contains("┬") && l.contains("╯"))
-            .expect("Running box bottom border row not found");
+            .position(|l| l.contains("Running"))
+            .expect("Running label row not found");
+        // Bottom border is the row immediately after the label row.
+        let bottom_border_row = label_row + 1;
+
+        // The border row itself must be a clean rounded arc — no `┬` pierce
+        // glyph (B12 guard) and no `├` pierce glyph (B9 guard).
+        let border_row_str = lines
+            .get(bottom_border_row)
+            .expect("Running box bottom border row must exist");
+        assert!(
+            !border_row_str.contains('┬'),
+            "B12 regression: `┬` found on Running box bottom border row.\n\
+             The rounded arc `╰──╯` must not be pierced.\n\
+             Border row: {border_row_str:?}\nFull output:\n{out}"
+        );
 
         // The row immediately below the bottom border is the perimeter row
         // containing the source exit stub.
@@ -3010,6 +3068,57 @@ if_state --> False: !condition";
             perimeter_row.contains('┴'),
             "Expected `┴` (back-edge exit stub) on the perimeter row below Running's bottom \
              border, but it was not found.\nPerimeter row: {perimeter_row:?}\nFull output:\n{out}"
+        );
+    }
+
+    /// Regression test for B12: back-edge source-attach must NOT stamp `┬` onto
+    /// the bottom border row of a rounded box.
+    ///
+    /// In LR layout, `back_edge_border_cells` returns `border_row =
+    /// r + geom.height - 1` for the source node — this is the bottom border
+    /// row.  For rounded boxes the bottom border is `╰─────╯`; stamping `┬`
+    /// there (as the `back_edge_border_joins` pass did unconditionally) makes
+    /// it read as `╰──┬──╯`, visually piercing the rounded arc.
+    ///
+    /// The fix: skip the `┬` border stamp for LR/RL source nodes whose shape
+    /// produces a rounded bottom border (`╰──╯`).  The `┴` on the path row
+    /// one row below (from `back_edge_path_joins`) already makes the
+    /// connection without corrupting the arc.
+    ///
+    /// The circuit-breaker-like diagram `HALF_OPEN → CircuitOpen` exposes
+    /// this: HALF_OPEN is a Rounded state and the source of a back-edge.
+    #[test]
+    fn back_edge_source_attach_does_not_pierce_rounded_box_bottom() {
+        let src = "stateDiagram-v2
+    [*] --> CircuitOpen
+    CircuitOpen --> HALF_OPEN : timeout
+    HALF_OPEN --> CircuitClosed : success
+    HALF_OPEN --> CircuitOpen : failure
+    CircuitClosed --> CircuitOpen : 5 errors";
+        let out = crate::render(src).expect("render must succeed");
+        let lines: Vec<&str> = out.lines().collect();
+
+        // Every rounded box bottom border row (`╰...╯`) must be free of `┬`.
+        // A `┬` in a `╰─...─╯` row is the B12 bug glyph — it indicates the
+        // back-edge junction was stamped onto the box border rather than on
+        // the perimeter path row one below it.
+        for (i, line) in lines.iter().enumerate() {
+            if line.contains('╰') && line.contains('╯') {
+                assert!(
+                    !line.contains('┬'),
+                    "B12 regression: `┬` found on rounded box bottom border at line {i}.\n\
+                     The `╰──╯` arc must not be pierced by a junction glyph.\n\
+                     Line: {line:?}\nFull output:\n{out}"
+                );
+            }
+        }
+
+        // The perimeter path row must contain `┴` — the back-edge exit stub
+        // that replaces the border-row `┬` stamp.
+        assert!(
+            out.contains('┴'),
+            "Expected at least one `┴` (back-edge perimeter exit stub) in the output, \
+             but none found.\nFull output:\n{out}"
         );
     }
 }

@@ -5,6 +5,19 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — 1.34.21
+
+### Changed — mermaid-text 0.27.3 (B12 rounded-box bottom pierce fix)
+
+Bumped `mermaid-text` dependency to 0.27.3. Fixes B12: in LR state diagrams
+with rounded box nodes (the default state shape), the `back_edge_border_joins`
+stamping pass was writing `┬` onto the bottom border row `╰─────╯`, making the
+back-edge route look as if it pierces the rounded arc. The fix skips the
+border-row `┬` stamp for source nodes whose shape uses a rounded bottom border;
+the `┴` on the perimeter path row one cell below already makes the connection
+visibly. 16 corpus and snapshot baselines improved (A-class), 0 regressions.
+See `crates/mermaid-text/CHANGELOG.md §0.27.3` for full root-cause details.
+
 ## [1.34.20] — 2026-04-28
 
 ### Changed — mermaid-text 0.27.2 (B9 back-edge perimeter pierce fix)

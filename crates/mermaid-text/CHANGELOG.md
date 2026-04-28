@@ -3,6 +3,46 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.27.3 — 2026-04-28 — Fix B12 rounded-box bottom pierce
+
+### Fixed — B12: `┬` glyph stamped onto rounded-box bottom border row
+
+**Root cause**: In LR/RL layout, the `back_edge_border_joins` stamping pass
+called `grid.set(col, border_row, '┬')` unconditionally for every back-edge
+source node, where `border_row = r + geom.height - 1` is the node's bottom
+border row.  For plain rectangles this is harmless — the `─` cells accept `┬`
+cleanly.  For rounded boxes (shapes rendered via `draw_rounded_box`: `Rounded`,
+`Circle`, `Stadium`, `Note`, `DoubleCircle`) the bottom border row is `╰─────╯`;
+writing `┬` into the center `─` cell produces `╰──┬──╯`, which visually reads
+as the back-edge route piercing the rounded arc.
+
+**Fix mechanism** (in `render_inner()` in `src/render/unicode.rs`): Added
+`has_rounded_bottom_border(shape: NodeShape) -> bool` helper and a fourth field
+`skip_border_stamp: bool` to the `back_edge_border_joins` entries.  When the
+source node has a rounded bottom border AND the layout is LR/RL, `skip_border_stamp`
+is set to `true` and the `┬` stamp is skipped.  The `┴` on the path row one
+cell below (from `back_edge_path_joins`) already connects the perimeter route
+visibly without corrupting the arc.
+
+**Regression-corpus diff classification:**
+
+- **16 Improvement (A)**: `┬` removed from rounded box bottom borders across
+  state diagrams in both corpus and snapshot suites.  In several cases the
+  preserved `▴` arrowhead (previously overwritten by the `┬` stamp) is now
+  visible.  No visual content was removed — all nodes, edges, and labels are
+  intact.
+- **0 Neutral (B)**
+- **0 Regressions (C)**
+
+**Tests added**:
+- `back_edge_source_attach_does_not_pierce_rounded_box_bottom` in
+  `render::unicode::tests` — synthesises the circuit-breaker-like diagram and
+  asserts no `┬` appears in any `╰──╯` bottom border row.
+
+**B9 fix confirmed intact**: `back_edge_attach_does_not_pierce_source_perimeter`
+still passes. The B9 test locator was updated to find the border row by label
+position (not by `┬`) since B12's fix removes `┬` from that row.
+
 ## 0.27.2 — 2026-04-28 — Fix B9 back-edge perimeter pierce
 
 ### Fixed — B9: `├` glyph deposited on source-node perimeter row
