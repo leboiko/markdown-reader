@@ -222,6 +222,11 @@ fn render_commit_row(
 /// horizontal bridge. For fork rows the parent lane goes on the left and the
 /// new branch on the right (since branches are added to the right). For merge
 /// rows the destination is on the left and the source on the right.
+///
+/// NOTE: this function builds the row character-by-character including the
+/// inter-lane separator positions. Within the horizontal span `[lo, hi]` the
+/// separators between lane columns are `─` (continuing the bridge); outside
+/// the span they remain spaces, matching the rest of the diagram.
 fn render_arc_row(
     lane_count: usize,
     alive: &[bool],
@@ -233,28 +238,47 @@ fn render_arc_row(
     let lo = left_lane.min(right_lane);
     let hi = left_lane.max(right_lane);
 
-    build_lane_part(lane_count, alive, |lane| {
-        if lane == lo {
-            if lo == left_lane {
-                left_glyph
+    // Build the row manually so we can emit `─` for the inter-lane separator
+    // cells that fall inside the horizontal arc span [lo, hi].  The standard
+    // `build_lane_part` always uses a space separator, which leaves a visible
+    // gap between the corner glyphs even for immediately adjacent lanes.
+    let mut s = String::with_capacity(lane_count * 2);
+    for lane in 0..lane_count {
+        if lane > 0 {
+            // Separator cell: `─` inside the arc span, space outside.
+            if lane > lo && lane <= hi {
+                s.push(CONN_HORIZ);
             } else {
-                right_glyph
+                s.push(' ');
             }
-        } else if lane == hi {
-            if hi == right_lane {
-                right_glyph
+        }
+        let ch = if lane < alive.len() {
+            if lane == lo {
+                if lo == left_lane {
+                    left_glyph
+                } else {
+                    right_glyph
+                }
+            } else if lane == hi {
+                if hi == right_lane {
+                    right_glyph
+                } else {
+                    left_glyph
+                }
+            } else if lane > lo && lane < hi {
+                // Interior lane: horizontal fill.
+                CONN_HORIZ
+            } else if alive[lane] {
+                LANE_VERT
             } else {
-                left_glyph
+                ' '
             }
-        } else if lane > lo && lane < hi {
-            // Between the two endpoints: horizontal fill.
-            CONN_HORIZ
-        } else if alive[lane] {
-            LANE_VERT
         } else {
             ' '
-        }
-    })
+        };
+        s.push(ch);
+    }
+    s
 }
 
 /// Build the bottom label row listing branch names under their lanes.
@@ -469,5 +493,44 @@ mod tests {
         );
         // But it must contain the truncation ellipsis.
         assert!(out.contains('\u{2026}'), "ellipsis not found:\n{out}");
+    }
+
+    // ---- (7) fork arc has horizontal connector between corners -----------
+
+    #[test]
+    fn fork_arc_has_horizontal_connector() {
+        // A fork arc between two immediately adjacent lanes (main=0, dev=1)
+        // must have a `─` between the corner glyphs — no gap allowed.
+        let src = "gitGraph
+  commit id: \"first\"
+  branch dev
+  checkout dev
+  commit id: \"d1\"
+  checkout main
+  merge dev";
+        let g = parse(src).unwrap();
+        let out = render(&g, None);
+
+        // Find the fork row: contains CONN_FORK_LEFT.
+        let fork_row = out
+            .lines()
+            .find(|l| l.contains(CONN_FORK_LEFT))
+            .expect("no fork-arc row found in output");
+
+        // The fork row must contain a `─` connector (not be a bare `╰ ╮`).
+        assert!(
+            fork_row.contains(CONN_HORIZ),
+            "fork-arc row has no horizontal connector `─`; got: {fork_row:?}"
+        );
+
+        // Also verify the merge arc has a connector.
+        let merge_row = out
+            .lines()
+            .find(|l| l.contains(CONN_MERGE_DST))
+            .expect("no merge-arc row found in output");
+        assert!(
+            merge_row.contains(CONN_HORIZ),
+            "merge-arc row has no horizontal connector `─`; got: {merge_row:?}"
+        );
     }
 }

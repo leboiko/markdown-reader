@@ -3,6 +3,54 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.27.0 — 2026-04-27 — Four rendering bug-fixes (gitGraph arc, ER inline attrs, ER spine, LR labels)
+
+### Fixed — gitGraph fork/merge arc connector (`╭─╮` / `╰─╯`)
+
+Fork and merge rows that span multiple branch lanes now fill the gap between
+the arc glyphs with `─` connectors. Previously a bare space left the arc
+looking disconnected (`╭ ╮`). The fix rewrites `render_arc_row` to use `─`
+as separator within the arc span `[lo, hi]`.
+
+### Fixed — ER diagram inline attribute syntax
+
+`erDiagram` blocks with the condensed inline form
+`ENTITY { type name KEY … }` (all attributes on one line) previously caused
+a parse error. The entity-opener detection now recognises both the
+multi-line form (`ENTITY {` at end of line) and the inline form
+(`ENTITY { … }` on a single line) while correctly ignoring relationship
+lines that also contain `{`.
+
+### Fixed — ER spine column no longer leaks into single-row diagrams
+
+The right-side spine column (used to route cross-row relationships) was
+added whenever an ER diagram contained more than one row of entities, even
+when every relationship stayed within a single row. The canvas-width
+computation now scans relationships and only reserves the spine when a
+cross-row relationship actually exists.
+
+### Fixed — LR flowchart labels on vertical-dominant routes
+
+Edge labels on LR flowcharts whose route is dominated by a long vertical
+segment (length ≥ 4 cells) were placed floating in the middle of the route
+using a short horizontal stub instead of sitting adjacent to the destination
+box. The label-position algorithm now detects vertical-dominant routes and
+falls back to a destination-adjacent placement, matching the visual quality
+of TD diagrams.
+
+### Tests
+
+4 new unit tests:
+- `fork_arc_has_horizontal_connector` (gitGraph renderer)
+- `accepts_inline_attribute_block`, `accepts_inline_attribute_block_with_multiple_keys`,
+  `wide_er_gallery_block_parses_successfully` (ER parser)
+- `small_diagram_has_no_right_spine` (ER renderer)
+- `label_falls_back_when_longest_segment_too_short` (flowchart unicode renderer)
+
+3 snapshots updated with improved label positions (visually verified):
+`all_edge_styles_inline_quoted_labels`, `edge_label_not_adjacent_to_corner_glyph`,
+`state_composite_keyboard_lock`.
+
 ## 0.26.0 — 2026-04-27 — Render polish (edge labels, classDef DEFAULT, anonymous choices)
 
 Three independent polish bugs landed in one release.

@@ -117,7 +117,7 @@ pub fn render(chart: &ErDiagram, max_width: Option<usize>) -> String {
     // Canvas dimensions.
     // Width: widest row's last-right column.
     let canvas_width =
-        compute_canvas_width(n, &entity_grid_pos, &entity_left, &entity_widths, n_cols);
+        compute_canvas_width(n, chart, &entity_grid_pos, &entity_left, &entity_widths);
     // Height: top_pad + all row heights + inter-row gaps.
     let canvas_height = {
         let total_entity_h: usize = row_heights.iter().sum();
@@ -280,27 +280,41 @@ fn compute_entity_top(
 }
 
 /// Compute the total canvas width: the maximum right-edge across all entities.
+///
+/// A spine column (2 extra characters) is reserved to the right of all entity
+/// boxes ONLY when at least one relationship actually crosses grid rows.  When
+/// all relationships are intra-row the spine is never drawn, so we must not
+/// allocate the margin — this prevents a visible empty column (or stray corner
+/// glyph) appearing on the right side of single-row and small multi-row
+/// diagrams that have no cross-row edges.
 fn compute_canvas_width(
     n: usize,
+    chart: &ErDiagram,
     entity_grid_pos: &[(usize, usize)],
     entity_left: &[usize],
     entity_widths: &[usize],
-    n_cols: usize,
 ) -> usize {
-    // Reserve an extra margin beyond the last entity so the vertical spine
-    // for cross-row arrows has room to the right of all boxes.
     let rightmost_entity = (0..n)
         .map(|i| entity_left[i] + entity_widths[i])
         .max()
         .unwrap_or(0);
-    // Add 2 extra columns: 1 gap + 1 spine column.
-    let spine_margin = if entity_grid_pos.iter().map(|p| p.0).max().unwrap_or(0) > 0 {
-        2
-    } else {
-        0
-    };
-    let _ = n_cols;
-    rightmost_entity + spine_margin
+
+    // Only add the spine margin when at least one relationship is cross-row.
+    // A relationship is cross-row when the grid row of `from` differs from the
+    // grid row of `to`.
+    let needs_spine = chart.relationships.iter().any(|rel| {
+        let Some(fi) = chart.entity_index(&rel.from) else {
+            return false;
+        };
+        let Some(ti) = chart.entity_index(&rel.to) else {
+            return false;
+        };
+        fi != ti && entity_grid_pos[fi].0 != entity_grid_pos[ti].0
+    });
+
+    // 2 extra columns: 1 gap between the rightmost entity and the spine +
+    // 1 spine column itself.
+    rightmost_entity + if needs_spine { 2 } else { 0 }
 }
 
 /// Compute inter-entity gaps for adjacent pairs within the SAME grid row.
@@ -879,6 +893,50 @@ E6 ||--o{ E7 : g";
         // A vertical leg (│) or corner (┐/┘/└/┌) must exist for cross-row routing.
         let has_vertical = out.contains('│') || out.contains('┐') || out.contains('┘');
         assert!(has_vertical, "no vertical routing glyphs found in:\n{out}");
+    }
+
+    // ---- Bug 3: small diagram has no right spine -------------------------
+
+    #[test]
+    fn small_diagram_has_no_right_spine() {
+        // Two entities with a single intra-row relationship.  Both entities
+        // land on grid row 0 so there are NO cross-row relationships — the
+        // spine (2 extra columns beyond the rightmost entity box) must NOT
+        // be allocated.
+        //
+        // The spine manifests as a vertical-leg row in the ROW_GAP area:
+        // a line that contains `│` but NO entity-box characters (`┌`, `├`,
+        // `└`, `─`).  Such a "gap-area │ row" can only come from the spine.
+        // Entity box interior rows DO contain `│` but always also contain
+        // content characters; the cross-row spine's vertical leg falls in the
+        // ROW_GAP area which otherwise has only spaces.
+        //
+        // For this 2-entity intra-row diagram, there should be no such rows.
+        let src = "erDiagram
+A ||--|| B : rel";
+        let chart = parse(src).unwrap();
+        let out = render(&chart, Some(20));
+
+        // Cross-row spine appears as a line in the inter-row gap that contains
+        // `│` (or `┆`) but no box characters.
+        let spine_in_gap = out.lines().any(|l| {
+            let has_vert = l.contains('│') || l.contains('┆');
+            let has_box = l.contains('┌')
+                || l.contains('├')
+                || l.contains('└')
+                || l.contains('─')
+                || l.contains('┤');
+            has_vert && !has_box
+        });
+        assert!(
+            !spine_in_gap,
+            "intra-row-only diagram should not have spine-only rows, got:\n{out}"
+        );
+
+        // Additionally verify that the relationship itself rendered (the test
+        // diagram is non-trivial).
+        assert!(out.contains('A'), "entity A missing from:\n{out}");
+        assert!(out.contains('B'), "entity B missing from:\n{out}");
     }
 
     #[test]

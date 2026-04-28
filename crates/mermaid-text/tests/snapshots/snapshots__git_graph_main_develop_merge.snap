@@ -1,13 +1,14 @@
 ---
 source: crates/mermaid-text/tests/snapshots.rs
+assertion_line: 1915
 expression: out
 ---
 *    c0
 *    second
-╭ ╮
+╭─╮
 │ *  c2
 │ *  feature-x
-╰ ╯
+╰─╯
 M │  c4
 * │  c5 [v1.0]
 main develop

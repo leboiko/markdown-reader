@@ -75,18 +75,74 @@ pub fn parse(src: &str) -> Result<ErDiagram, Error> {
             ));
         }
 
-        // Entity-block opener: `<NAME> {` on a single line, or just
-        // `<NAME> {` followed by attributes on subsequent lines.
-        if let Some(name_part) = line.strip_suffix('{') {
-            let name = name_part.trim();
-            if name.is_empty() {
-                return Err(Error::ParseError(
-                    "entity block opener missing entity name".to_string(),
-                ));
+        // Entity-block: two shapes are accepted.
+        //
+        // (a) Multi-line form — `ENTITY {` on its own line, attributes on the
+        //     subsequent lines (one per line), closed by `}`.
+        //
+        // (b) Inline form — all on one line: `ENTITY { type1 name1 KEY  type2 name2 }`.
+        //
+        // Disambiguation from relationship lines: a relationship line always
+        // contains `--` or `..` (the connector). An entity-block opener NEVER
+        // has those substrings because entity names are plain identifiers.
+        // We check for `--` and `..` absence before treating a `{` as the
+        // start of an entity block.
+        //
+        // Additionally, the `{` in an entity-block opener is always preceded
+        // solely by a valid entity name (letters, digits, hyphens, underscores)
+        // and optional whitespace.  In a relationship line the `{` is always
+        // inside a cardinality token like `o{` or `|{` — i.e. immediately
+        // preceded by `o` or `|`, not by a space.
+        //
+        // Strategy: only treat the line as an entity-block if:
+        //   1. It does NOT contain `--` or `..` (connector characters).
+        //   2. It contains a `{` preceded only by an identifier + optional space.
+        let has_connector = line.contains("--") || line.contains("..");
+        if !has_connector {
+            // Try the multi-line opener: `ENTITY {` (trailing `{` with only
+            // whitespace + identifier before it).
+            if let Some(name_part) = line.strip_suffix('{') {
+                let name = name_part.trim();
+                if name.is_empty() {
+                    return Err(Error::ParseError(
+                        "entity block opener missing entity name".to_string(),
+                    ));
+                }
+                // Validate: name must contain only identifier characters
+                // (letters, digits, hyphens, underscores).
+                if name
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+                {
+                    let idx = diag.ensure_entity(name);
+                    current_entity = Some(idx);
+                    continue;
+                }
+                // Not a valid identifier before `{` — fall through to relationship
+                // parser (handles edge cases like `}o--o{`).
             }
-            let idx = diag.ensure_entity(name);
-            current_entity = Some(idx);
-            continue;
+
+            // Try the inline form: `ENTITY { ... }` on one line.
+            // Require: `{` preceded by whitespace (not a cardinality glyph).
+            if let Some(brace_pos) = line.find(" {") {
+                let name = line[..brace_pos].trim();
+                let after_open = line[brace_pos + 2..].trim(); // skip " {"
+                if !name.is_empty()
+                    && name
+                        .chars()
+                        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+                    && after_open.ends_with('}')
+                {
+                    // Strip the trailing `}`.
+                    let attrs_str = after_open[..after_open.len() - 1].trim();
+                    let idx = diag.ensure_entity(name);
+                    if !attrs_str.is_empty() {
+                        let attrs = parse_inline_attribute_list(attrs_str)?;
+                        diag.entities[idx].attributes.extend(attrs);
+                    }
+                    continue;
+                }
+            }
         }
 
         // Otherwise the line must be a relationship — `A <card>--<card> B [: label]`.
@@ -108,6 +164,142 @@ pub fn parse(src: &str) -> Result<ErDiagram, Error> {
         )));
     }
     Ok(diag)
+}
+
+/// Parse a list of inline attributes from the body of a same-line entity block.
+///
+/// The format is a sequence of attributes packed into a single string, where
+/// each attribute is `type name [KEY ...]` separated from the next attribute
+/// by at least one space. Because both the attribute fields and the inter-
+/// attribute boundaries use spaces, we use a token-state-machine approach:
+///
+/// - Accumulate tokens into a current attribute.
+/// - When we see a non-KEY token AND we already have `type` + `name`, we
+///   commit the current attribute and start a new one.
+///
+/// Single-space gaps inside one attribute and double-space gaps between
+/// attributes are both handled correctly — the state machine doesn't need to
+/// see the raw whitespace, only the token stream.
+///
+/// # Errors
+///
+/// Returns a parse error if any attribute is missing `name`, or if an
+/// unrecognised key token appears where a key is expected.
+fn parse_inline_attribute_list(attrs_str: &str) -> Result<Vec<Attribute>, Error> {
+    // We don't have a way to split on "at-least-2-spaces" reliably for all
+    // Mermaid input because optional keys make attribute boundaries ambiguous.
+    // Instead we use a greedy token state machine: tokens are split by single
+    // whitespace, and a new attribute begins whenever we encounter a token
+    // that is not a recognised KEY (PK/FK/UK) after we already have both a
+    // type and a name.
+    let mut result: Vec<Attribute> = Vec::new();
+
+    // Current attribute being assembled.
+    let mut type_name: Option<String> = None;
+    let mut attr_name: Option<String> = None;
+    let mut keys: Vec<AttributeKey> = Vec::new();
+    let mut comment: Option<String> = None;
+
+    // Flush the current attribute into `result`.
+    let flush = |result: &mut Vec<Attribute>,
+                 type_name: &mut Option<String>,
+                 attr_name: &mut Option<String>,
+                 keys: &mut Vec<AttributeKey>,
+                 comment: &mut Option<String>|
+     -> Result<(), Error> {
+        if let (Some(t), Some(n)) = (type_name.take(), attr_name.take()) {
+            result.push(Attribute {
+                type_name: t,
+                name: n,
+                keys: std::mem::take(keys),
+                comment: comment.take(),
+            });
+        }
+        Ok(())
+    };
+
+    // Handle quoted comment tokens first: extract and remove `"..."` substrings
+    // before tokenising (to avoid their spaces splitting into stray tokens).
+    // We process the string in left-to-right order, extracting quoted segments.
+    let mut working = attrs_str.to_string();
+    // Collect quoted comments in order of appearance so we can re-attach them.
+    let mut quoted_comments: Vec<String> = Vec::new();
+    while let Some(open) = working.find('"') {
+        let after_open = &working[open + 1..];
+        if let Some(rel_close) = after_open.find('"') {
+            let close = open + 1 + rel_close;
+            quoted_comments.push(working[open + 1..close].to_string());
+            // Replace the quoted segment (including quotes) with a sentinel
+            // that holds no spaces and won't be mistaken for a type/name/key.
+            let replacement = format!("__COMMENT{}__", quoted_comments.len() - 1);
+            working = format!(
+                "{}{}{}",
+                &working[..open],
+                replacement,
+                &working[close + 1..]
+            );
+        } else {
+            break; // Unmatched quote — leave as-is; will fail gracefully.
+        }
+    }
+
+    for token in working.split_whitespace() {
+        // Check if this is a comment sentinel.
+        if let Some(idx_str) = token
+            .strip_prefix("__COMMENT")
+            .and_then(|s| s.strip_suffix("__"))
+            && let Ok(idx) = idx_str.parse::<usize>()
+            && idx < quoted_comments.len()
+        {
+            comment = Some(quoted_comments[idx].clone());
+            continue;
+        }
+
+        // Determine if this token could be a key.
+        let maybe_key = match token {
+            "PK" => Some(AttributeKey::PrimaryKey),
+            "FK" => Some(AttributeKey::ForeignKey),
+            "UK" => Some(AttributeKey::UniqueKey),
+            _ => None,
+        };
+
+        match (&type_name, &attr_name) {
+            // No type yet: this token must be the type.
+            (None, _) => {
+                type_name = Some(token.to_string());
+            }
+            // Have type but no name: this token must be the name.
+            (Some(_), None) => {
+                attr_name = Some(token.to_string());
+            }
+            // Have type and name. If this is a recognised key, append it.
+            (Some(_), Some(_)) => {
+                if let Some(k) = maybe_key {
+                    keys.push(k);
+                } else {
+                    // Not a key token: this starts a new attribute.
+                    flush(
+                        &mut result,
+                        &mut type_name,
+                        &mut attr_name,
+                        &mut keys,
+                        &mut comment,
+                    )?;
+                    type_name = Some(token.to_string());
+                }
+            }
+        }
+    }
+    // Flush the last attribute.
+    flush(
+        &mut result,
+        &mut type_name,
+        &mut attr_name,
+        &mut keys,
+        &mut comment,
+    )?;
+
+    Ok(result)
 }
 
 /// Parse one attribute row inside an entity block.
@@ -479,5 +671,65 @@ mod tests {
         .unwrap();
         let order_idx = diag.entity_index("ORDER").unwrap();
         assert_eq!(diag.entities[order_idx].attributes.len(), 1);
+    }
+
+    // ---- inline attribute block (Bug 2) ----------------------------------
+
+    #[test]
+    fn accepts_inline_attribute_block() {
+        // All attributes on one line — `ENTITY { type1 name1 KEY  type2 name2 }`.
+        let diag = parse("erDiagram\nCUSTOMER { int id PK  string name }").unwrap();
+        let idx = diag.entity_index("CUSTOMER").unwrap();
+        let attrs = &diag.entities[idx].attributes;
+        assert_eq!(
+            attrs.len(),
+            2,
+            "expected 2 attributes, got {}: {attrs:?}",
+            attrs.len()
+        );
+        assert_eq!(attrs[0].type_name, "int");
+        assert_eq!(attrs[0].name, "id");
+        assert_eq!(attrs[0].keys, vec![AttributeKey::PrimaryKey]);
+        assert_eq!(attrs[1].type_name, "string");
+        assert_eq!(attrs[1].name, "name");
+        assert!(attrs[1].keys.is_empty());
+    }
+
+    #[test]
+    fn accepts_inline_attribute_block_with_multiple_keys() {
+        let diag = parse("erDiagram\nFOO { int id PK FK  string label }").unwrap();
+        let attrs = &diag.entities[0].attributes;
+        assert_eq!(attrs.len(), 2);
+        assert_eq!(
+            attrs[0].keys,
+            vec![AttributeKey::PrimaryKey, AttributeKey::ForeignKey]
+        );
+    }
+
+    #[test]
+    fn wide_er_gallery_block_parses_successfully() {
+        // Regression: the gallery block 19 used to fail with a parse error
+        // because inline attribute syntax was not recognised.
+        let src = "erDiagram
+    CUSTOMER ||--o{ ORDER : places
+    ORDER ||--|{ ITEM : contains
+    PRODUCT ||--o{ ITEM : describes
+    CATEGORY ||--o{ PRODUCT : groups
+    ACCOUNT ||--|| CUSTOMER : owns
+    INVOICE ||--|{ ORDER : bills
+    CUSTOMER { int id PK  string name }
+    ORDER    { int id PK  int customerId FK }
+    PRODUCT  { int id PK  string name  int categoryId FK }
+    CATEGORY { int id PK  string label }
+    ACCOUNT  { int id PK }
+    INVOICE  { int id PK }
+    ITEM     { int orderId FK  int productId FK }";
+        let diag = parse(src).unwrap();
+        // 7 entities from relationships + inline declarations.
+        assert_eq!(diag.relationships.len(), 6);
+        let customer_idx = diag.entity_index("CUSTOMER").unwrap();
+        assert_eq!(diag.entities[customer_idx].attributes.len(), 2);
+        let product_idx = diag.entity_index("PRODUCT").unwrap();
+        assert_eq!(diag.entities[product_idx].attributes.len(), 3);
     }
 }

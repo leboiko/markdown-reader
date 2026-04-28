@@ -1666,44 +1666,8 @@ fn candidate_positions(
         Direction::LeftToRight | Direction::RightToLeft => {
             let mut out = Vec::new();
 
-            // Dogleg edges in LR/RL graphs often route horizontally out of the
-            // source and then vertically to a lower/upper target. Labeling the
-            // source-side horizontal run can make the label look attached to a
-            // neighboring parallel edge. For wider labels, prefer the long
-            // vertical leg when one exists; it is the part that visually
-            // distinguishes the target. Short labels stay on the horizontal
-            // run because they fit there without spanning adjacent lanes.
-            if lbl_w >= MIN_DOGLEG_SIDE_LABEL_WIDTH
-                && has_sibling_outgoing
-                && !edge_is_back
-                && let Some((seg_col, seg_row, len)) = last_vertical_segment_with_len(path)
-                && len >= 4
-            {
-                let left_col = seg_col.saturating_sub(lbl_w + 1);
-                let right_col = seg_col + 1;
-                let row_offsets: [isize; 5] = [0, -1, 1, -2, 2];
-                out.reserve(row_offsets.len() * 2);
-                for &dr in &row_offsets {
-                    let r = (seg_row as isize + dr).max(0) as usize;
-                    out.push((left_col, r));
-                    out.push((right_col, r));
-                }
-            }
-
-            // Determine which horizontal segment(s) to use for candidate
-            // generation.  Prefer the LONGEST segment (geometric midpoint of
-            // the most prominent horizontal run) but fall back to the LAST
-            // segment (destination-side, the old behaviour) when all
-            // longest-segment positions are blocked by collision guards.
-            //
-            // Concretely: emit candidates from the longest segment first
-            // (Phases 1 and 2 with full subgraph separation), then, if the
-            // last segment differs from the longest, append the last segment's
-            // candidates as Phase 3.  `label_position`'s Pass A (full guards)
-            // then Pass B (relaxed guards) walk the combined list in order —
-            // so the longest-segment positions are always preferred when any
-            // clear position exists there, and the last-segment positions are
-            // only reached when every longest-segment candidate is blocked.
+            // Compute the horizontal segment candidates first so the guard
+            // (below) can decide whether to skip the dogleg vertical section.
             let raw_longest_seg = longest_horizontal_segment_with_range(path);
             let last_seg = last_horizontal_segment_with_range(path);
 
@@ -1726,6 +1690,61 @@ fn candidate_positions(
                 }
             } else {
                 raw_longest_seg
+            };
+
+            // Guard: if the chosen longest segment is shorter than the label
+            // text, placing the label at its midpoint risks landing far from
+            // any edge glyph — a "floating" label.  For vertical-dominant
+            // routes (e.g. A -.-> F in a flowchart LR where F is many rows
+            // below A) the only horizontal segment may be a 1-cell stub that
+            // cannot fit any text.
+            //
+            // When this happens:
+            //   - If `last_seg` is available (a qualifying horizontal stub
+            //     exists on the destination side), fall back to it.  We also
+            //     record the fall-back row so Phase 4 (below) can add ON-ROW
+            //     candidates (row+0), which `append_seg_candidates` normally
+            //     omits because it only emits ±offset rows.
+            //   - If no qualifying `last_seg` exists, set `longest_seg = None`
+            //     to trigger the vertical-fallback path below.
+            //
+            // Guard: for vertical-dominant routes the horizontal segment may be
+            // a short destination stub that is too narrow for the label text.
+            // If so, the midpoint candidates from that stub land off the route.
+            //
+            // We detect "vertical dominant" by comparing the longest horizontal
+            // segment length against the longest vertical segment length.  When
+            // the path descends many rows and only has a short horizontal hop
+            // at the destination, the vertical leg is dominant and the label
+            // should land near the destination-stub row — not at the horizontal
+            // midpoint of the short stub.
+            //
+            // For purely horizontal (same-row) routes the horizontal segment IS
+            // the whole path — we leave it unchanged.
+            let vert_dominance = last_vertical_segment_with_len(path)
+                .map(|(_, _, vlen)| vlen)
+                .unwrap_or(0);
+            let is_vert_dominant = vert_dominance >= 4;
+
+            let longest_seg = match longest_seg {
+                Some(lng) if is_vert_dominant => {
+                    // Segment length = hi_col - lo_col (tuple indices 3 and 2).
+                    let seg_len = lng.3.saturating_sub(lng.2);
+                    if seg_len < lbl_w {
+                        // Longest segment is too short — prefer last_seg if
+                        // it is different, otherwise trigger vertical fallback
+                        // (else branch below) where the path-tip row is used
+                        // as the anchor so the label lands adjacent to the
+                        // destination box rather than floating mid-route.
+                        match last_seg {
+                            Some(last) if last != lng => Some(last),
+                            _ => None, // trigger vertical fallback
+                        }
+                    } else {
+                        Some(lng)
+                    }
+                }
+                _ => longest_seg,
             };
 
             // Closure: append two-phase candidates for one segment into `out`.
@@ -1795,6 +1814,43 @@ fn candidate_positions(
                     }
                 };
 
+            // Dogleg edges in LR/RL graphs often route horizontally out of the
+            // source and then vertically to a lower/upper target. Labeling the
+            // source-side horizontal run can make the label look attached to a
+            // neighboring parallel edge. For wider labels, prefer the long
+            // vertical leg when one exists; it is the part that visually
+            // distinguishes the target. Short labels stay on the horizontal
+            // run because they fit there without spanning adjacent lanes.
+            //
+            // GUARD: only generate dogleg candidates when the longest segment
+            // is long enough for the label.  When the guard triggers (the
+            // longest segment is too short on a vertical-dominant route), the
+            // dogleg vertical-midpoint placement would land far from the
+            // destination; we skip it and rely on the destination-stub
+            // placement below.
+            let dogleg_ok = !is_vert_dominant
+                || longest_seg
+                    .map(|lng| lng.3.saturating_sub(lng.2) >= lbl_w)
+                    .unwrap_or(false);
+
+            if dogleg_ok
+                && lbl_w >= MIN_DOGLEG_SIDE_LABEL_WIDTH
+                && has_sibling_outgoing
+                && !edge_is_back
+                && let Some((seg_col, seg_row, len)) = last_vertical_segment_with_len(path)
+                && len >= 4
+            {
+                let left_col = seg_col.saturating_sub(lbl_w + 1);
+                let right_col = seg_col + 1;
+                let row_offsets: [isize; 5] = [0, -1, 1, -2, 2];
+                out.reserve(row_offsets.len() * 2);
+                for &dr in &row_offsets {
+                    let r = (seg_row as isize + dr).max(0) as usize;
+                    out.push((left_col, r));
+                    out.push((right_col, r));
+                }
+            }
+
             if let Some((mid_col, seg_row, lo_col, hi_col)) = longest_seg {
                 // Determine the row of the last (destination-side) segment,
                 // which is the "junction-prone" row to exclude from the longest-
@@ -1837,27 +1893,70 @@ fn candidate_positions(
                     }
                 }
             } else {
-                // Fallback for purely-vertical or very-short paths (e.g.
-                // self-loops in LR graphs produce a 2-cell vertical path with
-                // no horizontal segment). Use the path's last cell as an anchor
-                // and place the label to the right or left.
+                // Fallback for purely-vertical or very-short paths.
                 //
-                // `last_vertical_segment_with_len` requires a run of ≥2, so
-                // a 2-cell path fails it. Instead fall back to the path tip.
-                let (seg_col, seg_row) =
-                    last_vertical_segment(path).unwrap_or_else(|| *path.last().unwrap_or(&path[0]));
+                // Two cases arrive here:
+                //
+                // (A) Self-loops in LR graphs: a 2-cell vertical path with no
+                //     horizontal segment at all.  `seg_row` = bottom border of
+                //     the source box; row+2 is the free corridor beneath.
+                //
+                // (B) Vertical-dominant routes whose only horizontal segment is
+                //     shorter than the label text (the guard above set
+                //     `longest_seg = None`).  Here the path DOES have a
+                //     horizontal run at the destination-stub row, and the label
+                //     should land on that row (or one step away) to stay
+                //     adjacent to the edge — NOT at row+2 which is empty.
+                //
+                // We distinguish (B) by checking if the last path waypoints
+                // share a common row (i.e. there is a horizontal stub at the
+                // tip).  If so, use the tip row as the primary anchor with
+                // row+0 tried first.  Otherwise (A), use the self-loop offsets.
+                let path_tip = path.last().copied().unwrap_or((0, 0));
+                let tip_row = path_tip.1;
+                // Find the horizontal stub at the tip: walk backwards while
+                // the row matches `tip_row`.
+                let tip_stub_start = {
+                    let mut i = path.len().saturating_sub(1);
+                    while i > 0 && path[i - 1].1 == tip_row {
+                        i -= 1;
+                    }
+                    i
+                };
+                let tip_stub_len = path.len() - tip_stub_start;
+
+                let (seg_col, seg_row) = last_vertical_segment(path).unwrap_or(path_tip);
+
                 let col_anchors = [seg_col + 1, seg_col.saturating_sub(lbl_w + 1)];
-                // Prefer placing the label two rows below the path tip (row+2),
-                // then one below (row+1), then adjacent to, then above. For
-                // self-loops in LR graphs `seg_row` is the bottom border of the
-                // box; row+1 is the exit-point cell (│), row+2 is the free
-                // corridor beneath, which reads most cleanly.
-                let row_offsets: [isize; 4] = [2, 1, 3, 0];
-                out.reserve(col_anchors.len() * row_offsets.len());
-                for &c in &col_anchors {
+
+                // Select row offsets based on case.
+                if tip_stub_len >= 2 {
+                    // Case (B): real destination stub exists — prefer the stub
+                    // row itself first so the label appears adjacent to the edge.
+                    let tip_col = path[tip_stub_start].0.min(path_tip.0);
+                    let left_anchor = tip_col.saturating_sub(lbl_w);
+                    let row_offsets: [isize; 4] = [0, -1, 1, -2];
+                    out.reserve(col_anchors.len() * row_offsets.len() + row_offsets.len());
                     for &dr in &row_offsets {
-                        let r = (seg_row as isize + dr).max(0) as usize;
-                        out.push((c, r));
+                        let r = (tip_row as isize + dr).max(0) as usize;
+                        out.push((left_anchor, r));
+                    }
+                    for &c in &col_anchors {
+                        for &dr in &row_offsets {
+                            let r = (seg_row as isize + dr).max(0) as usize;
+                            out.push((c, r));
+                        }
+                    }
+                } else {
+                    // Case (A): self-loop / purely vertical — prefer below the
+                    // path tip so the label reads beneath the exit stub.
+                    let row_offsets: [isize; 4] = [2, 1, 3, 0];
+                    out.reserve(col_anchors.len() * row_offsets.len());
+                    for &c in &col_anchors {
+                        for &dr in &row_offsets {
+                            let r = (seg_row as isize + dr).max(0) as usize;
+                            out.push((c, r));
+                        }
                     }
                 }
             }
@@ -2744,6 +2843,56 @@ mod tests {
             row, 3,
             "on a tie the destination-side segment (found first) should win"
         );
+    }
+
+    // ---- label fallback when longest segment too short (Bug 4) -----------
+
+    /// For a vertical-dominant route where the only horizontal segment is a
+    /// 1-cell stub (shorter than the label), the label must NOT be placed on
+    /// that tiny segment — it would float disconnected from any edge glyph.
+    /// Instead the candidate list should fall back to the last segment (the
+    /// destination-side stub).
+    ///
+    /// We can test the guard by observing that `render` for a flowchart LR
+    /// diagram with a multi-row descent places the label adjacent to the
+    /// destination, not on a far-away short segment.
+    #[test]
+    fn label_falls_back_when_longest_segment_too_short() {
+        // A flowchart LR with A having many descendants forces long vertical
+        // descents for the later edges.  The last edge (A ==> G with label
+        // "thick label") was floating before the fix.
+        let src = r#"flowchart LR
+    A --> B
+    A -.-> C
+    A ==> D
+    A -- "labelled" --> E
+    A -. "dashed label" .-> F
+    A == "thick label" ==> G"#;
+        let out = render_diagram(src);
+
+        // "dashed label" must appear on the same row as edge cells for F.
+        // We verify by checking that "dashed label" and "thick label" both
+        // appear in the output (they did even before — but previously they
+        // were on rows with no edge characters).  The key regression check:
+        // the labels must NOT be on a row that consists only of spaces and
+        // letters (no box-drawing chars like ─, ┄, ━, │, ┆, ┃).
+        for label in &["dashed label", "thick label"] {
+            let label_row = out
+                .lines()
+                .find(|l| l.contains(label))
+                .unwrap_or_else(|| panic!("{label:?} not found in output:\n{out}"));
+            // The row must contain at least one edge/routing glyph.
+            let has_edge_glyph = label_row.chars().any(|c| {
+                matches!(
+                    c,
+                    '─' | '┄' | '━' | '│' | '┆' | '┃' | '▸' | '▹' | '▶' | '╱' | '╲'
+                )
+            });
+            assert!(
+                has_edge_glyph,
+                "label {label:?} is on a row with no edge glyphs (floating label):\n  {label_row:?}\nFull output:\n{out}"
+            );
+        }
     }
 
     // ---- <<choice>> label suppression (state diagrams) -------------------
