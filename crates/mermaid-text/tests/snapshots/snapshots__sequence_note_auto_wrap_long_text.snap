@@ -1,0 +1,20 @@
+---
+source: crates/mermaid-text/tests/snapshots.rs
+expression: out
+---
+ ┌────────┐             ┌───────┐
+ │  User  │             │  API  │
+ └────────┘             └───────┘
+      ┆ POST /login         ┆
+      ──────────────────────▸
+      ┆                     ┆
+╭─────────────────────────────────────╮
+│ This is a long note that spans both │
+│ participants and should wrap nicely │
+╰─────────────────────────────────────╯
+      ┆ 200 OK              ┆
+      ◂──────────────────────
+      ┆                     ┆
+ ┌────────┐             ┌───────┐
+ │  User  │             │  API  │
+ └────────┘             └───────┘

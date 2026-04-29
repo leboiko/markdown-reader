@@ -3,6 +3,44 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.39.0 — 2026-04-29 — Sequence note width-aware widening + word-wrap
+
+### Added
+
+- **Word-wrap for sequence-diagram notes** (`wrap_note_text`). Each note's text
+  is now automatically wrapped at word boundaries to a per-anchor budget before
+  drawing. User-supplied `<br>` line breaks (converted to `\n` at parse time)
+  are authoritative and never re-joined or re-split. Words that exceed the
+  budget on their own land on their own line and trigger canvas widening.
+
+- **Per-anchor wrap budget** (`note_budget`). Budget policy:
+  - `LeftOf(X)`: space available to the left of the participant's lifeline minus
+    box overhead (border + padding).
+  - `RightOf(X)`: 30 cells (comfortable default for right-side placement).
+  - `Over(X)`: 40 cells (matches Mermaid's single-participant heuristic).
+  - `OverPair(X, Y)`: the span between the two participant centres minus box
+    overhead, clamped to at least 40 cells.
+
+- **Canvas widening** (two-pass sizing). After wrapping, the maximum right edge
+  required by any note box is computed. The canvas width is set to
+  `max(participant_span_width, max_note_right_edge)` so unbreakable long words
+  in `RightOf` notes are never silently clipped.
+
+- **4 new snapshot tests** in `tests/snapshots.rs`:
+  - `sequence_note_auto_wrap_long_text` — `note over U,API` wraps a 60-char
+    sentence to 2 lines within the participant span.
+  - `sequence_note_canvas_widens_for_long_word` — `note right of B` with
+    "antidisestablishmentarianism" widens the canvas to fit.
+  - `sequence_note_respects_explicit_br` — three `<br>`-separated lines each
+    remain on their own row with no re-wrapping.
+  - `sequence_note_left_of_wraps` — `note left of B` with a 50-char sentence
+    wraps to 4 lines within the left-of budget.
+
+### Changed
+
+- `note_height` helper removed (dead code after wrapping; the height calculation
+  is now inlined as `wrapped.lines().count().max(1) + 3` at each use site).
+
 ## 0.38.0 — 2026-04-29 — Phase 16: `architecture-beta` support
 
 ### Added

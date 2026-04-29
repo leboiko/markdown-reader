@@ -72,11 +72,6 @@ the historical source of truth.
   edge-routing logic.
 - **Sequence-diagram polish follow-ups** — All small, all gated on user
   reports:
-  - **Width-aware canvas widening** when a note (or block label) exceeds
-    the rightmost participant column. Today the content clips silently
-    at the canvas right edge.
-  - **Word-wrap for long note lines.** Today users add `<br>` manually.
-    Auto-wrap would need a width budget per anchor type.
   - **Wider activation bars / block-frame fills** — both currently render
     single-cell-thick borders. A real "filled thick bar / rectangle"
     needs a multi-row block-fill primitive.

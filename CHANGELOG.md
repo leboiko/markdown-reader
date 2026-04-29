@@ -5,6 +5,19 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.34.37] — 2026-04-29
+
+### Added — Sequence-diagram note word-wrap + canvas widening (mermaid-text 0.39.0)
+
+Bumped `mermaid-text` dependency to 0.39.0. Sequence-diagram notes now
+auto-wrap long text at word boundaries so notes no longer clip silently at the
+canvas right edge. The canvas widens automatically when a note contains an
+unbreakable word longer than the wrap budget (e.g. `antidisestablishmentarianism`
+in a `right of` note). User-supplied `<br>` breaks are always preserved as
+authoritative line separators. Per-anchor budgets: `left of` uses the space
+available to the left of the lifeline; `right of` defaults to 30 cells;
+`over X` defaults to 40 cells; `over X,Y` uses the participant span.
+
 ## [1.34.36] — 2026-04-29
 
 ### Added — `architecture-beta` diagram support (mermaid-text 0.38.0)

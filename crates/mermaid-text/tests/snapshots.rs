@@ -1013,6 +1013,94 @@ note left of API : audit log entry<br/>recorded async";
     assert_snapshot!("sequence_with_multiline_note", out);
 }
 
+// ---------------------------------------------------------------------------
+// Note word-wrap + canvas widening (0.39.0)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn sequence_note_auto_wrap_long_text() {
+    // A `note over U,API` whose text is longer than the span between the two
+    // participants should be auto-wrapped to 2-3 lines rather than clipped.
+    let src = "sequenceDiagram
+participant U as User
+participant API
+U->>API: POST /login
+note over U,API : This is a long note that spans both participants and should wrap nicely
+API->>U: 200 OK";
+    let out = mermaid_text::render(src).unwrap();
+    // The wrapped text must still appear in the output (possibly split across lines).
+    assert!(
+        out.contains("This is a long note"),
+        "note text start missing from:\n{out}"
+    );
+    assert!(
+        out.contains("wrap nicely"),
+        "note text end missing from:\n{out}"
+    );
+    // The note box must be present.
+    assert!(out.contains('╭') && out.contains('╯'));
+    assert_snapshot!("sequence_note_auto_wrap_long_text", out);
+}
+
+#[test]
+fn sequence_note_canvas_widens_for_long_word() {
+    // A `note right of B` with an unbreakable long word — the canvas must
+    // widen to fit rather than silently clipping the word.
+    let src = "sequenceDiagram
+participant A
+participant B
+A->>B: request
+note right of B : antidisestablishmentarianism
+B->>A: response";
+    let out = mermaid_text::render(src).unwrap();
+    assert!(
+        out.contains("antidisestablishmentarianism"),
+        "long unbreakable word must appear unclipped in:\n{out}"
+    );
+    assert_snapshot!("sequence_note_canvas_widens_for_long_word", out);
+}
+
+#[test]
+fn sequence_note_respects_explicit_br() {
+    // User-supplied `<br>` separators become `\n` at parse time and must
+    // not be re-joined or re-wrapped — each explicit line is authoritative.
+    let src = "sequenceDiagram
+participant A
+participant B
+A->>B: go
+note over A,B : first line<br>second line<br>third line";
+    let out = mermaid_text::render(src).unwrap();
+    assert!(out.contains("first line"), "first line missing from:\n{out}");
+    assert!(out.contains("second line"), "second line missing from:\n{out}");
+    assert!(out.contains("third line"), "third line missing from:\n{out}");
+    // All three lines must be separate rows in the rendered note box.
+    let first = out.lines().position(|l| l.contains("first line")).unwrap();
+    let second = out.lines().position(|l| l.contains("second line")).unwrap();
+    let third = out.lines().position(|l| l.contains("third line")).unwrap();
+    assert!(first < second && second < third, "lines must be in top-down order");
+    assert_snapshot!("sequence_note_respects_explicit_br", out);
+}
+
+#[test]
+fn sequence_note_left_of_wraps() {
+    // A `note left of B` with text wider than the available left-of space
+    // should wrap into multiple lines using the left-of budget.
+    let src = "sequenceDiagram
+participant A
+participant B
+A->>B: call
+note left of B : this is a somewhat long note anchored left of B
+B->>A: reply";
+    let out = mermaid_text::render(src).unwrap();
+    // Text must appear somewhere in the output, possibly split across lines.
+    assert!(
+        out.contains("somewhat long"),
+        "note text missing from:\n{out}"
+    );
+    assert!(out.contains('╭') && out.contains('╯'));
+    assert_snapshot!("sequence_note_left_of_wraps", out);
+}
+
 #[test]
 fn sequence_with_explicit_activation() {
     // `activate X` / `deactivate X` overlay heavy `┃` bars on the

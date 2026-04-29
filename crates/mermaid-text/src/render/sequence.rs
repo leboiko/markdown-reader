@@ -25,7 +25,7 @@
 use unicode_width::UnicodeWidthStr;
 
 use crate::sequence::{
-    AutonumberState, Block, BlockKind, MessageStyle, NoteAnchor, NoteEvent, SequenceDiagram,
+    AutonumberState, Block, BlockKind, MessageStyle, NoteAnchor, SequenceDiagram,
 };
 
 // ---------------------------------------------------------------------------
@@ -373,22 +373,106 @@ fn note_columns(
     }
 }
 
-/// Compute the row stride for a single note in the message stream:
-/// top border + text rows + bottom border + 1 blank spacer below.
-///
-/// The spacer is necessary because [`draw_message`] places its label
-/// at `row - 1` of the arrow position; without the spacer, the next
-/// message's label would land on the note's bottom-border row.
-/// Used both by the canvas-height budget (so `Canvas::new` allocates
-/// enough rows) and by the render loop (so `arrow_row` advances by
-/// the same amount the budget reserved).
-fn note_height(note: &NoteEvent) -> usize {
-    note.text.lines().count().max(1) + 3
-}
-
 /// Compute the maximum display width across the lines of `text`.
 fn max_line_width(text: &str) -> usize {
     text.lines().map(|l| l.width()).max().unwrap_or(0)
+}
+
+/// Word-wrap `text` so that no line exceeds `budget` display cells.
+///
+/// Each pre-existing `\n` in `text` is an authoritative break (from the user's
+/// `<br>` or `<br/>`) and is always preserved exactly — the lines it produces
+/// are never re-joined and re-split. Within each such segment, words are packed
+/// greedily left-to-right. A word that exceeds `budget` by itself is left on
+/// its own line and the canvas-widening pass will handle it.
+///
+/// Returns the wrapped string. If every line already fits within `budget`,
+/// the input is returned unchanged.
+fn wrap_note_text(text: &str, budget: usize) -> String {
+    if budget == 0 {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    for (seg_idx, segment) in text.split('\n').enumerate() {
+        if seg_idx > 0 {
+            out.push('\n');
+        }
+        // If the segment already fits, emit it unchanged.
+        if segment.width() <= budget {
+            out.push_str(segment);
+            continue;
+        }
+        // Greedy word-wrap within this segment.
+        let mut current_w = 0usize;
+        let mut first_word = true;
+        for word in segment.split_ascii_whitespace() {
+            let w = word.width();
+            if first_word {
+                out.push_str(word);
+                current_w = w;
+                first_word = false;
+            } else if current_w + 1 + w <= budget {
+                out.push(' ');
+                out.push_str(word);
+                current_w += 1 + w;
+            } else {
+                // Word doesn't fit on current line — start a new one.
+                out.push('\n');
+                out.push_str(word);
+                current_w = w;
+            }
+        }
+        // Segment was non-empty whitespace-only (edge case).
+        if first_word {
+            out.push_str(segment);
+        }
+    }
+    out
+}
+
+/// Compute the text-width budget for a note given its anchor.
+///
+/// Budget = available display columns for note content (excluding the 2-cell
+/// border and 2-cell padding on each side, i.e., box_width - 4).
+///
+/// Policy:
+/// - `LeftOf(X)`: everything to the left of the anchor's lifeline, minus the
+///   2-cell gap between box right edge and the lifeline.
+/// - `RightOf(X)`: everything to the right of the anchor, clipped to a
+///   comfortable 30 cells so the box doesn't run off-screen on typical terms.
+/// - `Over(X)`: 40 cells (Mermaid-ish default for single-participant notes).
+/// - `OverPair(X, Y)`: the span between the two centres, minus box padding.
+fn note_budget(
+    anchor: &NoteAnchor,
+    layouts: &[ParticipantLayout],
+    diag: &SequenceDiagram,
+) -> usize {
+    const RIGHT_OF_BUDGET: usize = 30;
+    const OVER_SINGLE_BUDGET: usize = 40;
+    const BOX_OVERHEAD: usize = 4; // 2 borders + 2 padding cells on each side = 4 per side? No: overhead is border(1)+pad(1) on each side = 4 total
+
+    match anchor {
+        NoteAnchor::LeftOf(id) => {
+            let Some(i) = diag.participant_index(id) else {
+                return OVER_SINGLE_BUDGET;
+            };
+            let right_edge = layouts[i].center.saturating_sub(2);
+            right_edge.saturating_sub(BOX_OVERHEAD)
+        }
+        NoteAnchor::RightOf(_) => RIGHT_OF_BUDGET,
+        NoteAnchor::Over(_) => OVER_SINGLE_BUDGET,
+        NoteAnchor::OverPair(a, b) => {
+            let Some(i) = diag.participant_index(a) else {
+                return OVER_SINGLE_BUDGET;
+            };
+            let Some(j) = diag.participant_index(b) else {
+                return OVER_SINGLE_BUDGET;
+            };
+            let (lo, hi) = if i <= j { (i, j) } else { (j, i) };
+            let span_w = layouts[hi].center.saturating_sub(layouts[lo].center) + 1;
+            span_w.saturating_sub(BOX_OVERHEAD).max(OVER_SINGLE_BUDGET)
+        }
+    }
 }
 
 /// Draw the lifeline `┆` column from row `start` to row `end` (inclusive).
@@ -540,9 +624,27 @@ pub fn render(diag: &SequenceDiagram) -> String {
         1 + regular_count * EVENT_ROW_H + self_msg_count * SELF_MSG_ROW_H
     };
 
+    // Pre-compute wrapped note text for every note. Two-pass approach:
+    //   Pass 1 (here): wrap each note's text to its anchor budget, record the
+    //           required canvas width for unbreakable words that exceed the
+    //           budget, and compute the wrapped line count for height budgeting.
+    //   Pass 2 (draw loop): use the wrapped texts when calling draw_note_box.
+    let note_wrapped: Vec<String> = diag
+        .notes
+        .iter()
+        .map(|note| {
+            let budget = note_budget(&note.anchor, &layouts, diag);
+            wrap_note_text(&note.text, budget)
+        })
+        .collect();
+
     // Notes consume their own rows in the message stream. Sum them
     // into the height budget so `Canvas::new` allocates enough space.
-    let note_rows: usize = diag.notes.iter().map(note_height).sum();
+    // Use the wrapped text line count so the canvas is tall enough.
+    let note_rows: usize = note_wrapped
+        .iter()
+        .map(|t| t.lines().count().max(1) + 3)
+        .sum();
 
     // Block frames add 2 rows per border and per branch divider (1 for
     // the glyph itself + 1 spacer below) so adjacent message labels
@@ -572,7 +674,26 @@ pub fn render(diag: &SequenceDiagram) -> String {
         .map(|m| m.text.width() + 6)
         .max()
         .unwrap_or(0);
-    let width = last.center + last.box_width / 2 + 2 + self_msg_extra;
+    let participant_width = last.center + last.box_width / 2 + 2 + self_msg_extra;
+
+    // Widen the canvas when a note's wrapped text + box overhead would exceed
+    // the participant span. This handles unbreakable words (a word wider than
+    // the wrapping budget) that couldn't be split by `wrap_note_text`.
+    let note_required_width: usize = diag
+        .notes
+        .iter()
+        .zip(note_wrapped.iter())
+        .filter_map(|(note, wrapped)| {
+            let text_w = max_line_width(wrapped);
+            // box_w = text_w + 4 (border + padding on each side)
+            let (_l, r) = note_columns(&note.anchor, &layouts, diag, text_w)?;
+            // right edge of the note box + 1 margin
+            Some(r + 2)
+        })
+        .max()
+        .unwrap_or(0);
+
+    let width = participant_width.max(note_required_width);
 
     let mut canvas = Canvas::new(width, height);
 
@@ -671,18 +792,23 @@ pub fn render(diag: &SequenceDiagram) -> String {
     };
 
     // Helper closure: render any notes whose `after_message` matches
-    // `at`, advancing `arrow_row` by each note's height. Used both
-    // before the message loop (for notes with after_message == 0)
-    // and inside it (for notes positioned after each message).
-    let render_notes_at = |canvas: &mut Canvas, arrow_row: &mut usize, at: usize| {
-        for note in diag.notes.iter().filter(|n| n.after_message == at) {
-            let text_w = max_line_width(&note.text);
-            if let Some((l, r)) = note_columns(&note.anchor, &layouts, diag, text_w) {
-                draw_note_box(canvas, l, r, *arrow_row, &note.text);
-                *arrow_row += note_height(note);
+    // `at`, advancing `arrow_row` by each note's height. Uses the
+    // pre-computed wrapped text so drawing and height accounting agree.
+    let render_notes_at =
+        |canvas: &mut Canvas, arrow_row: &mut usize, at: usize| {
+            for (note, wrapped) in diag
+                .notes
+                .iter()
+                .zip(note_wrapped.iter())
+                .filter(|(n, _)| n.after_message == at)
+            {
+                let text_w = max_line_width(wrapped);
+                if let Some((l, r)) = note_columns(&note.anchor, &layouts, diag, text_w) {
+                    draw_note_box(canvas, l, r, *arrow_row, wrapped);
+                    *arrow_row += wrapped.lines().count().max(1) + 3;
+                }
             }
-        }
-    };
+        };
 
     // Notes positioned BEFORE any message (after_message == 0) land
     // at the top of the body, before the first message label.
