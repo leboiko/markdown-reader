@@ -5,6 +5,44 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.34.27] — 2026-04-29
+
+### Added — `mindmap` diagram support (mermaid-text 0.29.0)
+
+Bumped `mermaid-text` dependency to 0.29.0. Adds the 11th supported Mermaid
+diagram type: `mindmap`. Mindmaps are rendered as a vertical Unicode tree with
+the root in a rounded box at the top and children branching below using
+`├──` / `└──` / `│` tree-drawing glyphs. Phase 1 limitations: all node shapes
+are normalised to plain text; `::icon(...)` directives are silently ignored.
+
+### Added — Link validator: `--check-external` HTTP checking implemented
+
+`--check-external` (used alongside `--check-links DIR`) now performs real HTTP
+HEAD requests for every `http://` and `https://` link found in the scanned
+markdown files. Previously this flag printed a notice and fell back to
+internal-only validation.
+
+Implementation details:
+
+- **HTTP client**: `ureq 3.3.0` (sync, lightweight, no async runtime required).
+  Compiled with the `rustls` feature; no native-TLS dependency.
+- **Concurrency**: up to 10 parallel `std::thread` workers via scoped threads
+  (chunked wave processing — a new wave starts only after the current one
+  completes). No `rayon` dependency added.
+- **Redirects**: followed up to 5 hops (ureq `max_redirects` config).
+- **Timeout**: default 10 seconds per request, overridable via the new
+  `--external-timeout-secs N` CLI argument.
+- **Deduplication**: each unique URL is requested at most once, even if it
+  appears in multiple files or on multiple lines.
+- **Output**: broken external links are reported with an `[external]` tag in
+  the reason field, distinguishing them from internal link failures.
+- **Backward compatibility**: without `--check-external`, output and exit
+  codes are byte-identical to v1.34.25.
+
+New test coverage: 8 additional unit tests covering 200 OK, 404, 500,
+301-redirect chains, DNS failures, connection errors, and end-to-end
+`check_dir` integration using a local mock TCP server.
+
 ## [1.34.25] — 2026-04-28
 
 ### Fixed — Search modal query text invisible on light themes

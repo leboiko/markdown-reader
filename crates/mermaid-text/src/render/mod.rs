@@ -6,6 +6,7 @@ pub mod er;
 pub mod gantt;
 pub mod git_graph;
 pub mod journey;
+pub mod mindmap;
 pub mod pie;
 pub mod sequence;
 pub mod timeline;

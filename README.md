@@ -375,11 +375,30 @@ What is checked:
 - Cross-file links: `[text](./other.md)` — verified that the target file exists.
 - Cross-file anchors: `[text](./other.md#section)` — target file AND anchor both checked.
 
-What is skipped:
+External link checking (optional):
 
-- `http(s)://` external links (skipped unless `--check-external` is passed, which is
-  currently a stub that prints a notice and falls back to internal-only validation).
-- `mailto:`, `ftp://`, and other non-http schemes.
+```sh
+markdown-reader --check-links docs/ --check-external
+markdown-reader --check-links docs/ --check-external --external-timeout-secs 15
+```
+
+When `--check-external` is added, every `http://` and `https://` link found
+in the scanned files is validated via a HEAD request. Up to 10 requests run in
+parallel; redirects are followed (up to 5 hops). Broken links are reported with
+an `[external]` tag:
+
+```
+guide.md
+  line 87: 404 Not Found [external]  [https://example.com/dead]
+  line 91: connection error: ... [external]  [https://nonresponsive.test/]
+```
+
+`--external-timeout-secs N` (default: 10) controls the per-request timeout.
+
+What is skipped without `--check-external`:
+
+- `http(s)://` external links — silently ignored unless `--check-external` is passed.
+- `mailto:`, `ftp://`, and other non-http schemes (always ignored).
 
 Exit codes: `0` when all links are valid, `1` when any broken links are found.
 The TUI is not launched in this mode.
@@ -618,9 +637,12 @@ statements), pie charts, ER diagrams, class diagrams, user-journey
 diagrams, Gantt charts (Phase 1 — bar chart with date axis; status
 tags and excludes are silently ignored), timeline diagrams
 (Phase 1 — bullet-on-a-wire flow with titled sections and multi-event
-periods), and git graph diagrams (Phase 1 — lane-based commit graph
+periods), git graph diagrams (Phase 1 — lane-based commit graph
 with `*`/`M`/`C` glyphs for normal/merge/cherry-pick commits, fork and
-merge arcs, and commit ids/tags). Fidelity on subgraphs and complex layouts
+merge arcs, and commit ids/tags), and mindmap diagrams (Phase 1 — vertical
+tree with the root in a rounded box and children branching with `├──`/`└──`
+glyphs; all node shapes normalised to text, icons silently ignored).
+Fidelity on subgraphs and complex layouts
 depends on each renderer's maturity — when a specific diagram fails,
 the source is shown with a short error in the footer.
 

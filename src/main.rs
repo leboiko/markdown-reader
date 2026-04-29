@@ -89,10 +89,18 @@ struct Cli {
 
     /// Also validate `http(s)://` links when `--check-links` is active.
     ///
-    /// Currently a stub: prints a notice and continues with internal-only
-    /// validation. No HTTP client requests are made in this release.
+    /// Performs a HEAD request for every external link found in the scanned
+    /// markdown files. Responses with 4xx/5xx status codes or connection
+    /// errors are reported as broken links (tagged `[external]`). Up to 10
+    /// requests run in parallel; redirects are followed up to 5 hops.
     #[arg(long, requires = "check_links")]
     check_external: bool,
+
+    /// Timeout (in seconds) for each external HTTP HEAD request (default: 10).
+    ///
+    /// Only relevant when `--check-external` is also passed.
+    #[arg(long, value_name = "SECS", default_value_t = 10, requires = "check_links")]
+    external_timeout_secs: u64,
 
     /// Extract a named heading section and print it to stdout, then exit.
     ///
@@ -210,6 +218,7 @@ async fn main() -> Result<()> {
             .with_context(|| format!("could not resolve path: {}", dir.display()))?;
         let opts = checklinks::CheckOpts {
             check_external: cli.check_external,
+            external_timeout_secs: cli.external_timeout_secs,
         };
         let report = checklinks::check_dir(&root, &opts);
         report.print(&root);

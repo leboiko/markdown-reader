@@ -76,6 +76,7 @@
 //! | `gantt` (project schedule bar chart) | yes (Phase 1 — bar chart, no excludes/status tags/milestones) |
 //! | `timeline` (vertical time-period bullet list) | yes (Phase 1 — title, sections, multi-event periods; no custom themes) |
 //! | `gitGraph` (branch/commit lane diagram) | yes (Phase 1 — normal/merge/cherry-pick commits; no custom themes or orientation) |
+//! | `mindmap` (hierarchical outline tree) | yes (Phase 1 — vertical tree with root box; all shapes normalised to text; icons silently ignored) |
 //!
 //! ## Limitations
 //!
@@ -108,6 +109,7 @@ pub mod gantt;
 pub mod git_graph;
 pub mod journey;
 pub mod layout;
+pub mod mindmap;
 pub mod parser;
 pub mod pie;
 pub mod render;
@@ -123,6 +125,7 @@ pub use er::{Attribute, AttributeKey, Cardinality, Entity, ErDiagram, LineStyle,
 pub use gantt::{GanttDiagram, GanttSection, GanttTask};
 pub use git_graph::{Branch, Commit, CommitKind, Event as GitEvent, GitGraph};
 pub use journey::{JourneyDiagram, Section, Task};
+pub use mindmap::{Mindmap, MindmapNode};
 pub use pie::{PieChart, PieSlice};
 pub use sequence::{Message, MessageStyle, Participant, SequenceDiagram};
 pub use timeline::{Timeline, TimelineEntry, TimelineSection};
@@ -289,6 +292,13 @@ pub fn render_with_width(input: &str, max_width: Option<usize>) -> Result<String
             // fixed layout, honours the optional width budget for id truncation.
             let diag = parser::git_graph::parse(input)?;
             return Ok(render::git_graph::render(&diag, max_width));
+        }
+        DiagramKind::Mindmap => {
+            // Mindmap diagrams render as a vertical tree with the root in a
+            // rounded box and children branching below — fixed layout, honours
+            // the optional width budget for text truncation.
+            let diag = parser::mindmap::parse(input)?;
+            return Ok(render::mindmap::render(&diag, max_width));
         }
         DiagramKind::Flowchart => parser::parse(input)?,
         DiagramKind::State => {
@@ -554,6 +564,12 @@ pub fn render_with_options(input: &str, opts: &RenderOptions) -> Result<String, 
             // Color opts are not applicable in Phase 1.
             let diag = parser::git_graph::parse(input)?;
             render::git_graph::render(&diag, opts.max_width)
+        }
+        DiagramKind::Mindmap => {
+            // Mindmap diagrams render as a vertical tree.
+            // Color opts are not applicable in Phase 1.
+            let diag = parser::mindmap::parse(input)?;
+            render::mindmap::render(&diag, opts.max_width)
         }
         DiagramKind::Flowchart => {
             let graph = parser::parse(input)?;

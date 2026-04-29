@@ -2001,3 +2001,44 @@ fn flowchart_label_midpoint_placement_lr() {
     );
     assert_snapshot!("flowchart_label_midpoint_placement_lr", out);
 }
+
+// ---------------------------------------------------------------------------
+// Mindmap — canonical Mermaid docs example
+//     Regression guard: root box, branch glyphs, and nested indentation
+//     must all render correctly.
+// ---------------------------------------------------------------------------
+#[test]
+fn mindmap_canonical_example() {
+    let src = r"mindmap
+  root((mindmap))
+    Origins
+      Long history
+      ::icon(fa fa-book)
+      Popularisation
+        British popular psychology author Tony Buzan
+    Research
+      On effectiveness and features
+      On Automatic creation
+        Uses
+          Creative techniques
+          Strategic planning
+          Argument mapping
+    Tools
+      Pen and paper
+      Mermaid";
+    let out = mermaid_text::render(src).unwrap();
+    // Root text must appear in its box.
+    assert!(out.contains("mindmap"), "root text missing from output");
+    // Top-level children must all appear.
+    assert!(out.contains("Origins"), "Origins node missing");
+    assert!(out.contains("Research"), "Research node missing");
+    assert!(out.contains("Tools"), "Tools node missing");
+    // Nested children must be present.
+    assert!(out.contains("Long history"), "Long history missing");
+    assert!(out.contains("British popular psychology author Tony Buzan"), "Buzan missing");
+    // Icon lines must be silently ignored — no `::icon` text in output.
+    assert!(!out.contains("::icon"), "icon directive leaked into output");
+    // Branch glyphs must be present.
+    assert!(out.contains('\u{251C}') || out.contains('\u{2514}'), "no branch glyphs");
+    assert_snapshot!("mindmap_canonical_example", out);
+}

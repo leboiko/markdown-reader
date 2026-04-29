@@ -48,6 +48,14 @@ line.
   Phase 1 limitations: direction modifiers (`LR`/`TB`), extended
   commit types (`REVERSE`/`HIGHLIGHT`), and custom themes are silently
   ignored.
+- **Mindmap diagrams** (`mindmap`) rendered as a vertical Unicode tree.
+  The root node is displayed in a `╭─…─╮` rounded box at the top with a
+  trunk `│` connector leading to child nodes. Non-last children use
+  `├──`; last children use `└──`; continuation pipes `│   ` track
+  open branches at each nesting level. Phase 1 limitations: all 6
+  Mermaid node shapes (default, rounded, circle, bang, cloud, hexagon)
+  are normalised to plain text; `::icon(...)` directives are silently
+  ignored; custom colour themes have no effect.
 
 Recent rendering improvements: arrow tips merge into destination box
 borders (`┌─▾─┐` instead of floating `▾` above), edge labels never
@@ -688,6 +696,109 @@ main hotfix
 ignored. Extended commit types (`REVERSE`, `HIGHLIGHT`) and `commit message:`
 are silently ignored. Custom themes have no effect. Branch lanes are ordered
 strictly by creation order with no crossing minimisation.
+
+---
+
+## Mindmap diagrams
+
+A `mindmap` diagram is an indent-based hierarchical outline. The first node
+after the `mindmap` keyword is the root; deeper indentation creates children.
+The root is rendered in a rounded box at the top; the rest of the tree hangs
+below it using standard tree-drawing connectors.
+
+**Example 1 — Canonical Mermaid mindmap:**
+
+```mermaid
+mindmap
+  root((mindmap))
+    Origins
+      Long history
+      ::icon(fa fa-book)
+      Popularisation
+        British popular psychology author Tony Buzan
+    Research
+      On effectiveness and features
+      On Automatic creation
+        Uses
+          Creative techniques
+          Strategic planning
+          Argument mapping
+    Tools
+      Pen and paper
+      Mermaid
+```
+
+Expected rendered output:
+
+```text
+╭─────────╮
+│ mindmap │
+╰────┬────╯
+     │
+├── Origins
+│   ├── Long history
+│   └── Popularisation
+│       └── British popular psychology author Tony Buzan
+├── Research
+│   ├── On effectiveness and features
+│   └── On Automatic creation
+│       └── Uses
+│           ├── Creative techniques
+│           ├── Strategic planning
+│           └── Argument mapping
+└── Tools
+    ├── Pen and paper
+    └── Mermaid
+```
+
+**Example 2 — Software architecture decision:**
+
+```mermaid
+mindmap
+  root((Decision))
+    Option A
+      Pros
+        Fast to implement
+        Low cost
+      Cons
+        Hard to scale
+    Option B
+      Pros
+        Highly scalable
+        Well documented
+      Cons
+        Higher upfront effort
+    Recommendation
+      Option B for long-term growth
+```
+
+Expected rendered output:
+
+```text
+╭──────────╮
+│ Decision │
+╰─────┬────╯
+      │
+├── Option A
+│   ├── Pros
+│   │   ├── Fast to implement
+│   │   └── Low cost
+│   └── Cons
+│       └── Hard to scale
+├── Option B
+│   ├── Pros
+│   │   ├── Highly scalable
+│   │   └── Well documented
+│   └── Cons
+│       └── Higher upfront effort
+└── Recommendation
+    └── Option B for long-term growth
+```
+
+**Phase 1 limitations.** All 6 Mermaid node shapes (`((circle))`, `(rounded)`,
+`{{hexagon}}`, `))bang((`, `)cloud(`, `[rectangle]`) are stripped to their inner
+text — the rendered tree does not visually distinguish shapes. `::icon(...)` icon
+directives are silently ignored. Custom colour themes have no effect.
 
 ---
 

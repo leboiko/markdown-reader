@@ -3,6 +3,60 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.29.0 — 2026-04-28 — Phase 10: `mindmap` support
+
+### Added
+
+- **`mindmap` diagram type** (Phase 1). Parses Mermaid `mindmap` source and
+  renders it as a vertical tree with the root node displayed in a small rounded
+  box at the top and child nodes branching below using standard tree-drawing
+  glyphs (`├──`, `└──`, `│`).
+
+- **`src/mindmap.rs`** — public types:
+  - `Mindmap { root: MindmapNode }` — the top-level diagram.
+  - `MindmapNode { text: String, children: Vec<MindmapNode> }` — one node.
+  - Both derive `Debug`, `Clone`, `PartialEq`, `Eq`, `Default`.
+  - `MindmapNode::node_count()` counts the subtree size (self + all descendants).
+  - `Mindmap::node_count()` delegates to the root.
+
+- **`src/parser/mindmap.rs`** — indent-stack parser:
+  - The first non-blank line after `mindmap` is the root; subsequent lines are
+    children determined by indentation depth.
+  - Tabs are normalised to 4 spaces before measuring indent.
+  - Node-shape brackets are stripped to inner text: `((text))` → `text`,
+    `(text)` → `text`, `{{text}}` → `text`, `))text((` → `text`, `)text(` → `text`,
+    `[text]` → `text`. Id prefixes before bracket-openers are silently dropped.
+  - `::icon(...)` directive lines are silently ignored.
+  - `%%` comment lines, blank lines, and `accTitle`/`accDescr` metadata lines
+    are silently skipped.
+
+- **`src/render/mindmap.rs`** — tree renderer:
+  - Root is drawn as a `╭─…─╮ / │ … │ / ╰─┬─╯` rounded box.
+  - A trunk `│` connector links the box to the first child row.
+  - Non-last children use `├──`; last children use `└──`.
+  - Continuation pipes `│   ` / blanks `    ` are extended per nesting level.
+  - `max_width` is honoured: node text that would exceed the column budget is
+    truncated with `…`.
+
+- **Detection** — `"mindmap"` keyword wired into `detect::detect` →
+  `DiagramKind::Mindmap`.
+
+- **Wire-in** — `DiagramKind::Mindmap` arms added to `render_with_width` and
+  `render_with_options`.
+
+- **Snapshot** — `mindmap_canonical_example` snapshot test added to
+  `tests/snapshots.rs`.
+
+### Phase 1 limitations
+
+- All 6 Mermaid node shapes (default, rounded, circle, bang, cloud, hexagon)
+  are normalised to plain text; no shape-specific rendering is performed.
+- `::icon(...)` directives are recognised but silently discarded; no icon
+  glyphs are rendered.
+- Custom themes, colours, and CSS classes are not supported.
+
+---
+
 ## 0.28.2 — 2026-04-28 — Fix subgraph title pierce
 
 ### Fixed — B-title: vertical routes overwrote subgraph title characters with

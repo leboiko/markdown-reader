@@ -35,6 +35,10 @@ pub enum DiagramKind {
     /// branches as vertical columns and commits flowing top-to-bottom
     /// (Phase 1 — no custom themes, orientation, or extended commit types).
     GitGraph,
+    /// `mindmap` diagrams. Render as a vertical tree with the root in a
+    /// rounded box at the top and children branching below with `├──` / `└──`
+    /// connectors (Phase 1 — no shape variants or icons).
+    Mindmap,
 }
 
 /// Detect the kind of Mermaid diagram described by `input`.
@@ -67,6 +71,7 @@ pub enum DiagramKind {
 /// assert_eq!(detect("gantt\ntitle Roadmap").unwrap(), DiagramKind::Gantt);
 /// assert_eq!(detect("timeline\n2002 : LinkedIn").unwrap(), DiagramKind::Timeline);
 /// assert_eq!(detect("gitGraph\ncommit").unwrap(), DiagramKind::GitGraph);
+/// assert_eq!(detect("mindmap\n  root").unwrap(), DiagramKind::Mindmap);
 /// assert!(detect("").is_err());
 /// ```
 pub fn detect(input: &str) -> Result<DiagramKind, Error> {
@@ -92,6 +97,7 @@ pub fn detect(input: &str) -> Result<DiagramKind, Error> {
         // gitGraph is camelCase in Mermaid spec; match case-insensitively for
         // resilience against linters/formatters that normalise the keyword.
         "gitgraph" => Ok(DiagramKind::GitGraph),
+        "mindmap" => Ok(DiagramKind::Mindmap),
         other => Err(Error::UnsupportedDiagram(other.to_string())),
     }
 }
@@ -211,5 +217,15 @@ mod tests {
         assert_eq!(detect("gitGraph\ncommit").unwrap(), DiagramKind::GitGraph);
         // Case-insensitive match: "gitgraph" lowercased.
         assert_eq!(detect("GitGraph").unwrap(), DiagramKind::GitGraph);
+    }
+
+    #[test]
+    fn detects_mindmap_keyword() {
+        assert_eq!(
+            detect("mindmap\n  root").unwrap(),
+            DiagramKind::Mindmap
+        );
+        // Case-insensitive.
+        assert_eq!(detect("Mindmap").unwrap(), DiagramKind::Mindmap);
     }
 }
