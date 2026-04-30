@@ -5,6 +5,16 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.34.46] — 2026-04-30
+
+### Changed — block-beta inline spatial edges (mermaid-text 0.42.0)
+
+Edges between horizontally- or vertically-adjacent blocks in a `block-beta`
+diagram are now drawn as inline arrow glyphs (`►` / `◄` / `▼` / `▲`) directly
+in the single-character gap between the boxes. Non-adjacent edges fall back to a
+short text summary. The "Edges:" header is omitted entirely when all edges are
+routable inline. Block grid positions are unchanged.
+
 ## [1.34.45] — 2026-04-30
 
 ### Changed — sankey-beta proportional bars (mermaid-text 0.41.0)

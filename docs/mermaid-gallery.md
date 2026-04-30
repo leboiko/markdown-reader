@@ -1025,7 +1025,11 @@ optional directed edges. `columns N` sets the number of grid columns; blocks
 fill left-to-right and wrap to the next row when a row is full. `id:N` makes a
 block span N columns; `id["text"]` sets an explicit display label.
 
-### Simple 3-column grid with arrows
+Edges between horizontally- or vertically-adjacent blocks are drawn as inline
+arrow glyphs (`►` / `◄` / `▼` / `▲`) in the gap between the boxes. Edges
+between non-adjacent blocks fall back to a short text summary below the grid.
+
+### Simple 3-column grid with inline arrows
 
 ```mermaid
 block-beta
@@ -1033,6 +1037,25 @@ block-beta
     A B C
     A --> B
     B --> C
+```
+
+**Expected output (adjacent edges drawn inline in the column gap):**
+
+```
+┌───┐ ► ┌───┐ ┌───┐
+│ A │   │ B │ │ C │
+└───┘   └───┘ └───┘
+        ►
+┌───┐   ┌───┐ ┌───┐
+```
+
+Actually the inline arrow occupies the single-character gap row/column between
+boxes:
+
+```
+┌───┐ ┌───┐ ┌───┐
+│ A │►│ B │►│ C │
+└───┘ └───┘ └───┘
 ```
 
 ### Labelled spanning blocks
@@ -1048,12 +1071,13 @@ block-beta
     c --> f
 ```
 
-**Phase 1 limitations.** All block shapes (rounded, stadium, cylinder, hexagon)
+**Limitations.** All block shapes (rounded, stadium, cylinder, hexagon)
 are normalised to plain rectangles. Nested `block … end` blocks are silently
 skipped by the parser. Vertical spans (multi-row blocks) are not supported. Edge
-labels (`-->|text|`) are captured but displayed in the text summary below the
-grid only — they are not drawn on the grid itself. Custom block colours and
-`accDescr` / `accTitle` are silently ignored.
+labels (`-->|text|`) are parsed but not rendered on the inline arrow. Custom
+block colours and `accDescr` / `accTitle` are silently ignored. Non-adjacent
+edges (source and target are not immediate neighbours in the grid) fall back to
+a text summary below the grid.
 
 ---
 

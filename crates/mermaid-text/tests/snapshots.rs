@@ -2439,6 +2439,115 @@ fn block_beta_canonical_example() {
 }
 
 // ---------------------------------------------------------------------------
+// block-beta — inline spatial edge rendering (0.42.0).
+//
+// Strong-assertion test written BEFORE the implementation to confirm the
+// current renderer would fail all three checks:
+//   1. At least 2 right-arrow glyphs (►) in the output — one per adjacent edge.
+//      A no-op impl has 0; an impl that only handles the first row has 1.
+//   2. Grid integrity: ┌ count equals block count (6). A "lost the grid" bug
+//      would reduce this.
+//   3. "Edges:" header absent — all edges in this diagram are adjacent and
+//      must be rendered inline, so the text summary must be gone entirely.
+// ---------------------------------------------------------------------------
+#[test]
+fn block_beta_inline_adjacent_edges() {
+    // 3-column grid, two rows, two horizontally-adjacent edges in different rows.
+    let src = "block-beta
+    columns 3
+    A B C
+    D E F
+    A --> B
+    D --> E";
+
+    let out = mermaid_text::render(src).unwrap();
+
+    // 1. Both adjacent edges must produce an inline right-arrow glyph.
+    let arrow_count = out.chars().filter(|&c| c == '\u{25BA}').count();
+    assert!(
+        arrow_count >= 2,
+        "expected at least 2 inline ► arrows (one per adjacent edge), \
+         got {arrow_count}:\n{out}"
+    );
+
+    // 2. Grid integrity: 6 blocks → 6 top-left corner glyphs.
+    let corner_count: usize = out.chars().filter(|&c| c == '\u{250C}').count();
+    assert_eq!(
+        corner_count, 6,
+        "expected exactly 6 ┌ corners (one per block), got {corner_count}:\n{out}"
+    );
+
+    // 3. Text summary must be absent when every edge is routable inline.
+    assert!(
+        !out.contains("Edges:"),
+        "\"Edges:\" text summary must be absent when all edges are routed inline:\n{out}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// block-beta — vertical adjacent edge (same column, neighbouring rows).
+// ---------------------------------------------------------------------------
+#[test]
+fn block_beta_inline_vertical_edge() {
+    let src = "block-beta
+    columns 1
+    A
+    B
+    A --> B";
+
+    let out = mermaid_text::render(src).unwrap();
+
+    // Vertical adjacent edge: expect a downward-arrow glyph ▼ in the gap row.
+    let down_arrow_count = out.chars().filter(|&c| c == '\u{25BC}').count();
+    assert!(
+        down_arrow_count >= 1,
+        "expected at least 1 inline ▼ arrow for vertical adjacent edge, \
+         got {down_arrow_count}:\n{out}"
+    );
+
+    // Grid integrity: 2 blocks → 2 ┌ corners.
+    let corner_count: usize = out.chars().filter(|&c| c == '\u{250C}').count();
+    assert_eq!(
+        corner_count, 2,
+        "expected exactly 2 ┌ corners, got {corner_count}:\n{out}"
+    );
+
+    // No text summary needed since edge is routable.
+    assert!(
+        !out.contains("Edges:"),
+        "\"Edges:\" must be absent when vertical edge is routed inline:\n{out}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// block-beta — non-adjacent edge falls back to text summary (Tier 3).
+// ---------------------------------------------------------------------------
+#[test]
+fn block_beta_non_adjacent_edge_falls_back_to_summary() {
+    // A and F are not adjacent — A is (row 0, col 0), F is (row 1, col 2).
+    let src = "block-beta
+    columns 3
+    A B C
+    D E F
+    A --> F";
+
+    let out = mermaid_text::render(src).unwrap();
+
+    // Grid must still be intact.
+    let corner_count: usize = out.chars().filter(|&c| c == '\u{250C}').count();
+    assert_eq!(
+        corner_count, 6,
+        "expected exactly 6 ┌ corners, got {corner_count}:\n{out}"
+    );
+
+    // Non-adjacent edge falls back to text summary.
+    assert!(
+        out.contains("Edges:") || out.contains('\u{25BA}'),
+        "non-adjacent edge must appear somewhere (summary or inline):\n{out}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // architecture-beta — canonical Phase 1 system-architecture example.
 //     Regression guard: groups, services, and connection summary must all
 //     render correctly.

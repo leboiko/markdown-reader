@@ -152,3 +152,10 @@ the historical source of truth.
   subgraph (the `wrapped_edge_label` regression noted in 0.17.0).
   Requires per-node effective-direction tracking that is non-trivial to
   thread through the current pipeline.
+- **block-beta Tier 2 — Manhattan routing for non-adjacent edges** — 0.42.0
+  ships Tier 1 (adjacent inline arrows) + Tier 3 (text fallback for
+  non-adjacent). Tier 2 would route non-adjacent edges through the gap rows
+  and columns using `─ │ ┌ ┐ └ ┘` corner glyphs with crossing handling.
+  Deferred because it requires a 2-D character canvas pass and risks
+  Bucket-C regressions on existing block-beta diagrams. Pick up if users
+  report non-adjacent edges are confusing in the text summary.

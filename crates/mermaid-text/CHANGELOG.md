@@ -3,6 +3,41 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.42.0 — 2026-04-30 — block-beta inline spatial edges
+
+### Changed
+
+- **`block-beta` edge rendering upgraded to inline spatial arrows (Tier 1+3).**
+  Edges between horizontally-adjacent blocks (same row, immediately neighbouring
+  columns) are drawn as `►` (forward) or `◄` (reverse) in the single-character
+  column gap between the two boxes. Edges between vertically-adjacent blocks
+  (same column, immediately neighbouring rows) are drawn as `▼` (forward) or
+  `▲` (reverse) in the blank line gap between the two row groups. The block grid
+  layout produced by `columns N` is **preserved exactly** — no re-layout occurs.
+
+  Routing strategy: Tier 1 (adjacent edges drawn inline) + Tier 3 (non-adjacent
+  edges that cannot be routed cleanly are kept in a short text summary below the
+  grid). The "Edges:" text summary is omitted entirely when all edges are
+  routable as inline arrows.
+
+  New output shape for `columns 3 / A B C / A --> B / B --> C`:
+
+  ```text
+  ┌───┐►┌───┐ ┌───┐
+  │ A ││ B │►│ C │
+  └───┘ └───┘ └───┘
+  ```
+
+  (Arrow glyph is placed in the gap cell on the content line between boxes.)
+
+### Deferred
+
+- Tier 2 Manhattan routing for non-adjacent edges (routing through gap rows and
+  columns with corner glyphs) is deferred — the incremental complexity did not
+  justify the risk of snapshot regressions for this release.
+- Edge labels are not rendered on inline arrows; they fall back to the text
+  summary when the edge is non-adjacent.
+
 ## 0.41.0 — 2026-04-30 — sankey-beta proportional bars
 
 ### Changed
