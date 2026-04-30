@@ -42,6 +42,30 @@ the historical source of truth.
   regression-test harness landed in 0.27.1.
 - **Mermaid bug audit** — gitGraph fork/merge arc connector,
   erDiagram inline attribute syntax, ER spine, LR labels (0.27.0).
+- **18 Mermaid diagram types covered** — beyond the original 10, added
+  `mindmap` (0.27.0), `quadrantChart` (0.29.0), `requirementDiagram`
+  (0.31.0), `xychart-beta` (0.32.0), `block-beta` (0.34.0), `sankey-beta`
+  (0.35.0), `packet-beta` (0.37.0), `architecture-beta` (0.38.0).
+- **Beta diagram visual upgrades (April 30, 2026)** — architecture-beta
+  Path A spatial-edge routing via the flowchart Sugiyama pipeline (0.40.0),
+  sankey-beta proportional bars with sub-cell precision (0.41.0),
+  block-beta inline spatial edges in grid gaps with adjacency detection
+  (0.42.0). Three of the four "structured-text" beta types upgraded to
+  actual visual diagrams in one session.
+- **ER polish (April 30, 2026)** — cross-row spine connects rightmost-in-row
+  entities (0.39.2), cross-row labels stagger across gap rows to avoid
+  collision (0.39.3).
+- **App stability (April 30, 2026)** — xychart-beta x-axis label
+  alignment (0.39.1), config-popup mouse-scroll passthrough guard
+  (1.34.39), applying-theme preserves viewer cursor and scroll
+  (1.34.40), mermaid heights preserved across cache invalidation so
+  the cursor doesn't jump during theme refresh (1.34.41).
+- **Sequence-diagram note polish (April 29, 2026)** — automatic
+  word-wrap for long notes plus width-aware canvas widening for
+  unbreakable words (0.39.0).
+- **Version-check on exit + release-pipeline patch** — quit-time crates.io
+  upgrade banner (1.34.34), `release.yml` `workflow_dispatch` back-fill
+  path fixed so manual tag rebuilds actually produce binaries (1.34.43).
 
 ---
 
@@ -49,10 +73,6 @@ the historical source of truth.
 
 ### Quick wins (under a session each)
 
-- **`--check-external` HTTP link checker** — flag exists today as a
-  stub (see `src/checklinks/mod.rs:118` and the doc comment at
-  `src/checklinks/mod.rs:436`). Wire up an actual HTTP HEAD/GET probe
-  with concurrency cap, timeout, and configurable retry.
 - **Per-composite direction-aware fork/join orientation** — `mermaid-text`
   currently resolves fork/join shape from the top-level graph direction
   (since 0.7.2). A composite with `direction TB` inside an LR top-level
@@ -94,11 +114,11 @@ the historical source of truth.
   region2 }` for orthogonal sub-state-machines. Needs a new layout
   primitive ("two layouts side-by-side in one container"). The hardest
   item on this list — deserves its own design pass. Multi-day.
-- **More Mermaid diagram types** — In rough order of usefulness:
-  `mindmap`, `requirementDiagram`, `quadrantChart`, `sankey-beta`,
-  `block-beta`, `xyChart-beta`, `architecture-beta`, `packet-beta`. Each
-  is its own decent chunk of work; pick up by demand. Multi-day each.
-  (Note: a parallel agent is currently implementing `mindmap`.)
+- **True proportional sankey** — current 0.41.0 is per-source
+  bars-next-to-flows. The "real" version stacks node bars with heights
+  proportional to total inflow, draws bands as filled stripes between
+  layers (computed by Sugiyama-style layering with band-crossing
+  minimisation), and conserves flow visually. 2-3 sessions.
 
 ---
 
