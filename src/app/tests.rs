@@ -2273,6 +2273,226 @@ fn pressing_o_opens_outline_picker() {
 }
 
 #[tokio::test]
+async fn applying_theme_preserves_position_with_mermaid_blocks() {
+    // User-reported residual after the cursor_line restoration fix:
+    // applying a theme clears `mermaid_cache`, so on the next draw
+    // `update_mermaid_heights` reads `DEFAULT_MERMAID_HEIGHT` (20) for
+    // every mermaid block until the async re-render lands. total_lines
+    // shrinks → cursor/scroll appear to jump up. When the render lands
+    // (~100ms later), they snap back. Symptom only appears when the
+    // cursor is near a mermaid block.
+    use crate::markdown::{DocBlock, MermaidBlockId, update_mermaid_heights};
+    use crate::mermaid::MermaidEntry;
+    use crate::theme::{Palette, Theme};
+    use std::cell::RefCell;
+    use std::path::PathBuf;
+    let mut app = App::new(PathBuf::from("."), None, None);
+    let path = PathBuf::from("/fake/mermaid_test.md");
+    app.tabs.open_or_focus(&path, true);
+    let content = "# Doc\n\n```mermaid\nflowchart LR\n  A --> B\n```\n\nsome text after\n";
+    let palette = Palette::from_theme(Theme::Default);
+    let max_height = 50u32;
+    if let Some(tab) = app.tabs.active_tab_mut() {
+        tab.view.load(
+            path.clone(),
+            "mermaid_test.md".to_string(),
+            content.to_string(),
+            &palette,
+            Theme::Default,
+        );
+    }
+    // Pretend the mermaid block had previously rendered to a 30-cell-tall
+    // image (much larger than DEFAULT_MERMAID_HEIGHT = 20).
+    let mermaid_id: MermaidBlockId = if let Some(tab) = app.tabs.active_tab() {
+        tab.view
+            .rendered
+            .iter()
+            .find_map(|b| {
+                if let DocBlock::Mermaid { id, .. } = b {
+                    Some(*id)
+                } else {
+                    None
+                }
+            })
+            .expect("test content must contain a mermaid block")
+    } else {
+        panic!("active tab missing");
+    };
+    let large_height: u32 = 30;
+    // Insert a fake AsciiDiagram entry with the expected large height —
+    // simulates an already-rendered diagram. AsciiDiagram height is derived
+    // from line count; we can't easily fake that without long source. Instead,
+    // populate cell_height directly on the block to mirror what the production
+    // draw cycle would do.
+    if let Some(tab) = app.tabs.active_tab_mut() {
+        for b in &mut tab.view.rendered {
+            if let DocBlock::Mermaid { cell_height, .. } = b {
+                cell_height.set(large_height);
+            }
+        }
+        tab.view.total_lines = tab
+            .view
+            .rendered
+            .iter()
+            .map(|b: &DocBlock| b.height())
+            .sum();
+        // Position cursor inside the mermaid block region.
+        tab.view.cursor_line = 5;
+        tab.view.scroll_offset = 0;
+    }
+    // Insert a corresponding AsciiDiagram entry so the cache returns the
+    // large height during update_mermaid_heights — this mirrors the steady
+    // state before the user opens the config popup.
+    let fake_diagram = "X".repeat(0) + &"\n".repeat((large_height - 2) as usize);
+    app.mermaid_cache.insert(
+        mermaid_id,
+        MermaidEntry::AsciiDiagram {
+            diagram: fake_diagram.clone(),
+            reason: "test".to_string(),
+            styled_text_cache: RefCell::new(None),
+        },
+    );
+    // Let update_mermaid_heights set cell_height from the cache once.
+    if let Some(tab) = app.tabs.active_tab_mut() {
+        update_mermaid_heights(&tab.view.rendered, &app.mermaid_cache, max_height);
+        tab.view.total_lines = tab
+            .view
+            .rendered
+            .iter()
+            .map(|b: &DocBlock| b.height())
+            .sum();
+    }
+    let total_before = app.tabs.active_tab().unwrap().view.total_lines;
+    let cursor_before = app.tabs.active_tab().unwrap().view.cursor_line;
+    let scroll_before = app.tabs.active_tab().unwrap().view.scroll_offset;
+
+    // Apply the theme — this clears mermaid_cache.
+    app.handle_key(KeyCode::Char('c'), KeyModifiers::NONE);
+    app.handle_key(KeyCode::Down, KeyModifiers::NONE);
+    app.handle_key(KeyCode::Enter, KeyModifiers::NONE);
+
+    // Simulate the next draw — update_mermaid_heights now reads DEFAULT
+    // for the missing entry and total_lines shrinks.
+    if let Some(tab) = app.tabs.active_tab_mut() {
+        update_mermaid_heights(&tab.view.rendered, &app.mermaid_cache, max_height);
+        tab.view.total_lines = tab
+            .view
+            .rendered
+            .iter()
+            .map(|b: &DocBlock| b.height())
+            .sum();
+    }
+    let total_after = app.tabs.active_tab().unwrap().view.total_lines;
+    let cursor_after = app.tabs.active_tab().unwrap().view.cursor_line;
+    let scroll_after = app.tabs.active_tab().unwrap().view.scroll_offset;
+    assert_eq!(
+        total_after, total_before,
+        "total_lines must NOT shrink during the brief window when mermaid_cache is being refreshed for a theme change (was {total_before}, became {total_after})"
+    );
+    assert_eq!(
+        cursor_after, cursor_before,
+        "cursor_line drifted: was {cursor_before}, became {cursor_after}"
+    );
+    assert_eq!(
+        scroll_after, scroll_before,
+        "scroll_offset drifted: was {scroll_before}, became {scroll_after}"
+    );
+}
+
+#[tokio::test]
+async fn applying_theme_preserves_position_across_draw_cycle() {
+    // Reproduces the user-reported residual after the cursor_line restoration
+    // fix: even with cursor_line preserved across `tab.view.load`, the *first
+    // draw after rerender* re-runs `update_text_layouts` which can change
+    // `total_lines`. If the new total_lines puts the existing scroll_offset
+    // past the `total_lines - vh/2` clamp, scroll_offset gets clamped down.
+    //
+    // To repro the real scenario we have to simulate the draw-cycle layout
+    // pass that runs between user interactions.
+    use crate::markdown::{DocBlock, update_text_layouts};
+    use crate::theme::{Palette, Theme};
+    let mut app = App::new(PathBuf::from("."), None, None);
+    let path = PathBuf::from("/fake/wrap_test.md");
+    app.tabs.open_or_focus(&path, true);
+    let content: String = {
+        use std::fmt::Write as _;
+        let mut s = String::new();
+        // Long lines that wrap when content_width is small.
+        for i in 0..30usize {
+            let _ = write!(s, "paragraph {i} with some words that will wrap nicely under a narrow viewer column when it is rendered to the user\n\n");
+        }
+        s
+    };
+    let palette = Palette::from_theme(Theme::Default);
+    let layout_width: u16 = 40;
+    if let Some(tab) = app.tabs.active_tab_mut() {
+        tab.view.load(
+            path.clone(),
+            "wrap_test.md".to_string(),
+            content,
+            &palette,
+            Theme::Default,
+        );
+        update_text_layouts(
+            &tab.view.rendered,
+            &mut tab.view.text_layouts,
+            layout_width,
+        );
+        tab.view.layout_width = layout_width;
+        tab.view.total_lines = tab
+            .view
+            .rendered
+            .iter()
+            .map(|b: &DocBlock| b.height())
+            .sum();
+        tab.view.cursor_line = 50;
+        tab.view.scroll_offset = 35;
+    }
+    app.focus = Focus::Viewer;
+    app.tabs.view_height = 30;
+
+    let cursor_before = app.tabs.active_tab().unwrap().view.cursor_line;
+    let scroll_before = app.tabs.active_tab().unwrap().view.scroll_offset;
+    let total_before = app.tabs.active_tab().unwrap().view.total_lines;
+
+    app.handle_key(KeyCode::Char('c'), KeyModifiers::NONE);
+    app.handle_key(KeyCode::Down, KeyModifiers::NONE);
+    app.handle_key(KeyCode::Enter, KeyModifiers::NONE);
+
+    if let Some(tab) = app.tabs.active_tab_mut() {
+        update_text_layouts(
+            &tab.view.rendered,
+            &mut tab.view.text_layouts,
+            layout_width,
+        );
+        tab.view.layout_width = layout_width;
+        tab.view.total_lines = tab
+            .view
+            .rendered
+            .iter()
+            .map(|b: &DocBlock| b.height())
+            .sum();
+    }
+
+    let cursor_after = app.tabs.active_tab().unwrap().view.cursor_line;
+    let scroll_after = app.tabs.active_tab().unwrap().view.scroll_offset;
+    let total_after = app.tabs.active_tab().unwrap().view.total_lines;
+
+    assert_eq!(
+        total_after, total_before,
+        "total_lines should be identical after theme rerender at same width (was {total_before}, became {total_after})"
+    );
+    assert_eq!(
+        cursor_after, cursor_before,
+        "cursor_line drifted across theme apply + draw: was {cursor_before}, became {cursor_after}"
+    );
+    assert_eq!(
+        scroll_after, scroll_before,
+        "scroll_offset drifted across theme apply + draw: was {scroll_before}, became {scroll_after}"
+    );
+}
+
+#[tokio::test]
 async fn applying_theme_preserves_viewer_cursor_and_scroll() {
     // User-reported scenario: open config (`c`), select a theme, press
     // Enter — the apply path goes through `rerender_all_tabs` →

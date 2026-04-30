@@ -139,6 +139,13 @@ pub struct MermaidRenderConfig<'a> {
 /// Per-app cache mapping diagram ids to their render state.
 pub struct MermaidCache {
     entries: HashMap<MermaidBlockId, MermaidEntry>,
+    /// Heights captured the last time each id had a real entry. Survives
+    /// `clear()` so that during the brief window when the cache is being
+    /// refreshed (theme change, layout-width change, mode switch), the
+    /// `height()` lookup returns the previous height instead of falling back
+    /// to `DEFAULT_MERMAID_HEIGHT` and shrinking `total_lines` underneath the
+    /// user's cursor.
+    last_known_heights: HashMap<MermaidBlockId, u32>,
 }
 
 impl MermaidCache {
@@ -146,6 +153,7 @@ impl MermaidCache {
     pub fn new() -> Self {
         Self {
             entries: HashMap::new(),
+            last_known_heights: HashMap::new(),
         }
     }
 
@@ -161,6 +169,9 @@ impl MermaidCache {
 
     /// Insert a new entry, overwriting any existing one.
     pub fn insert(&mut self, id: MermaidBlockId, entry: MermaidEntry) {
+        if let Some(h) = entry_height(&entry) {
+            self.last_known_heights.insert(id, h);
+        }
         self.entries.insert(id, entry);
     }
 
@@ -186,8 +197,16 @@ impl MermaidCache {
     /// - Not present: `DEFAULT_MERMAID_HEIGHT`.
     pub fn height(&self, id: MermaidBlockId, source: &str, max_height: u32) -> u32 {
         match self.entries.get(&id) {
-            None => DEFAULT_MERMAID_HEIGHT,
-            Some(MermaidEntry::Pending) => MIN_MERMAID_HEIGHT,
+            None => self
+                .last_known_heights
+                .get(&id)
+                .copied()
+                .unwrap_or(DEFAULT_MERMAID_HEIGHT),
+            Some(MermaidEntry::Pending) => self
+                .last_known_heights
+                .get(&id)
+                .copied()
+                .unwrap_or(MIN_MERMAID_HEIGHT),
             Some(MermaidEntry::Ready { cell_height, .. }) => *cell_height,
             Some(MermaidEntry::Failed { .. } | MermaidEntry::SourceOnly { .. }) => {
                 let source_lines = crate::cast::u32_sat(source.lines().count()) + 2;
@@ -200,7 +219,10 @@ impl MermaidCache {
         }
     }
 
-    /// Remove all cached entries.
+    /// Remove all cached entries. `last_known_heights` is preserved so that
+    /// in-flight re-renders (theme change, layout-width change) don't shrink
+    /// `total_lines` and shift the user's cursor while the new images are
+    /// being prepared.
     pub fn clear(&mut self) {
         self.entries.clear();
     }
@@ -363,6 +385,22 @@ impl MermaidCache {
     /// accumulate in the cache indefinitely.
     pub fn retain(&mut self, alive: &std::collections::HashSet<MermaidBlockId>) {
         self.entries.retain(|id, _| alive.contains(id));
+    }
+}
+
+/// Compute the height an entry contributes to `last_known_heights`. Returns
+/// `None` for `Pending` (no measured height yet) and for `Failed`/`SourceOnly`
+/// (their height depends on the source, computed on demand by `height()`).
+fn entry_height(entry: &MermaidEntry) -> Option<u32> {
+    match entry {
+        MermaidEntry::Ready { cell_height, .. } => Some(*cell_height),
+        MermaidEntry::AsciiDiagram { diagram, .. } => {
+            let lines = crate::cast::u32_sat(diagram.lines().count()) + 2;
+            Some(lines.clamp(MIN_MERMAID_HEIGHT, ASCII_DIAGRAM_HARD_CAP))
+        }
+        MermaidEntry::Pending | MermaidEntry::Failed { .. } | MermaidEntry::SourceOnly { .. } => {
+            None
+        }
     }
 }
 

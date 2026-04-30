@@ -5,6 +5,29 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.34.41] — 2026-04-30
+
+### Fixed — applying a theme no longer shifts the cursor near mermaid blocks
+
+Theme change clears `mermaid_cache` so images re-render with the new
+background colour. While the async re-render was in flight, the cache
+returned `DEFAULT_MERMAID_HEIGHT` (20) for every mermaid block — if a
+diagram had previously rendered at, say, 30 cells, `total_lines`
+shrunk by 10 and the cursor visually shifted up. When the new render
+landed (~100ms later), the height snapped back. Symptom: cursor on the
+page would scroll up a little after pressing Enter on a theme, then
+snap back on the next keystroke. Only manifested when the cursor was
+near a mermaid block.
+
+`MermaidCache` now keeps a `last_known_heights` map that survives
+`clear()`. The `height()` lookup falls back to the previous height for
+missing or `Pending` entries instead of `DEFAULT_MERMAID_HEIGHT`, so
+`total_lines` stays stable across the brief refresh window.
+
+The 1.34.40 cursor_line preservation fix and 1.34.39 mouse-scroll guard
+were both real fixes for adjacent bugs, but neither addressed this
+mermaid-cache invalidation race.
+
 ## [1.34.40] — 2026-04-30
 
 ### Fixed — applying a theme no longer resets the viewer cursor
