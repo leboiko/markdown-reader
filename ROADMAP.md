@@ -78,13 +78,6 @@ the historical source of truth.
   - **`rect <colour>` background highlight blocks** — Mermaid's grammar
     can't express hex colours easily, and ANSI bg-tinting fights the
     layered colour system; defer until a clear request comes in.
-- **ER cross-row label collision when relationships share a gap row** —
-  when two cross-row relationships target the same inter-row gap (e.g.
-  the canonical invoice example with PRODUCT→ITEM "describes" and
-  INVOICE→ORDER "bills"), the labels overlap and render as gibberish
-  like `descbills`. Fix needs label placement to stagger onto different
-  gap rows when collisions occur, or to detect collisions and fall back
-  to a single dropped label with a warning.
 - **`xychart-beta` mixed-width label centering** — when a chart mixes
   short and longer labels (e.g. `c0..c9` then `c10..c14`), label slots
   remain aligned but the label characters within the slots drift by

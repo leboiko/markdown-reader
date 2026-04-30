@@ -3,6 +3,31 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.39.3 — 2026-04-30 — ER cross-row labels stagger to avoid collision
+
+### Fixed
+
+- **Cross-row labels in the same gap row used to overlap.** When two
+  cross-row relationships targeted the same inter-row gap (e.g. PRODUCT
+  → ITEM "describes" and INVOICE → ORDER "bills" both routing through
+  the gap below row 0), both labels were placed at the same column
+  (`spine_col - label_w - 1`) and the second write clobbered the first
+  — output showed `descbills` instead of two separate labels.
+
+  `draw_cross_row_relationship` now consults a per-call
+  `used_label_ranges` map. For each label, walks down through the
+  `ROW_GAP` rows from the desired row and picks the first one where the
+  label's column range doesn't overlap anything already claimed. If
+  every gap row is full, falls back to the original row (degrades
+  gracefully rather than dropping the label).
+
+  Visible on the canonical 7-entity invoice example: `describes`,
+  `owns`, `bills` now stack on three separate gap rows.
+
+- **Updated snapshots** (Bucket A — Improvement, 0 regressions): one ER
+  snapshot and two regression-corpus snapshots gained the staggered
+  labels. Reviewed under the harness-guarded scope-ceiling protocol.
+
 ## 0.39.2 — 2026-04-30 — ER cross-row spine connects to rightmost-in-row entities
 
 ### Fixed

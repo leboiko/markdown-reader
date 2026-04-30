@@ -138,6 +138,13 @@ pub fn render(chart: &ErDiagram, max_width: Option<usize>) -> String {
         draw_entity_box(&mut grid, entity_top[i], left, right, entity);
     }
 
+    // Tracks which (col_start, col_end) ranges have been claimed by a
+    // cross-row label on each row. `draw_cross_row_relationship` consults
+    // this map to find a free row when the desired label slot collides
+    // with one written by an earlier relationship.
+    let mut used_label_ranges: std::collections::HashMap<usize, Vec<(usize, usize)>> =
+        std::collections::HashMap::new();
+
     // Pass 2: draw relationship lines.
     for rel in &chart.relationships {
         let (Some(from_idx), Some(to_idx)) =
@@ -185,6 +192,7 @@ pub fn render(chart: &ErDiagram, max_width: Option<usize>) -> String {
                 canvas_width,
                 from_is_rightmost,
                 to_is_rightmost,
+                &mut used_label_ranges,
             );
         }
     }
@@ -635,6 +643,7 @@ fn draw_cross_row_relationship(
     canvas_width: usize,
     from_is_rightmost: bool,
     to_is_rightmost: bool,
+    used_label_ranges: &mut std::collections::HashMap<usize, Vec<(usize, usize)>>,
 ) {
     // The spine is the last column of the canvas. The canvas is sized with a
     // 2-column margin (1 gap + 1 spine) beyond the rightmost entity box, so
@@ -752,23 +761,35 @@ fn draw_cross_row_relationship(
     // bottom row. This guarantees we're in the gap between entity row-groups,
     // never on another entity's name row.
     //
-    // We place the label at `from_bottom + 1` when the source is above the
-    // target (from_row < to_row), or `to_bottom + 1` when the source is below.
-    // In both cases, that row is inside the inter-row gap.
+    // When two cross-row relationships target the same gap, walk down through
+    // the gap rows to find one where the label's column range doesn't overlap
+    // anything already claimed. If the whole gap is full, fall back to the
+    // first row (accept the collision rather than dropping the label).
     if let Some(label) = &rel.label
         && !label.is_empty()
         && from_row != to_row
     {
-        let label_row = if from_row < to_row {
-            // Source is above; first gap row is one past source's bottom border.
-            from_top + from_height // bottom border row + 1 (i.e. the row after)
+        let first_gap_row = if from_row < to_row {
+            from_top + from_height
         } else {
-            // Source is below; first gap row is one past target's bottom border.
             to_top + to_height
         };
         let label_w = label.width();
         let label_col = spine_col.saturating_sub(label_w + 1);
-        put_str(grid, label_row, label_col, label);
+        let label_end = label_col + label_w;
+        let chosen_row = (0..ROW_GAP)
+            .map(|offset| first_gap_row + offset)
+            .find(|row| {
+                used_label_ranges
+                    .get(row)
+                    .is_none_or(|ranges| !ranges.iter().any(|&(s, e)| s < label_end && label_col < e))
+            })
+            .unwrap_or(first_gap_row);
+        used_label_ranges
+            .entry(chosen_row)
+            .or_default()
+            .push((label_col, label_end));
+        put_str(grid, chosen_row, label_col, label);
     }
 }
 
@@ -1048,6 +1069,46 @@ A ||--|| B : rel";
         assert!(
             gap.contains('─'),
             "expected `─` stub between INVOICE cardinality `1` and spine corner, got gap: {gap:?}\nfull row: {trimmed:?}"
+        );
+    }
+
+    #[test]
+    fn cross_row_labels_in_same_gap_row_do_not_overlap() {
+        // Bug repro: when two cross-row relationships target the same
+        // inter-row gap, both labels were placed at the same column
+        // (`spine_col - label_w - 1`) and visually collided. In the
+        // canonical 7-entity invoice schema, "describes" (PRODUCT→ITEM)
+        // and "bills" (INVOICE→ORDER) both routed through the gap below
+        // row 0, and the second write clobbered the first — the output
+        // showed `descbills` instead of two separate labels.
+        let src = "erDiagram
+    CUSTOMER ||--o{ ORDER : places
+    ORDER ||--|{ ITEM : contains
+    PRODUCT ||--o{ ITEM : describes
+    CATEGORY ||--o{ PRODUCT : groups
+    ACCOUNT ||--|| CUSTOMER : owns
+    INVOICE ||--|{ ORDER : bills
+    CUSTOMER { int id PK string name }
+    ORDER    { int id PK int customerId FK }
+    PRODUCT  { int id PK string name int categoryId FK }
+    CATEGORY { int id PK string label }
+    ACCOUNT  { int id PK }
+    INVOICE  { int id PK }
+    ITEM     { int orderId FK int productId FK }";
+        let chart = parse(src).unwrap();
+        let out = render(&chart, None);
+        assert!(
+            out.contains("describes"),
+            "label 'describes' was clobbered by an overlapping label:\n{out}"
+        );
+        assert!(
+            out.contains("bills"),
+            "label 'bills' was clobbered by an overlapping label:\n{out}"
+        );
+        // The corrupted concatenation must not appear.
+        assert!(
+            !out.contains("descbills") && !out.contains("billsescribes"),
+            "two labels collided into a single token:\n{out}"
         );
     }
 

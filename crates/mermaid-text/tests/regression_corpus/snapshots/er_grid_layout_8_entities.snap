@@ -10,9 +10,9 @@ expression: natural
 │  int    id   PK  │                │  int id         PK  │            │  int orderId   FK  │ │
 │  string name     │                │  int customerId FK  │            │  int productId FK  │ │
 └──────────────────┘                └─────────────────────┘            └────────────────────┘ │
-                                                                                    descbills │
-                                                                                              │
-                            groups                                                            │
+                                                                                    describes │
+                                                                                         owns │
+                            groups                                                      bills │
 ┌────────────────────────┐          ┌───────────────────┐      ┌─────────────┐                │
 │        PRODUCT         ┤*────────1├     CATEGORY      │      │   ACCOUNT   ┤1───────────────│
 ├────────────────────────┤          ├───────────────────┤      ├─────────────┤                │

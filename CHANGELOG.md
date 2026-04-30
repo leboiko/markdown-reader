@@ -5,6 +5,15 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.34.43] — 2026-04-30
+
+### Fixed — ER cross-row labels no longer overlap (mermaid-text 0.39.3)
+
+When two cross-row relationships targeted the same inter-row gap, their
+labels collided into a single garbled token (`describes` + `bills` →
+`descbills`). The label placer now staggers labels onto adjacent gap
+rows when their column ranges overlap.
+
 ## [1.34.42] — 2026-04-30
 
 ### Fixed — ER cross-row spine connects to rightmost-in-row entities (mermaid-text 0.39.2)
