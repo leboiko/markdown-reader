@@ -1,5 +1,6 @@
 ---
 source: crates/mermaid-text/tests/regression_corpus.rs
+assertion_line: 72
 expression: natural
 ---
                          places
@@ -14,7 +15,7 @@ expression: natural
                                                                  │
                                                                  │
 ┌───────────────────────┐                                        │
-│       LINE-ITEM       ├+                                       ┘
+│       LINE-ITEM       ├+───────────────────────────────────────┘
 ├───────────────────────┤
 │  string productCode   │
 │  int    quantity      │

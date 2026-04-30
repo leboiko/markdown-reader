@@ -13,7 +13,7 @@ expression: out
                                                                                               │
                             groups                                                            │
 ┌────────────────────────┐          ┌───────────────────┐      ┌─────────────┐                │
-│        PRODUCT         ├*────────1├     CATEGORY      │      │   ACCOUNT   ┤1               ┐
+│        PRODUCT         ├*────────1├     CATEGORY      │      │   ACCOUNT   ┤1───────────────┐
 ├────────────────────────┤          ├───────────────────┤      ├─────────────┤                │
 │  int    id         PK  │          │  int    id    PK  │      │  int id PK  │                │
 │  string name           │          │  string label     │      └─────────────┘                │

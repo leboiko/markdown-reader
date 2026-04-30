@@ -3,6 +3,36 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.39.2 — 2026-04-30 — ER cross-row spine connects to rightmost-in-row entities
+
+### Fixed
+
+- **ER diagram cross-row relationships left a visible gap** between the
+  cardinality glyph and the spine corner for entities that sit alone (or
+  rightmost) in their grid row. The spine corner `┘` floated in space
+  with no `─` stub connecting it back to the entity. The fix-skip-fill
+  logic in `draw_cross_row_relationship` was over-cautious: the skip is
+  only needed when the entity has neighbours to its right in the grid
+  row (their name rows would be clobbered by the fill). Entities that
+  are rightmost in their row now get the connecting stub drawn.
+
+  Most visible on the 7-entity invoice example in the gallery: INVOICE
+  alone in the bottom row was disconnected from the spine. Same effect
+  for the canonical `er_customer_order_schema` example's LINE-ITEM.
+
+- **Updated snapshots** (Bucket A — Improvement, 0 regressions): three
+  ER snapshots and two regression-corpus snapshots gained the connecting
+  `─` stub. Reviewed under the harness-guarded scope-ceiling protocol.
+
+### Known limitation (deferred)
+
+- **Cross-row labels overlap when two relationships share a gap row.**
+  In the gallery example, "describes" and "bills" both target the same
+  inter-row gap and visually collide as `descbills`. The label-placement
+  code uses a single `spine_col - label_w - 1` column for every label;
+  it needs to stagger labels onto different gap rows when collisions
+  occur. Tracked in `ROADMAP.md` for a follow-up pass.
+
 ## 0.39.1 — 2026-04-30 — `xychart-beta` x-axis label alignment fix
 
 ### Fixed

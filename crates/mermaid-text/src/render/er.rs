@@ -169,6 +169,8 @@ pub fn render(chart: &ErDiagram, max_width: Option<usize>) -> String {
             // the canvas. This avoids routing through entity boxes and is
             // simple to implement. An optimisation pass (edge-crossing
             // minimisation) can come later if requested.
+            let from_is_rightmost = is_rightmost_in_row(from_idx, &entity_grid_pos, n_cols, n);
+            let to_is_rightmost = is_rightmost_in_row(to_idx, &entity_grid_pos, n_cols, n);
             draw_cross_row_relationship(
                 &mut grid,
                 entity_top[from_idx],
@@ -181,6 +183,8 @@ pub fn render(chart: &ErDiagram, max_width: Option<usize>) -> String {
                 entity_widths[to_idx],
                 rel,
                 canvas_width,
+                from_is_rightmost,
+                to_is_rightmost,
             );
         }
     }
@@ -629,6 +633,8 @@ fn draw_cross_row_relationship(
     to_width: usize,
     rel: &Relationship,
     canvas_width: usize,
+    from_is_rightmost: bool,
+    to_is_rightmost: bool,
 ) {
     // The spine is the last column of the canvas. The canvas is sized with a
     // 2-column margin (1 gap + 1 spine) beyond the rightmost entity box, so
@@ -654,9 +660,11 @@ fn draw_cross_row_relationship(
 
     // --- Source stub ---
     // Tee glyph at source's right border, cardinality glyph one cell to the
-    // right, then a corner at the spine. We intentionally skip horizontal fill
-    // between the cardinality glyph and the spine: entities in higher grid
-    // columns share this canvas row and a fill would overwrite their name rows.
+    // right, then a corner at the spine. We skip horizontal fill between the
+    // cardinality glyph and the spine when the entity has neighbours to its
+    // right in the grid row (a fill would overwrite their name rows). When
+    // the entity is rightmost in its row, the fill is safe and we draw it
+    // so the spine visually connects to the entity instead of floating.
     if from_right_border < spine_col {
         if !rel.line_style.is_dashed() {
             put(grid, from_row, from_right_border, '┤');
@@ -668,6 +676,16 @@ fn draw_cross_row_relationship(
             card_col,
             cardinality_glyph(rel.from_cardinality),
         );
+        if from_is_rightmost {
+            let fill_glyph = if rel.line_style.is_dashed() {
+                '┄'
+            } else {
+                '─'
+            };
+            for c in (card_col + 1)..spine_col {
+                put(grid, from_row, c, fill_glyph);
+            }
+        }
         let corner = if from_row < to_row { '┐' } else { '┘' };
         put(grid, from_row, spine_col, corner);
     } else {
@@ -694,8 +712,9 @@ fn draw_cross_row_relationship(
 
     // --- Target stub ---
     // Corner at spine, cardinality glyph, tee into target's right border.
-    // No horizontal fill between glyph and spine to avoid overwriting entities
-    // that share the same canvas row as the target entity (grid neighbours).
+    // Same skip-or-fill rule as the source stub: fill horizontally only when
+    // the target is rightmost in its grid row (no neighbour name rows to
+    // clobber).
     if to_right_border < spine_col {
         let corner = if from_row < to_row { '┘' } else { '┐' };
         put(grid, to_row, spine_col, corner);
@@ -706,6 +725,16 @@ fn draw_cross_row_relationship(
             card_col,
             cardinality_glyph(rel.to_cardinality),
         );
+        if to_is_rightmost {
+            let fill_glyph = if rel.line_style.is_dashed() {
+                '┄'
+            } else {
+                '─'
+            };
+            for c in (card_col + 1)..spine_col {
+                put(grid, to_row, c, fill_glyph);
+            }
+        }
         if !rel.line_style.is_dashed() {
             put(grid, to_row, to_right_border, '├');
         }
@@ -741,6 +770,28 @@ fn draw_cross_row_relationship(
         let label_col = spine_col.saturating_sub(label_w + 1);
         put_str(grid, label_row, label_col, label);
     }
+}
+
+/// Whether `idx` is the rightmost entity in its grid row. Used to decide
+/// whether `draw_cross_row_relationship` may fill the horizontal stub
+/// between the entity's cardinality glyph and the spine column — the fill
+/// is unsafe when there are neighbours to the right (their name rows live
+/// on the same canvas row).
+fn is_rightmost_in_row(
+    idx: usize,
+    entity_grid_pos: &[(usize, usize)],
+    n_cols: usize,
+    n: usize,
+) -> bool {
+    if idx + 1 >= n {
+        return true;
+    }
+    if n_cols == 0 {
+        return true;
+    }
+    let (row, _) = entity_grid_pos[idx];
+    let (next_row, _) = entity_grid_pos[idx + 1];
+    next_row != row
 }
 
 /// Single-character glyph for a relationship endpoint cardinality.
@@ -937,6 +988,67 @@ A ||--|| B : rel";
         // diagram is non-trivial).
         assert!(out.contains('A'), "entity A missing from:\n{out}");
         assert!(out.contains('B'), "entity B missing from:\n{out}");
+    }
+
+    #[test]
+    fn cross_row_target_alone_in_row_has_horizontal_stub_to_spine() {
+        // Bug repro: with the canonical 7-entity invoice schema, INVOICE
+        // sits alone in the bottom grid row (only entity in that row).
+        // Its cardinality glyph `1` was being rendered with NO horizontal
+        // line connecting it to the spine column on the right edge — the
+        // spine corner `┘` was floating in space, visually disconnected
+        // from INVOICE.
+        //
+        // The skip-horizontal-fill logic in `draw_cross_row_relationship`
+        // is needed when the entity has neighbours to its right in the
+        // grid row (because the fill would clobber their name rows). When
+        // the entity is rightmost in its row, the fill is safe and must
+        // be drawn.
+        let src = "erDiagram
+    CUSTOMER ||--o{ ORDER : places
+    ORDER ||--|{ ITEM : contains
+    PRODUCT ||--o{ ITEM : describes
+    CATEGORY ||--o{ PRODUCT : groups
+    ACCOUNT ||--|| CUSTOMER : owns
+    INVOICE ||--|{ ORDER : bills
+    CUSTOMER { int id PK string name }
+    ORDER    { int id PK int customerId FK }
+    PRODUCT  { int id PK string name int categoryId FK }
+    CATEGORY { int id PK string label }
+    ACCOUNT  { int id PK }
+    INVOICE  { int id PK }
+    ITEM     { int orderId FK int productId FK }";
+        let chart = parse(src).unwrap();
+        let out = render(&chart, None);
+
+        // Find the INVOICE name row.
+        let invoice_row = out
+            .lines()
+            .find(|l| l.contains("INVOICE") && l.contains('│'))
+            .unwrap_or_else(|| panic!("INVOICE name row not found in:\n{out}"));
+
+        // Strip trailing whitespace and assert that the row contains a
+        // contiguous horizontal stub connecting INVOICE's right border to
+        // the spine. The stub uses `─` characters between the cardinality
+        // glyph and the spine corner `┘`.
+        let trimmed = invoice_row.trim_end();
+        // The row should end with the spine corner.
+        assert!(
+            trimmed.ends_with('┘') || trimmed.ends_with('┐'),
+            "INVOICE row should end with a spine corner glyph (┘ or ┐), got: {trimmed:?}"
+        );
+        // Between the cardinality glyph (`1`) and the spine corner there
+        // must be at least one `─` (the connecting stub). Without the fix,
+        // the gap is filled with spaces.
+        let card_pos = trimmed
+            .find('1')
+            .expect("INVOICE cardinality glyph `1` missing");
+        let corner_pos = trimmed.rfind('┘').or_else(|| trimmed.rfind('┐')).unwrap();
+        let gap = &trimmed[card_pos + 1..corner_pos];
+        assert!(
+            gap.contains('─'),
+            "expected `─` stub between INVOICE cardinality `1` and spine corner, got gap: {gap:?}\nfull row: {trimmed:?}"
+        );
     }
 
     #[test]

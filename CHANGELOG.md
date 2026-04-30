@@ -5,6 +5,16 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.34.42] — 2026-04-30
+
+### Fixed — ER cross-row spine connects to rightmost-in-row entities (mermaid-text 0.39.2)
+
+ER diagram cross-row relationships left a visible gap between the
+cardinality glyph and the spine corner for entities sitting alone (or
+rightmost) in their grid row — the spine `┘` floated in space with no
+`─` stub. Most visible on the 7-entity invoice gallery example, where
+INVOICE in the bottom row was disconnected from the spine.
+
 ## [1.34.41] — 2026-04-30
 
 ### Fixed — applying a theme no longer shifts the cursor near mermaid blocks

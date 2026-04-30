@@ -1,5 +1,6 @@
 ---
 source: crates/mermaid-text/tests/regression_corpus.rs
+assertion_line: 80
 expression: constrained
 ---
                          places                              contains
@@ -13,7 +14,7 @@ expression: constrained
                                                                                               │
                             groups                                                            │
 ┌────────────────────────┐          ┌───────────────────┐      ┌─────────────┐                │
-│        PRODUCT         ┤*────────1├     CATEGORY      │      │   ACCOUNT   ┤1               │
+│        PRODUCT         ┤*────────1├     CATEGORY      │      │   ACCOUNT   ┤1───────────────│
 ├────────────────────────┤          ├───────────────────┤      ├─────────────┤                │
 │  int    id         PK  │          │  int    id    PK  │      │  int id PK  │                │
 │  string name           │          │  string label     │      └─────────────┘                │
@@ -23,7 +24,7 @@ expression: constrained
                                                                                               │
                                                                                               │
 ┌─────────────┐                                                                               │
-│   INVOICE   ┤1                                                                              ┘
+│   INVOICE   ┤1──────────────────────────────────────────────────────────────────────────────┘
 ├─────────────┤
 │  int id PK  │
 └─────────────┘

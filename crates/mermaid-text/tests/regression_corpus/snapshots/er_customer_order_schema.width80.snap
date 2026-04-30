@@ -1,5 +1,6 @@
 ---
 source: crates/mermaid-text/tests/regression_corpus.rs
+assertion_line: 80
 expression: constrained
 ---
                          places
@@ -14,7 +15,7 @@ expression: constrained
                                                                  │
                                                                  │
 ┌───────────────────────┐                                        │
-│       LINE-ITEM       ├+                                       ┘
+│       LINE-ITEM       ├+───────────────────────────────────────┘
 ├───────────────────────┤
 │  string productCode   │
 │  int    quantity      │
