@@ -73,12 +73,12 @@ the historical source of truth.
 
 ### Quick wins (under a session each)
 
-- **Per-composite direction-aware fork/join orientation** — `mermaid-text`
-  currently resolves fork/join shape from the top-level graph direction
-  (since 0.7.2). A composite with `direction TB` inside an LR top-level
-  diagram gets the wrong orientation. Fix needs the parser to track each
-  fork/join's enclosing composite path and resolve orientation from the
-  nearest composite. Small change, low priority unless someone hits it.
+_(Empty — most recent quick-wins shipped in 1.34.x. Per-composite
+direction-aware fork/join orientation was already delivered in
+mermaid-text 0.30.0; the regression tests live at
+`crates/mermaid-text/src/parser/state.rs`
+(`fork_inside_tb_composite_in_lr_diagram_uses_horizontal_bar` /
+`fork_at_top_level_lr_diagram_keeps_vertical_bar`).)_
 
 ### Medium projects (1-3 sessions)
 

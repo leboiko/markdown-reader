@@ -61,7 +61,7 @@ raw markdown source while every other block stays formatted.
 | HTML export | Yes | No | No | No |
 | Link validator (CLI) | Yes | No | No | No |
 | jq-like query language | No | Yes | No | No |
-| Pre-built binaries | Coming | Yes | Yes | Yes |
+| Pre-built binaries | Yes | Yes | Yes | Yes |
 
 ## Screenshots
 
