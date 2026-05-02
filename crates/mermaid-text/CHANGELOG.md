@@ -3,6 +3,24 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.42.1 — 2026-05-02 — mindmap trunk alignment fix
+
+### Fixed
+
+- **Mindmap level-1 children now align under the root box's trunk pipe.**
+  The trunk `│` dropped from the rounded root box but level-1 children
+  were emitted at column 0, leaving a visible gap between the trunk and
+  the first child's `├──` glyph. The renderer's own doc-comment header
+  showed the intended layout (children indented under the trunk) but
+  `render()` passed `prefix = ""` for each root child instead of an
+  indent matching the trunk column. `render_root_box` now returns the
+  trunk's byte column and `render()` uses it as the initial prefix, so
+  every level-1 branch glyph and continuation pipe sits in the same
+  column as the trunk. Regression tests
+  (`first_child_branch_aligns_with_root_trunk_column`,
+  `level1_continuation_pipes_align_with_trunk`) pin the byte-column
+  equality so a future change cannot silently re-disconnect the trunk.
+
 ## 0.42.0 — 2026-04-30 — block-beta inline spatial edges
 
 ### Changed

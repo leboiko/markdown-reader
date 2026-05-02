@@ -5,6 +5,16 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.34.49] — 2026-05-02
+
+### Fixed — mindmap trunk no longer disconnects from children (mermaid-text 0.42.1)
+
+The trunk `│` that drops from the rounded root box of a mindmap now
+connects to its first level-1 child. Before this fix the trunk
+terminated mid-air and the children rendered at column 0, leaving a
+visible gap. Most noticeable on mindmaps with the root labelled
+`mindmap` (the renderer's own canonical example).
+
 ## [1.34.48] — 2026-05-02
 
 ### Added — `mermaid_text_backend` config (sugiyama / native)
