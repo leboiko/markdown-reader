@@ -553,22 +553,23 @@ gantt
       Testing        :2024-02-06, 7d
 ```
 
-Expected output (trimmed to 80 columns):
+Expected output:
 
 ```text
 Gantt: Software Release v2 (2024-01-01 → 2024-02-12, 43 days)
 
-                  01-01    01-08    01-15    01-22    01-29    02-05
+                  01-01     01-11     01-21     01-31     02-
+
 Design
-  Research        ░███████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  [01-01 → 01-07, 7d]
-  Wireframes      ░░░░░░░░░░█████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  [01-08 → 01-12, 5d]
+  Research        ███████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  [01-01 → 01-07, 7d]
+  Wireframes      ░░░░░░░█████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  [01-08 → 01-12, 5d]
 
 Development
-  Backend         ░░░░░░░░░░░░░░░░█████████████████░░░░░░░░░░░  [01-13 → 01-26, 14d]
-  Frontend        ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░███████░░  [01-27 → 02-05, 10d]
+  Backend         ░░░░░░░░░░░░██████████████░░░░░░░░░░░░░░░░░  [01-13 → 01-26, 14d]
+  Frontend        ░░░░░░░░░░░░░░░░░░░░░░░░░░██████████░░░░░░░  [01-27 → 02-05, 10d]
 
 QA
-  Testing         ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░███░  [02-06 → 02-12, 7d]
+  Testing         ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░███████  [02-06 → 02-12, 7d]
 ```
 
 ### Classic Mermaid example with axisFormat %b %d
@@ -586,7 +587,7 @@ gantt
         Deployment    :3d
 ```
 
-Expected output (trimmed to 80 columns):
+Expected output:
 
 ```text
 Gantt: A Gantt Diagram (2014-01-01 → 2014-03-04, 63 days)
@@ -594,12 +595,12 @@ Gantt: A Gantt Diagram (2014-01-01 → 2014-03-04, 63 days)
                   Jan 01   Jan 11    Jan 21   Jan 31    Feb 10   Feb 20    Mar
 
 Section A
-  Design          ████████████████████████████░░░░░░░░░░░░░░░░░░░░  [Jan 01 → Jan 30, 30d]
-  Implementation  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░██████████████████░  [Jan 31 → Feb 19, 20d]
+  Design          ████████████████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  [Jan 01 → Jan 30, 30d]
+  Implementation  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░██████████████████░░░░░░░░░░░░░  [Jan 31 → Feb 19, 20d]
 
 Section B
-  Testing         ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░██████  [Feb 15 → Mar 01, 15d]
-  Deployment      ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░██  [Mar 02 → Mar 04, 3d]
+  Testing         ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░██████████████░░░  [Feb 15 → Mar 01, 15d]
+  Deployment      ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░██  [Mar 02 → Mar 04, 3d]
 ```
 
 **Phase 1 limitations.** Status tags (`done`, `active`, `crit`, `milestone`)
@@ -671,12 +672,12 @@ Timeline: Key Technology Milestones
   1991 ●── World Wide Web
   1993 ●── Mosaic browser
 
-── Late 90s ─────────────────────────────────────
+── Late 90s ──────────────────────────────────────
   1995 ●── JavaScript
        └── Java applets
   1998 ●── Google founded
 
-── 2000s ────────────────────────────────────────
+── 2000s ─────────────────────────────────────────
   2001 ●── Wikipedia
   2004 ●── Gmail
   2007 ●── iPhone
@@ -790,20 +791,20 @@ Expected rendered output:
 │ mindmap │
 ╰────┬────╯
      │
-├── Origins
-│   ├── Long history
-│   └── Popularisation
-│       └── British popular psychology author Tony Buzan
-├── Research
-│   ├── On effectiveness and features
-│   └── On Automatic creation
-│       └── Uses
-│           ├── Creative techniques
-│           ├── Strategic planning
-│           └── Argument mapping
-└── Tools
-    ├── Pen and paper
-    └── Mermaid
+     ├── Origins
+     │   ├── Long history
+     │   └── Popularisation
+     │       └── British popular psychology author Tony Buzan
+     ├── Research
+     │   ├── On effectiveness and features
+     │   └── On Automatic creation
+     │       └── Uses
+     │           ├── Creative techniques
+     │           ├── Strategic planning
+     │           └── Argument mapping
+     └── Tools
+         ├── Pen and paper
+         └── Mermaid
 ```
 
 **Example 2 — Software architecture decision:**
@@ -834,20 +835,20 @@ Expected rendered output:
 │ Decision │
 ╰─────┬────╯
       │
-├── Option A
-│   ├── Pros
-│   │   ├── Fast to implement
-│   │   └── Low cost
-│   └── Cons
-│       └── Hard to scale
-├── Option B
-│   ├── Pros
-│   │   ├── Highly scalable
-│   │   └── Well documented
-│   └── Cons
-│       └── Higher upfront effort
-└── Recommendation
-    └── Option B for long-term growth
+      ├── Option A
+      │   ├── Pros
+      │   │   ├── Fast to implement
+      │   │   └── Low cost
+      │   └── Cons
+      │       └── Hard to scale
+      ├── Option B
+      │   ├── Pros
+      │   │   ├── Highly scalable
+      │   │   └── Well documented
+      │   └── Cons
+      │       └── Higher upfront effort
+      └── Recommendation
+          └── Option B for long-term growth
 ```
 
 **Phase 1 limitations.** All 6 Mermaid node shapes (`((circle))`, `(rounded)`,
@@ -1039,24 +1040,18 @@ block-beta
     B --> C
 ```
 
-**Expected output (adjacent edges drawn inline in the column gap):**
-
-```
-┌───┐ ► ┌───┐ ┌───┐
-│ A │   │ B │ │ C │
-└───┘   └───┘ └───┘
-        ►
-┌───┐   ┌───┐ ┌───┐
-```
-
-Actually the inline arrow occupies the single-character gap row/column between
-boxes:
+**Expected output:**
 
 ```
 ┌───┐ ┌───┐ ┌───┐
 │ A │►│ B │►│ C │
 └───┘ └───┘ └───┘
 ```
+
+Adjacent-block edges are drawn as inline arrow glyphs (`►` / `◄` / `▼` / `▲`)
+that occupy the single-character gap row or column between boxes — the boxes
+themselves are not pushed apart. Edges between non-adjacent blocks fall back
+to a short text summary below the grid (Tier 3, see CHANGELOG `0.42.0`).
 
 ### Labelled spanning blocks
 
