@@ -867,7 +867,7 @@ counter-clockwise.
 
 **Example 1 — Canonical Mermaid example: campaign reach and engagement:**
 
-```
+```mermaid
 quadrantChart
     title Reach and engagement of campaigns
     x-axis Low Reach --> High Reach
@@ -907,7 +907,7 @@ Low Reach───────────────────────�
 
 **Example 2 — Minimal chart with just two quadrant labels and one point:**
 
-```
+```mermaid
 quadrantChart
     x-axis Low Priority --> High Priority
     y-axis Low Impact --> High Impact
@@ -950,7 +950,7 @@ such as code modules or documents.
 
 **Example 1 — Minimal requirement + element + relationship:**
 
-```
+```mermaid
 requirementDiagram
 
     requirement r1 {
@@ -1156,7 +1156,7 @@ around the service boxes rather than listed as a text summary.
 
 **Example 1 — Cloud API cluster:**
 
-```
+```mermaid
 architecture-beta
     group api(cloud)[API]
 
@@ -1172,9 +1172,30 @@ The renderer translates this into the flowchart Sugiyama pipeline: the `api`
 group becomes a subgraph container, each service becomes a rectangle node, and
 the edges are routed spatially with Unicode line characters.
 
+Expected rendered output:
+
+```text
+
+╭─API──────────────────────╮
+│                          │
+│ ┌──────────┐ ┌─────────┐ │
+│ │ Database │ │ Storage │ │
+│ └──────────┘ └─────────┘ │
+│       └──────┐    │      │
+│              │    │      │
+│              │    │      │
+│              │    │      │
+│              │ ┌──┘      │
+│         ┌────────┐       │
+│         │ Server │       │
+│         └────────┘       │
+│                          │
+╰──────────────────────────╯
+```
+
 **Example 2 — Mixed top-level and grouped services:**
 
-```
+```mermaid
 architecture-beta
     service gateway(internet)[Gateway]
 
@@ -1188,6 +1209,35 @@ architecture-beta
 
 Top-level services (not in any group) are rendered as ungrouped nodes outside
 the subgraph containers.
+
+Expected rendered output:
+
+```text
+ ┌─────────┐
+ │ Gateway │
+ └─────────┘
+      │
+      │
+      │
+      │
+      │
+      │
+╭─Backend───╮
+│     │     │
+│  ┌─────┐  │
+│  │ API │  │
+│  └─────┘  │
+│     │     │
+│     │     │
+│     │     │
+│     │     │
+│     │     │
+│ ┌───────┐ │
+│ │ Store │ │
+│ └───────┘ │
+│           │
+╰───────────╯
+```
 
 **Current limitations.**
 
