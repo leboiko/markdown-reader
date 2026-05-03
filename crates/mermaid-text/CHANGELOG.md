@@ -3,6 +3,31 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.42.2 — 2026-05-03 — strip leading blank rows in Grid output
+
+### Fixed
+
+- **`Grid` output no longer begins with leading blank rows.** The
+  `Grid::Display::fmt` and `Grid::render_inner` paths already stripped
+  trailing blank lines but kept any leading blanks intact. With the
+  Sugiyama backend (default since 0.17.0) certain layouts reserve a
+  top corridor for back-edge routing that often goes unused, leaving
+  1–5 empty rows above the first content row. The artifact was
+  visible on flowcharts with back-edges, state diagrams with
+  composite states, and the architecture-beta `cloud` group example
+  in `docs/mermaid-gallery.md` — see diagrams 1, 3, 6, 8, 9, 37 in
+  `scripts/render-gallery.sh` output. Both rendering paths now mirror
+  the existing trailing-trim with `while out.starts_with('\n')`. The
+  `back_edge_lr_no_leading_blank_rows` integration test pins the
+  byte-count assertion (`out.bytes().take_while(|&b| b == b'\n').count() == 0`)
+  so a regression cannot silently re-introduce the leading blanks.
+  Snapshot tests are unaffected because `insta` normalises leading
+  whitespace between the YAML frontmatter and snapshot body.
+
+  Note: this is a post-trim fix. The root cause — Sugiyama's top
+  corridor reservation when no back-edge actually routes through it —
+  remains as a layout-side cleanup tracked for a future release.
+
 ## 0.42.1 — 2026-05-02 — mindmap trunk alignment fix
 
 ### Fixed

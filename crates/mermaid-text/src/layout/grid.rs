@@ -764,6 +764,14 @@ impl Grid {
         while out.ends_with("\n\n") {
             out.pop();
         }
+        // Strip leading blank rows too (mirror of `Display::fmt`). ANSI
+        // SGR / OSC 8 sequences are emitted INSIDE a row's `row_buf` after
+        // any content writes, so an empty row carries no escape bytes —
+        // a byte-0 `\n` is therefore unambiguously a blank-row artifact
+        // even on the colour path.
+        while out.starts_with('\n') {
+            out.remove(0);
+        }
         out
     }
 
@@ -1699,6 +1707,16 @@ impl std::fmt::Display for Grid {
         // Remove trailing blank lines
         while out.ends_with("\n\n") {
             out.pop();
+        }
+        // Mirror of the trailing-trim above: strip leading blank rows.
+        // The Sugiyama backend reserves a top corridor for back-edge
+        // routing that often goes unused, leaving 1–5 empty rows above
+        // the first content row. Any byte-0 `\n` is unambiguously a
+        // blank-row artifact because each `out.push_str(line.trim_end())`
+        // pushes content first, then `\n` — so a leading `\n` can only
+        // come from a row whose `trim_end()` produced an empty string.
+        while out.starts_with('\n') {
+            out.remove(0);
         }
         write!(f, "{out}")
     }

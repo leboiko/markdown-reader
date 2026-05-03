@@ -5,6 +5,18 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.34.50] — 2026-05-03
+
+### Fixed — leading blank rows on Sugiyama-rendered diagrams (mermaid-text 0.42.2)
+
+Flowcharts, state diagrams, and architecture-beta diagrams that go
+through the Sugiyama layout backend (the default since `mermaid-text`
+0.17.0) no longer render with 1–5 empty rows above their first
+content row. Most visible on diagrams with back-edges or composite
+states, where Sugiyama's top routing corridor stayed empty when the
+back-edge was routed elsewhere. Pure cosmetic fix; layouts and
+geometry are unchanged.
+
 ## [1.34.49] — 2026-05-02
 
 ### Fixed — mindmap trunk no longer disconnects from children (mermaid-text 0.42.1)

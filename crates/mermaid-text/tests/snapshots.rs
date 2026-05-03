@@ -319,6 +319,36 @@ fn back_edge_lr() {
 }
 
 // ---------------------------------------------------------------------------
+// 16b. Rendered output must not start with blank rows.
+//
+//     The Sugiyama backend reserves a vertical corridor above the source
+//     row to route back-edges. When that reservation is unused (or routed
+//     elsewhere) the topmost rows of the canvas remain empty, and the
+//     `Grid` Display impl historically only stripped TRAILING blank rows.
+//     The result is 1–5 leading blank lines visible in the gallery on
+//     diagrams 1, 3, 6, 8, 9, 37 — see `scripts/render-gallery.sh`.
+//
+//     This test counts the literal `\n` bytes at the start of the rendered
+//     string. A trivially-broken implementation cannot satisfy
+//     `count == 0` because the back-edge fixture's pre-fix snapshot
+//     starts with `\n\n\n` — see
+//     `tests/snapshots/snapshots__back_edge_lr.snap` lines 5–8. Any value
+//     other than zero means the leading-blank artifact is back.
+// ---------------------------------------------------------------------------
+#[test]
+fn back_edge_lr_no_leading_blank_rows() {
+    let out = mermaid_text::render("graph LR; A-->B-->C; C-->A").unwrap();
+    let leading = out.bytes().take_while(|&b| b == b'\n').count();
+    assert_eq!(
+        leading, 0,
+        "rendered output begins with {leading} leading newline byte(s); \
+         the Grid Display impl must strip leading blank rows the same way \
+         it strips trailing ones. First 80 bytes: {:?}",
+        &out.as_bytes()[..out.len().min(80)]
+    );
+}
+
+// ---------------------------------------------------------------------------
 // 17b. Bidirectional edges in a subgraph (Supervisor pattern).
 //      Regression guard: when two edges connect the same node pair (here
 //      Factory ↔ Worker, with both labels), the labels must NOT overwrite

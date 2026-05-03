@@ -1175,7 +1175,6 @@ the edges are routed spatially with Unicode line characters.
 Expected rendered output:
 
 ```text
-
 ╭─API──────────────────────╮
 │                          │
 │ ┌──────────┐ ┌─────────┐ │
