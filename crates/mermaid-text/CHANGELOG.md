@@ -3,6 +3,28 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.42.3 — 2026-05-03 — xy-chart line series shows a marker at every data point
+
+### Fixed
+
+- **`xychart-beta` line series now renders a `●` marker at every data
+  point**, not just the descending half. Previously `draw_line` placed
+  the marker BEFORE drawing the connecting segment, so any rising-edge
+  segment overwrote the source data point's marker with its own corner
+  glyph (`╯`) — leaving only descending peaks visibly marked. The
+  canonical 12-month sales-revenue gallery example showed only 6 dots
+  (Jul–Dec); after this fix all 12 data points show their markers.
+
+  Implementation: `draw_line` now does two passes — connectors first,
+  then markers on top — so the marker glyph wins the cell regardless of
+  rise/fall direction. Pinned by
+  `xy_chart_line_has_marker_per_data_point`, which counts literal `●`
+  characters in the rendered output and fails for any pre-fix
+  marker-placement order. The `xychart_beta_canonical_example`
+  snapshot was actively pinning the buggy 6-dot form and has been
+  re-accepted with all 12 markers (a textbook case of the
+  snapshot-pinning-the-bug class — see also the mindmap fix in 0.42.1).
+
 ## 0.42.2 — 2026-05-03 — strip leading blank rows in Grid output
 
 ### Fixed

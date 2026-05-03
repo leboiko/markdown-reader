@@ -2422,6 +2422,42 @@ fn xychart_beta_canonical_example() {
 }
 
 // ---------------------------------------------------------------------------
+// xychart-beta — every data point must show a `●` marker.
+//
+//     Regression guard against asymmetric line markers. Pre-fix
+//     `draw_line` placed the `●` before the segment-drawing call,
+//     and the rising-edge segment then drew its bottom corner `╯`
+//     OVER the source data point's marker — leaving only the
+//     descending half of a peaked line series visibly marked.
+//     The canonical sales-revenue example exposed this: 12 monthly
+//     data points (peak at jul), only 6 visible dots before the fix.
+//
+//     A trivially-broken implementation that draws zero or only
+//     descending markers cannot satisfy `count == 12`. Counting
+//     literal `●` characters across the whole output is robust to
+//     incidental glyphs because `●` is not used elsewhere in the
+//     xy-chart renderer (axis ticks, bars, and connectors all use
+//     different glyphs).
+// ---------------------------------------------------------------------------
+#[test]
+fn xy_chart_line_has_marker_per_data_point() {
+    let src = "xychart-beta
+    title \"Sales Revenue\"
+    x-axis [jan, feb, mar, apr, may, jun, jul, aug, sep, oct, nov, dec]
+    y-axis \"Revenue (in $)\" 4000 --> 11000
+    bar [5000, 6000, 7500, 8200, 9500, 10500, 11000, 10200, 9200, 8500, 7000, 6000]
+    line [5000, 6000, 7500, 8200, 9500, 10500, 11000, 10200, 9200, 8500, 7000, 6000]";
+    let out = mermaid_text::render(src).unwrap();
+    let dot_count = out.chars().filter(|&c| c == '\u{25CF}').count();
+    assert_eq!(
+        dot_count, 12,
+        "expected one `●` line marker per data point (12), got {dot_count}. \
+         The rising-edge segment likely overwrites the source marker — see \
+         draw_line / draw_segment in render/xy_chart.rs.\n\nFull output:\n{out}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // block-beta — canonical Phase 1 grid + arrows example.
 //     Regression guard: blocks, column spans, and edge summary must all
 //     render correctly in the fixed-width grid layout.

@@ -5,6 +5,17 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.34.51] — 2026-05-03
+
+### Fixed — xy-chart line markers now appear on every data point (mermaid-text 0.42.3)
+
+`xychart-beta` charts that combine a bar and a line series now show a
+`●` marker at every data point. Previously the marker was overwritten
+by the rising-edge corner glyph during line connector drawing, so a
+12-month line with a single peak (e.g. the canonical sales-revenue
+example) only showed dots on the descending half. This was the
+"missing balls Jan–Jun" issue.
+
 ## [1.34.50] — 2026-05-03
 
 ### Fixed — leading blank rows on Sugiyama-rendered diagrams (mermaid-text 0.42.2)

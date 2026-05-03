@@ -346,28 +346,35 @@ fn draw_line(
         .map(|&v| value_to_row(v, y_min, y_max, chart_rows))
         .collect();
 
-    for i in 0..n {
+    // Two-pass: connectors first, markers last. The previous order
+    // (marker-then-segment) was visually correct for descending lines
+    // (the segment's bottom corner landed at `(r1, c1)` which the next
+    // iteration's marker overwrote anyway) but BROKE rising lines: the
+    // segment's bottom corner `╯` lands at `(r0, c0)` — exactly where
+    // the just-drawn marker sat — so every ascending peak lost its
+    // `●`. Drawing all connectors first, then overlaying markers on top,
+    // guarantees the `●` is preserved at every data point regardless of
+    // which side of the peak it's on. See the regression guard
+    // `xy_chart_line_has_marker_per_data_point` in tests/snapshots.rs.
+    for i in 0..n.saturating_sub(1) {
         let row = rows[i];
-        // Centre column of this data point's column slot.
         let center_col = i * col_width + col_width / 2;
+        let next_row = rows[i + 1];
+        let next_center_col = (i + 1) * col_width + col_width / 2;
+        draw_segment(
+            canvas,
+            row,
+            center_col,
+            next_row,
+            next_center_col,
+            chart_rows,
+        );
+    }
 
-        // Place a point marker at (row, center_col).
+    for (i, &row) in rows.iter().enumerate() {
+        let center_col = i * col_width + col_width / 2;
         if row < canvas.len() && center_col < canvas_cols {
             canvas[row][center_col] = '\u{25CF}'; // ●
-        }
-
-        // Draw connector from point i to point i+1.
-        if i + 1 < n {
-            let next_row = rows[i + 1];
-            let next_center_col = (i + 1) * col_width + col_width / 2;
-            draw_segment(
-                canvas,
-                row,
-                center_col,
-                next_row,
-                next_center_col,
-                chart_rows,
-            );
         }
     }
 }
