@@ -44,8 +44,9 @@
 //!
 //! - Points that map to the same terminal cell overwrite each other; the last
 //!   point (in source order) wins. This is acceptable for Phase 1.
-//! - Point labels are not truncated or wrapped; very long names may extend
-//!   slightly past `max_width`.
+//! - Point labels that would overflow the right edge are flipped to the left
+//!   side of their marker.  In the rare case where neither side has room the
+//!   label is truncated with a `…` ellipsis rather than silently dropped.
 
 use unicode_width::UnicodeWidthStr;
 
@@ -181,22 +182,84 @@ pub fn render(diag: &QuadrantChart, max_width: Option<usize>) -> String {
     let top_rows = mid_row.saturating_sub(1); // body rows above the axis (excl. label row 1)
     let bot_rows = rows.saturating_sub(mid_row + 1); // body rows below the axis (excl. label row)
 
-    for pt in &diag.points {
-        let (col, grid_row) = point_to_grid(
-            pt, center_col, left_cols, right_cols, mid_row, top_rows, bot_rows, rows,
-        );
+    // Two-pass point rendering.
+    //
+    // Pass 1: place all markers (·).  This lets the label pass (pass 2) detect
+    //         occupied cells and avoid overwriting another point's label.
+    // Pass 2: place labels in descending x-order (right-most first) so that
+    //         right-edge points that must flip left claim their left region
+    //         before left-side points try to extend right into the same area.
+    //
+    // Label-side selection (per point):
+    //   a) RIGHT of marker if the full label fits within canvas_width AND
+    //      that region is currently clear.
+    //   b) LEFT  of marker if right overflows (or is occupied) AND the left
+    //      region is clear AND the label fits within col 0.
+    //   c) RIGHT with ellipsis-truncation as last resort — guarantees the
+    //      label's name portion is at least partially visible.
 
-        // Clamp to canvas bounds; skip if the point can't be placed.
-        if grid_row == 0 || grid_row > rows || col >= canvas_width {
-            continue;
-        }
+    // Collect (index, col, grid_row) for all valid points.
+    let mut point_positions: Vec<(usize, usize, usize)> = diag
+        .points
+        .iter()
+        .enumerate()
+        .map(|(i, pt)| {
+            let (col, grid_row) = point_to_grid(
+                pt, center_col, left_cols, right_cols, mid_row, top_rows, bot_rows, rows,
+            );
+            (i, col, grid_row)
+        })
+        .filter(|&(_, col, grid_row)| !(grid_row == 0 || grid_row > rows || col >= canvas_width))
+        .collect();
 
-        // Place the marker glyph.
+    // Pass 1 — markers only (source order preserved; last writer wins for
+    // overlapping markers, matching the documented Phase 1 behaviour).
+    for &(_, col, grid_row) in &point_positions {
         grid[grid_row][col] = '\u{00B7}'; // middle dot ·
+    }
 
-        // Place the label to the right of the marker: "Name (x,y)".
+    // Pass 2 — labels, sorted by descending x so right-edge points claim their
+    // left-flip region before left-side points extend right.
+    point_positions.sort_by(|a, b| {
+        let xa = diag.points[a.0].x;
+        let xb = diag.points[b.0].x;
+        xb.partial_cmp(&xa).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    for &(i, col, grid_row) in &point_positions {
+        let pt = &diag.points[i];
+
+        // Build the label string: " Name (x.xx,y.yy)"
         let label = format!(" {} ({:.2},{:.2})", pt.name, pt.x, pt.y);
-        place_text(&mut grid, grid_row, col + 1, &label, canvas_width);
+        let label_width = label.chars().count(); // ASCII labels — char count == display width
+        let right_start = col + 1;
+        let right_fits = right_start + label_width <= canvas_width;
+
+        if right_fits && region_is_clear(&grid, grid_row, right_start, label_width) {
+            // (a) Full label fits on the right and the region is unoccupied.
+            place_text(&mut grid, grid_row, right_start, &label, canvas_width);
+        } else if label_width < col
+            && region_is_clear(&grid, grid_row, col - label_width, label_width)
+        {
+            // (b) Right overflows or is occupied; left region is clear — flip.
+            let left_start = col - label_width;
+            place_text(&mut grid, grid_row, left_start, &label, canvas_width);
+        } else {
+            // (c) Neither side works cleanly.  Place on the right with ellipsis
+            // truncation so at least a partial label is visible.
+            let budget = canvas_width.saturating_sub(right_start);
+            if budget > 1 {
+                let truncated: String = label.chars().take(budget - 1).collect();
+                let with_ellipsis = format!("{truncated}\u{2026}");
+                place_text(
+                    &mut grid,
+                    grid_row,
+                    right_start,
+                    &with_ellipsis,
+                    canvas_width,
+                );
+            }
+        }
     }
 
     // Render x-axis edge labels.
@@ -309,6 +372,32 @@ fn point_to_grid(
     };
 
     (col, safe_row)
+}
+
+/// Return `true` if the region `grid[row][start_col..start_col+len]` contains
+/// no previously-placed *label* text.
+///
+/// Chart-structure glyphs (axis lines, the cross, arrows, and point markers)
+/// are treated as "clear" because labels are allowed to overwrite them — the
+/// axis and markers are drawn in an earlier pass and label text takes priority.
+/// Only characters that came from a prior label placement count as "occupied".
+///
+/// Used by the label-side selection logic in pass 2 to prevent one point's
+/// label from overwriting another's.
+fn region_is_clear(grid: &[Vec<char>], row: usize, start_col: usize, len: usize) -> bool {
+    const STRUCTURE_CHARS: &[char] = &[
+        ' ', '\u{2502}', // │  vertical axis
+        '\u{2500}', // ─  horizontal axis
+        '\u{253C}', // ┼  cross
+        '^',        // top arrow
+        'v',        // bottom arrow
+        '\u{00B7}', // ·  point marker
+    ];
+    let row_data = &grid[row];
+    let end = (start_col + len).min(row_data.len());
+    row_data[start_col..end]
+        .iter()
+        .all(|c| STRUCTURE_CHARS.contains(c))
 }
 
 /// Place `text` into the grid starting at `(row, start_col)`.

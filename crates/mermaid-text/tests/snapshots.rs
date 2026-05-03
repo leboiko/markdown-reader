@@ -340,7 +340,8 @@ fn back_edge_lr_no_leading_blank_rows() {
     let out = mermaid_text::render("graph LR; A-->B-->C; C-->A").unwrap();
     let leading = out.bytes().take_while(|&b| b == b'\n').count();
     assert_eq!(
-        leading, 0,
+        leading,
+        0,
         "rendered output begins with {leading} leading newline byte(s); \
          the Grid Display impl must strip leading blank rows the same way \
          it strips trailing ones. First 80 bytes: {:?}",
@@ -2233,6 +2234,42 @@ fn quadrant_chart_canonical_example() {
     assert!(out.contains('\u{253C}'), "cross glyph ┼ missing");
 
     assert_snapshot!("quadrant_chart_canonical_example", out);
+}
+
+// ---------------------------------------------------------------------------
+// QuadrantChart — point labels at high-x must not be silently truncated.
+//
+// Regression guard for D1: when a point is near the right edge of the canvas
+// the label string overflowed and was silently chopped.  The fix flips the
+// label to the LEFT side of the marker so the full text is always visible.
+//
+// Strong-assertion design: we require the FULL label including coordinates.
+// The truncated form "Campaign D (0." does NOT contain the expected substring,
+// so a no-op cannot satisfy this assertion.
+// ---------------------------------------------------------------------------
+#[test]
+fn quadrant_chart_high_x_label_not_truncated() {
+    // Point at x=0.95 — very close to the right edge — with a name long enough
+    // to overflow when placed to the right of the marker.
+    let src = "quadrantChart
+    x-axis Low --> High
+    y-axis Low --> High
+    quadrant-1 Q1
+    quadrant-2 Q2
+    quadrant-3 Q3
+    quadrant-4 Q4
+    Campaign D: [0.95, 0.50]";
+
+    let out = mermaid_text::render(src).unwrap();
+
+    // The FULL label including coordinates must appear somewhere in the output.
+    // "Campaign D (0.95,0.50)" is 22 chars; a right-side placement at x=0.95
+    // on a 70-column canvas overflows, so without the fix only "Campaign D (0."
+    // would be present and this assertion would fail.
+    assert!(
+        out.contains("Campaign D (0.95,0.50)"),
+        "full label not found — likely truncated; rendered output:\n{out}"
+    );
 }
 
 // ---------------------------------------------------------------------------
