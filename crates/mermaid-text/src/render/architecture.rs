@@ -111,8 +111,19 @@ fn arch_edge_to_flowchart_edge(edge: &ArchEdge) -> Edge {
 
 /// Run the Sugiyama layout + A\* router + Unicode renderer on a pre-built
 /// flowchart [`Graph`], honouring an optional column budget.
+///
+/// Architecture-beta edges are typically unlabeled (`--` or `-->`), so the
+/// default `layer_gap = 6` used by flowchart diagrams (reserved for edge
+/// labels) is wasteful. We start with a tighter config (`layer_gap = 2,
+/// node_gap = 1`) and fall back to progressively more compact configs only
+/// when the output would exceed `max_width`.
 fn render_flowchart_graph(graph: &Graph, max_width: Option<usize>) -> String {
-    let default_cfg = LayoutConfig::default();
+    // Tighter default for architecture-beta: no label clearance needed.
+    // The Sugiyama backend has a hardcoded 3-cell baseline gap; layer_gap only
+    // adds extra beyond that. Setting layer_gap=2 (below the baseline) means
+    // no extra spacing is added — we get the minimum 3-cell gap rather than the
+    // default 6 cells. node_gap=1 reduces horizontal sibling spacing slightly.
+    let default_cfg = LayoutConfig::with_gaps(2, 1);
     let result = layout_and_render(graph, &default_cfg);
 
     let Some(budget) = max_width else {
@@ -124,8 +135,7 @@ fn render_flowchart_graph(graph: &Graph, max_width: Option<usize>) -> String {
     }
 
     const COMPACT_CONFIGS: &[LayoutConfig] = &[
-        LayoutConfig::with_gaps(4, 2),
-        LayoutConfig::with_gaps(2, 1),
+        LayoutConfig::with_gaps(1, 1),
         LayoutConfig::with_gaps(1, 0),
     ];
 
