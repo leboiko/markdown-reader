@@ -1678,17 +1678,25 @@ fn overlaps_prior_path(
 /// they merge visually with adjacent label text, producing artifacts like
 /// `timeout reached─┘` or `─│ label text`.
 ///
-/// Straight-line glyphs (`─`, `│`) are intentionally excluded because labels
-/// running alongside a path channel (`label─────▸node`) are common and
-/// readable.
+/// Thin straight-line glyphs (`─`, `│`) are intentionally excluded because
+/// labels running alongside a path channel (`label─────▸node`) are common
+/// and readable. Thick (`━ ┃`) and dotted (`┄ ┆ ╍ ╏`) line glyphs are
+/// included even though they're "straight" because their visual weight
+/// merges with adjacent label letters — `━━━labelled` reads as one
+/// ambiguous run instead of "edge then label."
 fn label_touches_path_corner(col: usize, row: usize, w: usize, grid: &Grid) -> bool {
-    // Characters that mark a path direction change (corner or junction).
-    // Straight-line glyphs are excluded — touching `─` or `│` is fine.
+    // Characters that mark a path direction change OR a non-thin line style.
+    // Thin straight-line glyphs (`─`, `│`) are excluded — touching them is fine.
     const CORNERS: &[char] = &[
         '┘', '└', '┐', '┌', '┤', '├', '┬', '┴', '┼',
         // Thick/double variants used by some edges or borders.
-        '╯', '╰', '╮', '╭', // T-junctions that appear in back-edge routing.
+        '╯', '╰', '╮', '╭',
+        // T-junctions that appear in back-edge routing.
         '▴', '▾', '▸', '◂',
+        // Thick line styles: labels flush against these visually merge.
+        '\u{2501}', '\u{2503}', // ━ ┃
+        // Dotted line styles: same merge problem.
+        '\u{2504}', '\u{2506}', '\u{254D}', '\u{254F}', // ┄ ┆ ╍ ╏
     ];
     // Cell one column before the label start.
     if col > 0 && CORNERS.contains(&grid.get(col - 1, row)) {
@@ -2928,27 +2936,34 @@ mod tests {
     A == "thick label" ==> G"#;
         let out = render_diagram(src);
 
-        // "dashed label" must appear on the same row as edge cells for F.
-        // We verify by checking that "dashed label" and "thick label" both
-        // appear in the output (they did even before — but previously they
-        // were on rows with no edge characters).  The key regression check:
-        // the labels must NOT be on a row that consists only of spaces and
-        // letters (no box-drawing chars like ─, ┄, ━, │, ┆, ┃).
+        // The label must appear visually connected to its edge — on the
+        // same row OR within 1 row above/below an edge-glyph row.
+        //
+        // Originally this test required edge glyphs ON the same row as the
+        // label. After the A3 fix (labels moved away from rows with thick
+        // `━` / dotted `┄` glyphs to avoid `━━━labelled` abutment), labels
+        // now land one row below their target node — still visually
+        // adjacent. The relaxed check preserves the original intent (no
+        // floating labels in the void) while admitting the A3 placement.
+        let lines: Vec<&str> = out.lines().collect();
+        let has_edge_glyph =
+            |line: &str| line.chars().any(|c| matches!(c,
+                '─' | '┄' | '━' | '│' | '┆' | '┃' | '▸' | '▹' | '▶' | '╱' | '╲'
+            ));
         for label in &["dashed label", "thick label"] {
-            let label_row = out
-                .lines()
-                .find(|l| l.contains(label))
+            let label_row_idx = lines
+                .iter()
+                .position(|l| l.contains(label))
                 .unwrap_or_else(|| panic!("{label:?} not found in output:\n{out}"));
-            // The row must contain at least one edge/routing glyph.
-            let has_edge_glyph = label_row.chars().any(|c| {
-                matches!(
-                    c,
-                    '─' | '┄' | '━' | '│' | '┆' | '┃' | '▸' | '▹' | '▶' | '╱' | '╲'
-                )
-            });
+            let neighbours = label_row_idx.saturating_sub(1)
+                ..(label_row_idx + 2).min(lines.len());
+            let connected = neighbours.clone().any(|i| has_edge_glyph(lines[i]));
             assert!(
-                has_edge_glyph,
-                "label {label:?} is on a row with no edge glyphs (floating label):\n  {label_row:?}\nFull output:\n{out}"
+                connected,
+                "label {label:?} (line {label_row_idx}) is not visually \
+                 connected to an edge — no edge glyphs in lines \
+                 {:?}.\nFull output:\n{out}",
+                neighbours.collect::<Vec<_>>(),
             );
         }
     }
@@ -3150,6 +3165,61 @@ if_state --> False: !condition";
     ///
     /// Repro: two sibling subgraphs (Frontend / Backend) arranged TB where
     /// UI→API and SW→API route vertically through the Backend title row.
+    /// Edge labels must not sit flush against thick (`━ ┃`) or dotted
+    /// (`┄ ┆ ╍ ╏`) line glyphs. Thin lines (`─ │`) are intentionally allowed
+    /// to abut a label (the `label───▸node` channel pattern is common and
+    /// readable), but thick and dotted line styles visually merge with
+    /// adjacent label letters and produce strings like `━━━labelled` where
+    /// the label and the line read as one ambiguous run.
+    ///
+    /// The gallery's edge-style showcase (Diagram 3) is the canonical repro:
+    /// `A --> B`, `A -.-> C`, `A ==> D`, `A -- "labelled" --> E`,
+    /// `A -. "dashed label" .-> F`, `A == "thick label" ==> G`.
+    /// All three labels currently land on rows that have thick/dotted glyphs
+    /// from sibling edges crossing through.
+    ///
+    /// A trivially-broken implementation that places labels in the same rows
+    /// as today fails this assertion: today's render shows `━━━labelled` so
+    /// the cell immediately preceding "labelled" is `━`. The fix moves the
+    /// label to a row where its left neighbour is a space or another safe
+    /// glyph, so `'━'` will not appear as the prev char.
+    #[test]
+    fn edge_labels_not_flush_against_thick_or_dotted_lines() {
+        let src = "flowchart LR
+    A --> B
+    A -.-> C
+    A ==> D
+    A -- \"labelled\" --> E
+    A -. \"dashed label\" .-> F
+    A == \"thick label\" ==> G";
+        let out = crate::render(src).expect("render must succeed");
+
+        let problem_glyphs = [
+            '\u{2501}', '\u{2503}', '\u{2504}', '\u{2506}', '\u{254D}', '\u{254F}',
+        ];
+        for label in &["labelled", "dashed label", "thick label"] {
+            let line = out
+                .lines()
+                .find(|l| l.contains(label))
+                .unwrap_or_else(|| panic!("label {label:?} missing in output:\n{out}"));
+            let label_byte_pos = line.find(label).unwrap();
+            if label_byte_pos == 0 {
+                continue;
+            }
+            let prev_char = line[..label_byte_pos].chars().last().unwrap();
+            assert!(
+                !problem_glyphs.contains(&prev_char),
+                "edge label {label:?} sits flush against thick/dotted glyph \
+                 {prev_char:?} (chars before label: {:?}). Row:\n{line}\n\nFull:\n{out}",
+                line[..label_byte_pos]
+                    .chars()
+                    .rev()
+                    .take(8)
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
     /// Stronger sibling of `route_does_not_pierce_subgraph_title_row`: the
     /// title row must be free of routing junction glyphs (`┼ ┬ ┴ ├ ┤`)
     /// across its ENTIRE width, not just at label-letter columns.

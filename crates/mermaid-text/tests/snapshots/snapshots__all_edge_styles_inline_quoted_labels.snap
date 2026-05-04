@@ -1,13 +1,8 @@
 ---
 source: crates/mermaid-text/tests/snapshots.rs
+assertion_line: 146
 expression: out
 ---
-
-
-
-
-
-
             ┌───┐
            ▸│ B │
            │└───┘
@@ -19,7 +14,7 @@ expression: out
 └───┘━━━━━━┓└───┘
        dashed quoted
            ┃
-           ┃thick quoted
-           ┃┌───┐
+           ┃
+thick quoted┌───┐
            ▸│ D │
             └───┘
