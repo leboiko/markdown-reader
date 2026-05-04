@@ -3208,6 +3208,89 @@ if_state --> False: !condition";
     ///
     /// Repro: two sibling subgraphs (Frontend / Backend) arranged TB where
     /// UI→API and SW→API route vertically through the Backend title row.
+    /// State-diagram notes (`note right of X`, `note left of X`) must be
+    /// registered as full routing obstacles — no edge route should pass
+    /// through a note's interior cells. The gallery's Diagram 9 places a
+    /// multi-line note next to `CircuitOpen` while a back-edge from
+    /// `CircuitClosed → CircuitOpen` routes near the same area.
+    ///
+    /// This test asserts that within the note's bounding box (excluding
+    /// borders), every cell is either whitespace or a letter from the
+    /// note's own text — no edge glyphs (`│ ─ ┼ ┬ ┴ ├ ┤ ╮ ╯ ╭ ╰`).
+    ///
+    /// If this passes today (post-G1 / post-F2), B2 is moot — the
+    /// cumulative effect of the prior fixes already keeps routes out of
+    /// note interiors. The test serves as a regression guard.
+    #[test]
+    fn note_interior_contains_no_routing_glyphs() {
+        let src = "stateDiagram-v2
+    [*] --> CircuitOpen
+    CircuitOpen --> CircuitClosed : timeout reached
+    CircuitClosed --> CircuitOpen : 5 errors
+    note right of CircuitOpen
+        Open state rejects all
+        traffic for cool-down period.
+    end note";
+        let out = crate::render(src).expect("render must succeed");
+        let lines: Vec<Vec<char>> = out.lines().map(|l| l.chars().collect()).collect();
+
+        // Find the note's bounding box. The note has a rounded rectangle
+        // border; rows containing `╭` ending in `╮` are top borders, rows
+        // with `╰` ending in `╯` are bottom. We pick the LATEST such pair
+        // (the note is the only one in this diagram).
+        let mut note_top: Option<usize> = None;
+        let mut note_bot: Option<usize> = None;
+        let mut note_left: Option<usize> = None;
+        let mut note_right: Option<usize> = None;
+        for (r, line) in lines.iter().enumerate() {
+            if line.contains(&'\u{256D}') && line.contains(&'\u{256E}') {
+                let l = line.iter().position(|&c| c == '\u{256D}').unwrap();
+                let rr = line.iter().rposition(|&c| c == '\u{256E}').unwrap();
+                if line[(l + 1)..rr].iter().all(|&c| c == '\u{2500}') {
+                    note_top = Some(r);
+                    note_left = Some(l);
+                    note_right = Some(rr);
+                }
+            } else if note_top.is_some()
+                && line.contains(&'\u{2570}')
+                && line.contains(&'\u{256F}')
+            {
+                let l = line.iter().position(|&c| c == '\u{2570}').unwrap();
+                let rr = line.iter().rposition(|&c| c == '\u{256F}').unwrap();
+                if l == note_left.unwrap()
+                    && rr == note_right.unwrap()
+                    && line[(l + 1)..rr].iter().all(|&c| c == '\u{2500}')
+                {
+                    note_bot = Some(r);
+                    break;
+                }
+            }
+        }
+
+        let (top, bot, left, right) = match (note_top, note_bot, note_left, note_right) {
+            (Some(t), Some(b), Some(l), Some(r)) => (t, b, l, r),
+            _ => panic!("could not locate note bounding box in:\n{out}"),
+        };
+
+        // Walk interior cells (exclusive of border rows/cols).
+        let routing_glyphs: Vec<char> = vec![
+            '\u{2502}', '\u{2500}', '\u{253C}', '\u{252C}', '\u{2534}', '\u{251C}', '\u{2524}',
+            '\u{256E}', '\u{256F}', '\u{256D}', '\u{2570}', '\u{2518}', '\u{2514}', '\u{2510}',
+            '\u{250C}',
+        ];
+        for r in (top + 1)..bot {
+            for c in (left + 1)..right {
+                let ch = lines[r].get(c).copied().unwrap_or(' ');
+                assert!(
+                    !routing_glyphs.contains(&ch),
+                    "routing glyph {ch:?} found inside note interior at \
+                     ({c}, {r}) — note bbox: ({left},{top})-({right},{bot}). \
+                     Full output:\n{out}"
+                );
+            }
+        }
+    }
+
     /// Back-edge exit-stub glyphs at the source's path-row must connect
     /// cleanly to the path direction — if the route goes LEFT (typical
     /// LR back-edge), the glyph should be `┘` (bottom-right corner with
