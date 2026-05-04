@@ -1145,7 +1145,13 @@ fn spread_destinations(
                 1
             };
             for (i, &idx) in indices.iter().enumerate() {
-                let offset = (i as isize - (n as isize - 1) / 2) * step;
+                // Symmetric centring: (2*i - (n-1)) * step / 2. For odd n
+                // this is identical to (i - (n-1)/2) * step. For even n it
+                // gives symmetric offsets [-step/2, +step/2, ...] instead of
+                // the integer-division-biased [0, +step, ...] which made
+                // arrow tips merging into a shared destination land on
+                // adjacent rows. See merging_arrows_into_shared_destination_are_not_adjacent.
+                let offset = (2 * i as isize - (n as isize - 1)) * step / 2;
                 let new_row = (centre + offset)
                     .max(min_row as isize)
                     .min(max_row as isize) as usize;
@@ -1170,7 +1176,13 @@ fn spread_destinations(
                 1
             };
             for (i, &idx) in indices.iter().enumerate() {
-                let offset = (i as isize - (n as isize - 1) / 2) * step;
+                // Symmetric centring: (2*i - (n-1)) * step / 2. For odd n
+                // this is identical to (i - (n-1)/2) * step. For even n it
+                // gives symmetric offsets [-step/2, +step/2, ...] instead of
+                // the integer-division-biased [0, +step, ...] which made
+                // arrow tips merging into a shared destination land on
+                // adjacent rows. See merging_arrows_into_shared_destination_are_not_adjacent.
+                let offset = (2 * i as isize - (n as isize - 1)) * step / 2;
                 let new_col = (centre + offset)
                     .max(min_col as isize)
                     .min(max_col as isize) as usize;
@@ -1218,7 +1230,13 @@ fn spread_sources(
                 1
             };
             for (i, &idx) in indices.iter().enumerate() {
-                let offset = (i as isize - (n as isize - 1) / 2) * step;
+                // Symmetric centring: (2*i - (n-1)) * step / 2. For odd n
+                // this is identical to (i - (n-1)/2) * step. For even n it
+                // gives symmetric offsets [-step/2, +step/2, ...] instead of
+                // the integer-division-biased [0, +step, ...] which made
+                // arrow tips merging into a shared destination land on
+                // adjacent rows. See merging_arrows_into_shared_destination_are_not_adjacent.
+                let offset = (2 * i as isize - (n as isize - 1)) * step / 2;
                 let new_row = (centre + offset)
                     .max(min_row as isize)
                     .min(max_row as isize) as usize;
@@ -1247,7 +1265,13 @@ fn spread_sources(
                 1
             };
             for (i, &idx) in indices.iter().enumerate() {
-                let offset = (i as isize - (n as isize - 1) / 2) * step;
+                // Symmetric centring: (2*i - (n-1)) * step / 2. For odd n
+                // this is identical to (i - (n-1)/2) * step. For even n it
+                // gives symmetric offsets [-step/2, +step/2, ...] instead of
+                // the integer-division-biased [0, +step, ...] which made
+                // arrow tips merging into a shared destination land on
+                // adjacent rows. See merging_arrows_into_shared_destination_are_not_adjacent.
+                let offset = (2 * i as isize - (n as isize - 1)) * step / 2;
                 let new_col = (centre + offset)
                     .max(min_col as isize)
                     .min(max_col as isize) as usize;
@@ -3165,6 +3189,50 @@ if_state --> False: !condition";
     ///
     /// Repro: two sibling subgraphs (Frontend / Backend) arranged TB where
     /// UI→API and SW→API route vertically through the Backend title row.
+    /// Two edges merging into the same destination must produce arrow tips
+    /// (`▸`) at least 2 rows apart on the destination's left border, not
+    /// adjacent rows. The gallery's Diagram 1 (Decision → Build/Skip → Deploy)
+    /// is the canonical repro: the two arrows landing into Deploy stack on
+    /// adjacent rows (`▸│ Deploy │` immediately above `▸└────────┘`).
+    ///
+    /// Root cause: `spread_destinations` computes offset as
+    /// `(i - (n-1)/2) * step` where `(n-1)/2` is integer division. For
+    /// n=2 the result is `[0, +step]` instead of `[-step/2, +step/2]` —
+    /// asymmetric, biased toward higher rows. Fix uses
+    /// `(2*i - (n-1)) * step / 2` for symmetric placement.
+    ///
+    /// Strong assertion: count consecutive `▸` glyphs in the same column,
+    /// must equal 0. A no-op fix where tips remain adjacent fails.
+    #[test]
+    fn merging_arrows_into_shared_destination_are_not_adjacent() {
+        let src = "flowchart LR
+    Start --> Decision{Decision}
+    Decision -->|yes| Build
+    Decision -->|no| Skip
+    Build --> Deploy
+    Skip --> Deploy";
+        let out = crate::render(src).expect("render must succeed");
+
+        let lines: Vec<Vec<char>> = out.lines().map(|l| l.chars().collect()).collect();
+        let max_cols = lines.iter().map(|l| l.len()).max().unwrap_or(0);
+        let mut adjacent_pairs = 0usize;
+        for col in 0..max_cols {
+            for row in 0..lines.len().saturating_sub(1) {
+                let here = lines[row].get(col).copied().unwrap_or(' ');
+                let below = lines[row + 1].get(col).copied().unwrap_or(' ');
+                if here == '\u{25B8}' && below == '\u{25B8}' {
+                    adjacent_pairs += 1;
+                }
+            }
+        }
+        assert_eq!(
+            adjacent_pairs, 0,
+            "found {adjacent_pairs} pair(s) of `▸` glyphs on adjacent rows in \
+             the same column — arrow tips at a shared destination should be \
+             distributed with ≥ 2-row separation.\n\nFull output:\n{out}"
+        );
+    }
+
     /// Edge labels must not sit flush against thick (`━ ┃`) or dotted
     /// (`┄ ┆ ╍ ╏`) line glyphs. Thin lines (`─ │`) are intentionally allowed
     /// to abut a label (the `label───▸node` channel pattern is common and

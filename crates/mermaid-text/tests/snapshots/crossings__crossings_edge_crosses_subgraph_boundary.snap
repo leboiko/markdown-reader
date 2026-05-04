@@ -3,4 +3,4 @@ source: crates/mermaid-text/tests/crossings.rs
 assertion_line: 168
 expression: "fmt_count(\"edge_crosses_subgraph_boundary\", n)"
 ---
-edge_crosses_subgraph_boundary: 12 crossing(s)
+edge_crosses_subgraph_boundary: 8 crossing(s)

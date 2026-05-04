@@ -1,19 +1,15 @@
 ---
 source: crates/mermaid-text/tests/snapshots.rs
+assertion_line: 913
 expression: out
 ---
-
-
-
-
-
-
-                                                      ╭─────────────────────────────────────────────╮
-                                                      │ DB calls skipped (sleep for probe interval) │                   probe interval elapsed
-                                                     ▸│             No writes attempted             │───────────────────────────────────────┐
-╭─────╮       ╭───────────────────────────────╮      │╰──────────────────────▴──────────────────────╯                                       │╭────────────────────────────────╮
-(  ●  )──────┐│   All DB calls pass through   │───5 consecutive failures─────┼──────────────────────────────────────────────────────────────▸│ One probe call allowed through │
-╰─────╯      ▸│ Counting consecutive failures │──────┘                       │                                                               ╰────────────────────────────────╯
-              ╰───────────────▴───────────────╯                              │                                       probe fails (increased backoff)          ┴
-                                                                             └────────────────────────────────────────────────────────────────────────────────┘
-                               probe succeeds
+                                                                                                                                                              ┌────────────────┐
+                                                      ╭─────────────────────────────────────────────╮                                                         │                │
+                                                      │ DB calls skipped (sleep for probe interval) │                   probe interval elapsed                │                │
+                                                     ▸│             No writes attempted             │───────────────────────────────────────┐                 │                │
+╭─────╮       ╭───────────────────────────────╮      │╰──────────────────────▴──────────────────────╯                                       │╭────────────────────────────────╮│
+(  ●  )──────┐│   All DB calls pass through   │   5 consecutive failures     │                                                              ▸│ One probe call allowed through ││
+╰─────╯      ▸│ Counting consecutive failures │──────┘                       │                                                               ╰────────────────────────────────╯│
+              ╰───────────────▴───────────────╯                              │                                       probe fails (increased backoff)          ┴                │
+                              │                                              └────────────────────────probe succeeds──────────────────────────────────────────┘                │
+                              └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘

@@ -1,18 +1,13 @@
 ---
 source: crates/mermaid-text/tests/snapshots.rs
+assertion_line: 2085
 expression: out
 ---
-
-
-
-
-
-
                       ╭──────────╮
                      ▸(  Circle  )────────┐
                      │╰──────────╯        │
-┌─────────────┐   Link text               │╱─────────╲
-│ Square Rect │──────┘                    ▸│ Rhombus │
+┌─────────────┐──────┘                    ▸╱─────────╲
+│ Square Rect │   Link text                │ Rhombus │
 └─────────────┘──────┐                    ▸╲─────────╱
                      │╭────────────╮      │
                      ▸│ Round Rect │──────┘

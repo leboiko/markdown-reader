@@ -1,20 +1,15 @@
 ---
 source: crates/mermaid-text/tests/regression_corpus.rs
+assertion_line: 80
 expression: constrained
 ---
-
-
-
-
-
-
                                        ╭─────────────────────╮
                                        │  DB calls skipped   │
                                        │  (sleep for probe   │                  probe interval elapsed
            ╭──────────────────────╮   ▸│      interval)      │────────────────────────────────────┐
 ╭─────╮    │  All DB calls pass   │   ││ No writes attempted │                                    │╭─────────────────╮
-(  ●  )───┐│       through        │   │╰──────────▴──────────╯                                    ││ One probe call  │
-╰─────╯   ▸│ Counting consecutive │───┴───────────┼───────────────────────────────────────────────▸│ allowed through │
+(  ●  )───┐│       through        │───┼╰──────────▴──────────╯────────────────────────────────────┼│ One probe call  │
+╰─────╯   ▸│ Counting consecutive │───┘           │                                               ▸│ allowed through │
            │       failures       │ 5 consecutive failures                                         ╰─────────────────╯
            ╰───────────▴──────────╯               │                            probe fails (increased backoff)
                                                   └─────────────────────────────────────────────────────────┘

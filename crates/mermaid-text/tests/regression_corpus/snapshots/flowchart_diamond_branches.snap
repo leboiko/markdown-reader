@@ -1,5 +1,6 @@
 ---
 source: crates/mermaid-text/tests/regression_corpus.rs
+assertion_line: 72
 expression: natural
 ---
           ┌───────┐
@@ -15,13 +16,13 @@ expression: natural
            ╱──▾──╲
            │ Ok? │
            ╲─────╱
-              │ └──┐
-              │    │
-              │    │
-          Yes │    │No
-              │    │
-              │    │
-         ┌────┘    │
+             │ └───┐
+             │     │
+             │     │
+         Yes │     │No
+             │     │
+             │     │
+         ┌───┘     │
       ┌──▾─┐   ┌───▾──┐
       │ Go │   │ Stop │
       └────┘   └──────┘

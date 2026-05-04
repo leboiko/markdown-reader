@@ -1,14 +1,13 @@
 ---
 source: crates/mermaid-text/tests/snapshots.rs
+assertion_line: 856
 expression: out
 ---
-
-
 ╭─────╮
 (  ●  )────────────────────────┐
 ╰─────╯                        │
-                               │╭──────╮     ╭─────────╮
-                               ▸│ Idle │────▸│ Working │
+                               ▸╭──────╮     ╭─────────╮
+                                │ Idle │────▸│ Working │
                                ─╰──────╯     ╰─────────╯
 ╭─────────────────────────╮    ┆
 │  worker pool size = 4   │    ┆

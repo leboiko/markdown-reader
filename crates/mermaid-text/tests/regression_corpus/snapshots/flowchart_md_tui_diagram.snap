@@ -1,18 +1,13 @@
 ---
 source: crates/mermaid-text/tests/regression_corpus.rs
+assertion_line: 72
 expression: natural
 ---
-
-
-
-
-
-
                       ╭──────────╮
                      ▸(  Circle  )────────┐
                      │╰──────────╯        │
-┌─────────────┐   Link text               │╱─────────╲
-│ Square Rect │──────┘                    ▸│ Rhombus │
+┌─────────────┐──────┘                    ▸╱─────────╲
+│ Square Rect │   Link text                │ Rhombus │
 └─────────────┘──────┐                    ▸╲─────────╱
                      │╭────────────╮      │
                      ▸│ Round Rect │──────┘

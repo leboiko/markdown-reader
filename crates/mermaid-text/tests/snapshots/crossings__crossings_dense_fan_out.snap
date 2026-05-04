@@ -3,4 +3,4 @@ source: crates/mermaid-text/tests/crossings.rs
 assertion_line: 244
 expression: "fmt_count(\"dense_fan_out\", n)"
 ---
-dense_fan_out: 2 crossing(s)
+dense_fan_out: 1 crossing(s)

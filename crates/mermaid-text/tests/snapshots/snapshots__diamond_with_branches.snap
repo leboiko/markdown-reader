@@ -1,5 +1,6 @@
 ---
 source: crates/mermaid-text/tests/snapshots.rs
+assertion_line: 46
 expression: out
 ---
           ┌───────┐
@@ -15,13 +16,13 @@ expression: out
            ╱──▾──╲
            │ Ok? │
            ╲─────╱
-              │ └──┐
-              │    │
-              │    │
-          Yes │    │No
-              │    │
-              │    │
-         ┌────┘    │
+             │ └───┐
+             │     │
+             │     │
+         Yes │     │No
+             │     │
+             │     │
+         ┌───┘     │
       ┌──▾─┐   ┌───▾──┐
       │ Go │   │ Stop │
       └────┘   └──────┘

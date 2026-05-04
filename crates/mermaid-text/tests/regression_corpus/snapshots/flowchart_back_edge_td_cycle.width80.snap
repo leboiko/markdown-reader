@@ -1,5 +1,6 @@
 ---
 source: crates/mermaid-text/tests/regression_corpus.rs
+assertion_line: 80
 expression: constrained
 ---
             ┌──────┐
@@ -15,13 +16,13 @@ expression: constrained
         ┌────▾────┐        │
         │ Running │        │retry
         └─────────┘        │
-             │ └──────┐    │
-             │        │    │
-             │        │    │
-        done │        │error
-             │        │    │
-             │        │    │
-          ┌──┘        │    │
+            │ └───────┐    │
+            │         │    │
+            │         │    │
+       done │         │error
+            │         │    │
+            │         │    │
+          ┌─┘         │    │
       ┌───▾──┐   ┌────▾───┐│
       │ Done │   │ Failed ├┘
       └──────┘   └────────┘

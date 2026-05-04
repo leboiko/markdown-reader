@@ -1,6 +1,6 @@
 ---
 source: crates/mermaid-text/tests/snapshots.rs
-assertion_line: 1080
+assertion_line: 1320
 expression: out
 ---
             ┌──────┐
@@ -16,13 +16,13 @@ expression: out
         ┌────▾────┐        │
         │ Running │        │retry
         └─────────┘        │
-             │ └──────┐    │
-             │        │    │
-             │        │    │
-        done │        │error
-             │        │    │
-             │        │    │
-          ┌──┘        │    │
+            │ └───────┐    │
+            │         │    │
+            │         │    │
+       done │         │error
+            │         │    │
+            │         │    │
+          ┌─┘         │    │
       ┌───▾──┐   ┌────▾───┐│
       │ Done │   │ Failed ├┘
       └──────┘   └────────┘
