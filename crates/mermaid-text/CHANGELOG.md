@@ -3,6 +3,47 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.42.5 — 2026-05-03 — Path B polish: back-edge corner glyph + regression guards
+
+### Fixed
+
+- **F2 — Back-edge perimeter exit uses corner glyph (`┘`/`└`) instead of
+  T-junction (`┴`).** The composite-state gallery example (Diagram 7,
+  `Working --> Idle: done`) showed an orphan `┴` glyph below the "done"
+  label — `┴` implies a phantom rightward extension that doesn't exist.
+  The `path_junction_lr` constant in `render::unicode::render_inner`
+  was hardcoded to `┴` regardless of the path's actual direction.
+  Since LR back-edges always route LEFT from the source's exit cell
+  (destination is to the left), the correct glyph is `┘` (bottom-right
+  corner with up + left). Symmetric for RL → `└`. The B9 exit-collision
+  case (cell already had `├` from another back-edge) is preserved with
+  the original `┴` overlay.
+  Regression: `back_edge_left_terminus_uses_corner_not_t_junction`.
+
+### Added — regression guards
+
+- **B2 — note interiors are routing-free** —
+  `note_interior_contains_no_routing_glyphs` pins the desired behaviour
+  (no edge route passes through a note-box interior). This was already
+  satisfied by Path A's G1 + F2 combined effect; the test guards
+  against future regression.
+- **A1+A2 — fan-out labels distribute across corridor** — already in
+  0.42.4 from Path A. (Listed here for completeness as it was a Path B
+  candidate that resolved during Path A.)
+
+### Known limitation (deferred)
+
+- **B1 — terminal `[*]` sinks not promoted to last layer.** State
+  diagrams where a final state is reached via a SHORT path while other
+  states sit on a LONGER path render the sink mid-graph instead of at
+  the visual end (gallery's Diagram 6: `Idle → [*]` short-path while
+  `Paused` sits on the longer `Idle → Running → Paused` path). The fix
+  requires a Sugiyama post-pass that recomputes level AND the ascii-dag
+  column coordinate, with bounded snapshot scope being impractical
+  inside the launch-window 2-session ceiling. Pinned by `#[ignore]`d
+  test `final_state_renders_at_rightmost_column`. Workaround: phrase
+  the diagram so the terminal node is on the longest path.
+
 ## 0.42.4 — 2026-05-03 — Path A polish: 6 visible-quality fixes
 
 ### Fixed

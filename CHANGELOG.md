@@ -5,6 +5,26 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.34.53] — 2026-05-03
+
+### Fixed — Path B polish (mermaid-text 0.42.5)
+
+- **State-diagram back-edge perimeters** use a clean corner glyph
+  (`┘`/`└`) instead of a T-junction (`┴`) at the source exit point.
+  The "done" back-edge in the canonical composite-state example no
+  longer leaves an orphan junction glyph mid-air.
+- **Note interiors** (`note right of X` / `note left of X`) are
+  guaranteed free of routing glyphs by an explicit regression test —
+  Path A's earlier fixes already kept routes out of notes; this just
+  pins the behaviour.
+
+### Known limitation, documented for future work
+
+- State diagrams where a `[*]` final state is on a SHORT path while
+  other states sit on a LONGER path render the final state mid-graph
+  rather than at the visual end. See `docs/mermaid-gallery.md` Basic
+  state machine section for the workaround.
+
 ## [1.34.52] — 2026-05-03
 
 ### Fixed — Path A polish: 6 rendering-quality fixes (mermaid-text 0.42.4)
