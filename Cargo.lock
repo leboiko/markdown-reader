@@ -715,9 +715,9 @@ dependencies = [
 
 [[package]]
 name = "edtui"
-version = "0.11.2"
+version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca8ccfc298a338b767ec13c9c52d42c338df7cee26cdde58345b9d7d15c7d7f8"
+checksum = "d4941adefb4c21c4a8a5bece220a24dc28d1cbb5d1e5875be4a575d5d1da172a"
 dependencies = [
  "crossterm",
  "edtui-jagged",
@@ -2463,9 +2463,9 @@ dependencies = [
 
 [[package]]
 name = "ratatui-image"
-version = "10.0.7"
+version = "10.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2ade55b4df47a7e166bf842e20581778e5c315df588e87ea5ca88706d1b8577"
+checksum = "a10dbbf11c4f3cf810ec227010d1ba0a4ce515f0d3b319920e30dd4cbc99d211"
 dependencies = [
  "base64-simd",
  "icy_sixel",
