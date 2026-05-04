@@ -5,6 +5,33 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.34.54] — 2026-05-04
+
+### Fixed — idle CPU spike when terminal has mouse capture
+
+The TUI consumed all of one CPU core after sitting idle for a while
+when the user's cursor passed over the terminal area. Root cause:
+`EnableMouseCapture` is on at startup, and many terminals (Ghostty,
+Kitty, iTerm2, modern xterm with SGR mouse mode) emit a stream of
+`MouseEventKind::Moved` events for every cell the cursor crosses —
+even with no button pressed. Each event reached the input thread,
+got forwarded to the action channel, woke the main loop, and
+triggered a full UI redraw. With ~60 motion events per second, the
+redraw loop pegged CPU.
+
+Fix: drop `MouseEventKind::Moved` events at the input boundary.
+No handler in the codebase reads `Moved`, so this is safe — clicks,
+scrolls, drags, and resize events all still pass through unchanged.
+
+Pinned by 4 unit tests in `src/event.rs`:
+- `mouse_moved_events_are_dropped`
+- `non_motion_mouse_events_pass_through`
+- `key_press_passes_release_drops`
+- `resize_events_pass_through`
+
+The `event_to_action` helper is now an extracted pure function so the
+input-boundary policy is testable.
+
 ## [1.34.53] — 2026-05-03
 
 ### Fixed — Path B polish (mermaid-text 0.42.5)
