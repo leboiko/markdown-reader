@@ -3,6 +3,34 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## Unreleased — Launch-quality follow-ups
+
+### Fixed
+
+- **B1 — Terminal `[*]` markers now render at the rightmost layer.**
+  State diagrams use a synthetic `__end__` node for the `[*]` final
+  marker; longest-path layering (the only ranker `ascii-dag`
+  exposes) placed it at `max(predecessor_level) + 1`, which for short
+  paths landed mid-graph. New post-pass in `sugiyama_layout` detects
+  any sink whose id starts with `__end__` and promotes its `level` to
+  `max_level`, with within-layer slot below the lowest existing
+  max-level node so the marker doesn't overlap. Promotion is narrow
+  by design — generic "promote all sinks" would break flowchart
+  leaves whose longest-path placement is topologically correct.
+  Pinned by `final_state_renders_at_rightmost_column`. 1 snapshot
+  flipped.
+
+### Known limitations (still deferred)
+
+- **Bug 4 — Route corners in non-endpoint node halos.** Attempted
+  a libavoid-style halo penalty in A* (`Obstacle::NearNodeBox`,
+  multiple penalty values from 1.0 to 6.0); the visible bug fixed
+  cleanly but rippled into back-edge exit-stub placement and
+  edge-label thick-line adjacency. The correct fix is Wybrow 2009
+  §4's post-routing nudging pass — out of scope for a router-local
+  cost change. Pinned by `#[ignore]`d test
+  `route_corners_clear_non_endpoint_node_halos`.
+
 ## 0.42.6 — 2026-05-04 — Launch-quality polish (Bugs 2 + 7; 4 deferrals)
 
 This release ships the renderer-side fixes from the launch-quality
@@ -53,9 +81,9 @@ gallery with concrete workarounds.
   renders 11 lines, target ≤ 9 with corridor sharing).
 - **Bug 6** — Edge labels in TB-inside-LR subgraphs land far from
   their endpoints. Documented in the gallery with three workarounds.
-- **B1** — Terminal-state `[*]` sinks not promoted to last layer
-  when reached via short path. Existing `#[ignore]`d test
-  `final_state_renders_at_rightmost_column` documents the target.
+- ~~**B1** — Terminal-state `[*]` sinks not promoted to last layer
+  when reached via short path.~~ **FIXED 2026-05-05** in a follow-up
+  to 0.42.6. See unreleased section.
 - **E1** — ER spine label right-edge alignment looks visually
   stacked when 3+ relationships share the spine. Documented in
   gallery, workaround: keep ER diagrams ≤ 5 entities.

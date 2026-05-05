@@ -3263,7 +3263,6 @@ if_state --> False: !condition";
     /// pinned target for future work — when B1 is implemented, remove the
     /// `#[ignore]` and verify the assertion passes.
     #[test]
-    #[ignore = "B1: terminal sinks not promoted to last layer (deferred)"]
     fn final_state_renders_at_rightmost_column() {
         let src = "stateDiagram-v2
     [*] --> Idle
@@ -3275,24 +3274,46 @@ if_state --> False: !condition";
         let out = crate::render(src).expect("render must succeed");
         let lines: Vec<Vec<char>> = out.lines().map(|l| l.chars().collect()).collect();
 
-        let paused_line_idx = lines
+        // Find the BOX-LEFT col of Paused (not the text col). The box
+        // renders as `│ Paused │`, so we search for the literal `│ Paused`
+        // pattern and take that match position. Char-column, not byte
+        // offset — `String::find` would return a byte offset that
+        // wildly misaligns with `final_box_col` below (box-drawing
+        // chars are 3 bytes each).
+        let paused_needle: Vec<char> = "│ Paused".chars().collect();
+        let paused_col = lines
             .iter()
-            .position(|l| l.iter().collect::<String>().contains("Paused"))
-            .expect("Paused line missing");
-        let paused_col = lines[paused_line_idx]
-            .iter()
-            .collect::<String>()
-            .find("Paused")
-            .unwrap();
+            .find_map(|l| {
+                l.windows(paused_needle.len())
+                    .position(|w| w == paused_needle.as_slice())
+            })
+            .expect("Paused box left border missing");
 
-        // Final state `((●))` renders as a nested rounded box. Find the
-        // outermost `╭` of that box (it's the only `╭` line whose body
-        // contains another `╭` two lines below).
-        let final_box_col = (0..lines.len().saturating_sub(2))
-            .find_map(|i| {
-                let outer = lines[i].iter().position(|&c| c == '\u{256D}')?;
-                let inner = lines[i + 2].iter().position(|&c| c == '\u{256D}')?;
-                if inner > outer { Some(outer) } else { None }
+        // Final state `((●))` renders as a nested rounded box, 5 rows
+        // tall:
+        //   ╭───────╮     <- outer top — `╭` at column C
+        //   │╭─────╮│     <- inner top — `╭` at column C+1
+        //   ││  ●  ││
+        //   │╰─────╯│
+        //   ╰───────╯
+        // The nesting signature is `╭` at (C, row) AND `╭` at
+        // (C+1, row+1). Scan for any (col, row) cell with this exact
+        // diagonal-step pattern — which uniquely identifies nested
+        // rounded boxes (`((X))`).
+        let final_box_col = (0..lines.len().saturating_sub(1))
+            .find_map(|r| {
+                let row = &lines[r];
+                let next = &lines[r + 1];
+                row.iter().enumerate().find_map(|(c, &ch)| {
+                    if ch != '\u{256D}' {
+                        return None;
+                    }
+                    if next.get(c + 1).copied() == Some('\u{256D}') {
+                        Some(c)
+                    } else {
+                        None
+                    }
+                })
             })
             .expect("final-state nested-rounded-box outline missing");
 

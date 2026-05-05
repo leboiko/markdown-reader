@@ -657,6 +657,105 @@ pub fn sugiyama_layout(graph: &Graph, _config: &LayoutConfig) -> LayoutResult {
         max_y = max_y.max(row);
     }
 
+    // 4.4. B1 — Terminal-state-marker promotion. State diagrams use
+    //      a synthetic `__end__` (or `__end__<scope>`) node for the
+    //      `[*]` final marker; longest-path layering puts it at
+    //      `max(predecessor_level) + 1`, which for short paths lands
+    //      mid-graph while real states sit further right via longer
+    //      paths. Promote any sink whose id starts with `__end__` so
+    //      the final marker always renders in the rightmost layer.
+    //
+    //      The promotion is intentionally narrow: a generic "promote
+    //      all sinks" rule would also relocate flowchart leaves
+    //      (e.g. `App --> Cache` where Cache has no successors) and
+    //      break their topologically-correct longest-path placement.
+    //      `__end__` is a state-diagram-only synthetic id, so this
+    //      path is exclusive to state diagrams without needing a
+    //      diagram-type tag on `Graph`.
+    //
+    //      Network simplex layering (Gansner 1993) does NOT fix this
+    //      symptom — research-doc analysis shows it ALSO assigns the
+    //      sink to layer 1 for short paths. The correct fix is a
+    //      post-pass regardless of which ranker is used.
+    //
+    //      Within-layer (perpendicular axis) coordinate is shifted
+    //      to clear the lowest existing max-level box so the
+    //      promoted marker does not overlap. Multi-`__end__` fixtures
+    //      slot consecutively; their relative ordering is the IR
+    //      iteration order, which is stable across runs.
+    {
+        let max_level = raw_positions
+            .iter()
+            .map(|(_, _, _, l)| *l)
+            .max()
+            .unwrap_or(0);
+        if max_level > 0 {
+            let has_outgoing: HashSet<&str> =
+                graph.edges.iter().map(|e| e.from.as_str()).collect();
+            let sinks: HashSet<String> = graph
+                .nodes
+                .iter()
+                .filter(|n| {
+                    !has_outgoing.contains(n.id.as_str())
+                        && n.id.starts_with("__end__")
+                })
+                .map(|n| n.id.clone())
+                .collect();
+
+            // Find the flow-axis coordinate of any node already at
+            // max_level so promoted sinks can adopt it. Flow axis
+            // depends on transpose: for LR/RL it's `col`, for TB/BT
+            // it's `row`.
+            let max_level_flow = raw_positions.iter().find_map(|(_, c, r, l)| {
+                if *l == max_level {
+                    Some(if transpose { *c } else { *r })
+                } else {
+                    None
+                }
+            });
+
+            // Find the lowest within-layer extent already occupied at
+            // max_level. Promoted sinks slot in BELOW that extent (or
+            // RIGHT for TB) so their boxes don't overlap with existing
+            // max-level nodes' boxes.
+            //
+            // Within-layer axis is `row` for LR/RL (transpose=true),
+            // `col` for TB/BT. We need to advance past the box's full
+            // perpendicular extent, not just its top-left coordinate.
+            let max_level_within_extent = raw_positions
+                .iter()
+                .filter(|(_, _, _, l)| *l == max_level)
+                .map(|(id, c, r, _)| {
+                    let perp = if transpose { *r } else { *c };
+                    let perp_size = if transpose {
+                        node_box_height(graph, id)
+                    } else {
+                        node_box_width(graph, id)
+                    };
+                    perp + perp_size
+                })
+                .max();
+
+            if let Some(target_flow) = max_level_flow {
+                let mut next_within = max_level_within_extent.unwrap_or(0);
+                for (id, col, row, level) in raw_positions.iter_mut() {
+                    if *level < max_level && sinks.contains(id) {
+                        *level = max_level;
+                        if transpose {
+                            *col = target_flow;
+                            *row = next_within + 1;
+                            next_within = *row + node_box_height(graph, id);
+                        } else {
+                            *row = target_flow;
+                            *col = next_within + 1;
+                            next_within = *col + node_box_width(graph, id);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // 4.5. Apply per-layer offset along the flow axis to expand
     //      ascii-dag's hardcoded 3-cell inter-layer spacing to our
     //      `_config.layer_gap`. For LR/RL the flow axis is `col`;
