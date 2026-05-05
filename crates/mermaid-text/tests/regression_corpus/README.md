@@ -99,7 +99,5 @@ visible as class-A diffs:
   HALF_OPEN back-edge routing may show routing artefacts (B9).
 - `flowchart_back_edge_lr.snap` — back-edge anchor may not be perfectly
   attached to the source lifeline (B12).
-- `flowchart_app_db_architecture.width80.snap` — at 80 columns the Worker node
-  may appear in the wrong layer due to deferred-attach ordering (B3).
 
 These will improve to class-A diffs when Phase 3 ships the actual fixes.

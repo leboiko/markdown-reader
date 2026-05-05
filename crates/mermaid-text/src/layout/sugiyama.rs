@@ -591,6 +591,118 @@ fn collect_subgraph_extras(
     }
 }
 
+/// Recenter singleton visual layers against the median of their real
+/// neighbours' centres on the perpendicular axis.
+///
+/// `ascii-dag`'s coordinate assignment legitimately uses long-edge dummy
+/// nodes when computing within-layer order. Once we project back to "real
+/// nodes only" positions, a layer can end up containing a single visible
+/// node that still carries the vertical offset induced by those hidden
+/// dummies. This shows up as dependency-graph intermediates that look
+/// needlessly "kinked" even though the layer ordering is correct.
+///
+/// Smoothing only singleton visual layers is a conservative fix:
+/// - it never changes layer ordering or crossing structure;
+/// - it cannot create same-layer overlap because there are no visible peers;
+/// - it works for any chart where a lone visible node in a layer should align
+///   more naturally with its incident neighbourhood.
+fn smooth_singleton_layers(positions: &mut HashMap<String, (usize, usize)>, graph: &Graph) {
+    let flow_is_horizontal = graph.direction.is_horizontal();
+    let original_positions = positions.clone();
+    let mut layers: HashMap<usize, Vec<&str>> = HashMap::new();
+    for node in &graph.nodes {
+        let Some(&(col, row)) = original_positions.get(&node.id) else {
+            continue;
+        };
+        let layer_key = if flow_is_horizontal { col } else { row };
+        layers.entry(layer_key).or_default().push(node.id.as_str());
+    }
+
+    let mut layer_keys: Vec<usize> = layers.keys().copied().collect();
+    layer_keys.sort_unstable();
+
+    let mut updates: Vec<(&str, usize)> = Vec::new();
+    for layer_key in layer_keys {
+        let ids = &layers[&layer_key];
+        if ids.len() != 1 {
+            continue;
+        }
+        let id = ids[0];
+        let Some(target_center) =
+            median_neighbor_center(&original_positions, graph, id, flow_is_horizontal)
+        else {
+            continue;
+        };
+
+        let size = if flow_is_horizontal {
+            node_box_height(graph, id)
+        } else {
+            node_box_width(graph, id)
+        };
+        let half_span = (size.saturating_sub(1) as f64) / 2.0;
+        let new_start = (target_center - half_span).round().max(0.0) as usize;
+        updates.push((id, new_start));
+    }
+
+    for (id, new_start) in updates {
+        if let Some((col, row)) = positions.get_mut(id) {
+            if flow_is_horizontal {
+                *row = new_start;
+            } else {
+                *col = new_start;
+            }
+        }
+    }
+}
+
+fn median_neighbor_center(
+    positions: &HashMap<String, (usize, usize)>,
+    graph: &Graph,
+    id: &str,
+    flow_is_horizontal: bool,
+) -> Option<f64> {
+    let mut neighbors: HashSet<&str> = HashSet::new();
+    let mut has_incoming = false;
+    let mut has_outgoing = false;
+    for edge in &graph.edges {
+        if edge.from == id && edge.to != id {
+            neighbors.insert(edge.to.as_str());
+            has_outgoing = true;
+        } else if edge.to == id && edge.from != id {
+            neighbors.insert(edge.from.as_str());
+            has_incoming = true;
+        }
+    }
+    if neighbors.is_empty() || !has_incoming || !has_outgoing {
+        return None;
+    }
+
+    let mut centers: Vec<f64> = neighbors
+        .into_iter()
+        .filter_map(|neighbor| {
+            let &(col, row) = positions.get(neighbor)?;
+            let start = if flow_is_horizontal { row } else { col };
+            let size = if flow_is_horizontal {
+                node_box_height(graph, neighbor)
+            } else {
+                node_box_width(graph, neighbor)
+            };
+            Some(start as f64 + (size.saturating_sub(1) as f64) / 2.0)
+        })
+        .collect();
+    if centers.is_empty() {
+        return None;
+    }
+
+    centers.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mid = centers.len() / 2;
+    Some(if centers.len() % 2 == 1 {
+        centers[mid]
+    } else {
+        (centers[mid - 1] + centers[mid]) / 2.0
+    })
+}
+
 pub fn sugiyama_layout(graph: &Graph, _config: &LayoutConfig) -> LayoutResult {
     if graph.nodes.is_empty() {
         return LayoutResult::default();
@@ -906,6 +1018,12 @@ pub fn sugiyama_layout(graph: &Graph, _config: &LayoutConfig) -> LayoutResult {
         }
     }
 
+    // 4.9. Smooth singleton visual layers after all flow-axis spacing passes.
+    //      This preserves the layer ordering chosen by ascii-dag while
+    //      removing dummy-induced perpendicular offsets from lone visible
+    //      nodes like the README dependency graph's `Worker`.
+    smooth_singleton_layers(&mut positions, graph);
+
     // Recompute max_x / max_y after widening and overrides so step 5's
     // mirror arithmetic uses the updated extents.
     for (col, row) in positions.values() {
@@ -985,6 +1103,28 @@ mod tests {
         assert_eq!(cache_col, queue_col, "Cache and Queue share a layer");
         assert!(queue_col < worker_col, "Worker is its own layer");
         assert!(worker_col < db_col, "DB is the rightmost layer");
+    }
+
+    #[test]
+    fn singleton_dependency_layer_tracks_neighbor_median() {
+        let src = "graph LR\n    App --> DB[(PostgreSQL)]\n    App --> Cache[(Redis)]\n    App --> Queue[(RabbitMQ)]\n    Queue --> Worker[Worker]\n    Worker --> DB";
+        let g = crate::parser::flowchart::parse(src).unwrap();
+        let out = sugiyama_layout(&g, &LayoutConfig::default());
+
+        let center_row = |id: &str| -> f64 {
+            let (_, row) = out.positions[id];
+            row as f64 + (node_box_height(&g, id).saturating_sub(1) as f64) / 2.0
+        };
+
+        let worker = center_row("Worker");
+        let queue = center_row("Queue");
+        let db = center_row("DB");
+        let target = (queue + db) / 2.0;
+        assert!(
+            (worker - target).abs() <= 0.5,
+            "Worker should stay within half a cell of its real-neighbor median: \
+             queue={queue}, worker={worker}, db={db}, target={target}"
+        );
     }
 
     #[test]

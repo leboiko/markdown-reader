@@ -3,6 +3,51 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.45.0 — 2026-05-05 — Singleton-layer smoothing pass
+
+### Fixed
+
+- **Singleton visual layers now track their neighbour median.** When
+  ascii-dag uses long-edge dummy nodes during coordinate assignment,
+  a layer can end up containing a single visible node that still
+  carries the perpendicular offset induced by hidden dummies. After
+  projecting back to "real nodes only" we kept the offset but never
+  re-centered. Visible artefact: `Worker` floating awkwardly above
+  the `RabbitMQ → Worker → PostgreSQL` corridor in the README's
+  dependency-graph example. New post-pass at the end of
+  `sugiyama_layout` recenters singleton visual layers against the
+  median of their real neighbours.
+
+  The pass is intentionally narrow:
+  - **Singleton-only** — never changes layer ordering or crossing
+    structure; a layer with multiple visible nodes is left alone.
+  - **Transit-only** — sources and sinks are excluded, because
+    smoothing them was observed to introduce an extra crossing in
+    the architecture fixture; transit nodes (both incoming AND
+    outgoing edges) are the safe target.
+  - **Median, not mean** — robust against outlier neighbours.
+  - **Snapshot-deterministic** — operates on an immutable clone of
+    `positions` and processes layers in sorted order.
+
+  Pinned by `singleton_dependency_layer_tracks_neighbor_median`.
+
+### Snapshot churn
+
+26 snapshots updated across the regression-corpus and main suites.
+All classified Bucket A (strict improvement) or Bucket B (neutral
+reorganisation), zero regressions. Notable improvements:
+- `flowchart_app_db_architecture`: Worker drops into the corridor
+- `flowchart_back_edge_lr`: A/B/C horizontally aligned
+- `flowchart_label_midpoint_lr`: Source/Gate1/Gate2/Dest aligned
+- `state_basic_machine`: 15-row → 12-row layout, horizontal flow
+
+### Documentation
+
+- `crates/mermaid-text/README.md` dependency-graph example updated
+  to show the new fluid layout.
+- `tests/regression_corpus/README.md` removed the stale "Worker may
+  appear in the wrong layer (B3)" note now that it's fixed.
+
 ## 0.44.0 — 2026-05-05 — Bug 4 + parser fan-out + inline edge labels
 
 ### Fixed

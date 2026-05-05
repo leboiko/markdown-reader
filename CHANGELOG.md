@@ -5,6 +5,27 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.34.58] — 2026-05-05
+
+### Fixed — Singleton-layer smoothing (mermaid-text 0.45.0)
+
+When ascii-dag inserts long-edge dummy nodes during coordinate
+assignment, a layer can end up containing a single visible node
+that still carries the perpendicular offset induced by hidden
+dummies after the dummies are dropped. Visible in the README's
+`Worker` node floating above the `RabbitMQ → Worker → PostgreSQL`
+corridor. New post-pass in `sugiyama_layout` recenters singleton
+visual layers against the median of their real neighbours.
+
+Conservative by design: singleton-only (no ordering changes),
+transit-only (sources/sinks excluded after observing they add
+crossings), and operates on an immutable position snapshot for
+deterministic output. Pinned by
+`singleton_dependency_layer_tracks_neighbor_median`.
+
+26 snapshots updated, all Bucket A (improvement) or Bucket B
+(neutral reorganisation). 19/19 crossings tests still pass.
+
 ## [1.34.57] — 2026-05-05
 
 ### Fixed — Bug 4 + two parser features (mermaid-text 0.44.0)

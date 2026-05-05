@@ -1,28 +1,27 @@
 ---
 source: crates/mermaid-text/tests/regression_corpus.rs
-assertion_line: 80
 expression: constrained
 ---
-            ┌──────┐
-            │ Idle │◂──────┐
-            └──────┘       │
-                │          │
-                │          │
-                │          │
-                │event     │
-                │          │
-                │          │
-             ┌──┘          │
-        ┌────▾────┐        │
-        │ Running │        │retry
-        └─────────┘        │
-            │ └───────┐    │
-            │         │    │
-            │         │    │
-       done │         │error
-            │         │    │
-            │         │    │
-          ┌─┘         │    │
+              ┌──────┐
+              │ Idle │◂────┐
+              └──────┘     │
+                  │        │
+                  │        │
+                  │        │
+                  │event   │
+                  │        │
+                  │        │
+                ┌─┘        │
+           ┌────▾────┐     │
+           │ Running │     │retry
+           └─────────┘     │
+          ┌────┘ └────┐    │
+          │           │    │
+          │           │    │
+     done │           │error
+          │           │    │
+          │           │    │
+          │           │    │
       ┌───▾──┐   ┌────▾───┐│
       │ Done │   │ Failed ├┘
       └──────┘   └────────┘

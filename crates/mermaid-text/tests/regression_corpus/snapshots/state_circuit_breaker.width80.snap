@@ -1,16 +1,12 @@
 ---
 source: crates/mermaid-text/tests/regression_corpus.rs
-assertion_line: 80
 expression: constrained
 ---
-                                    ╭─────────────────────╮
-                                    │  DB calls skipped   │
-           ╭───────────────────╮    │  (sleep for probe   │                  probe interval elapsed
-           │ All DB calls pass │   ▸│      interval)      │────────────────────────────────────┐
-╭─────╮    │      through      │   ││ No writes attempted │                                    │╭─────────────────╮
-(  ●  )───▸│     Counting      │───┴╰──────────▴──────────╯────────────────────────────────────┼│ One probe call  │
-╰─────╯    │    consecutive    │ 5 consecutive failures                                        ▸│ allowed through │
-           │     failures      │               │                                                ╰─────────────────╯
-           ╰─────────▴─────────╯               │                                          probe fails (increased backoff)
-                                               └─────────────────────────────────────────────────────────┘
-                      probe succeeds
+           ╭──────────────────────╮    ╭─────────────────────╮                                     ╭─────────────────╮
+╭─────╮    │  All DB calls pass   │────│  DB calls skipped   │─────────────────────────────────────│ One probe call  │
+(  ●  )───┐│       through        │    │  (sleep for probe   │                                    ▸│ allowed through │
+╰─────╯   ▸│ Counting consecutive │───▸│      interval)      │────────────────────────────────────┘╰─────────────────╯
+           │       failures       │    │ No writes attempted │                  probe interval elapsed      ┘
+           ╰───────────▴──────────╯    ╰──────────▴──────────╯                               probe fails (increased backoff)
+                                    5 consecutive failures──────────────────────────────────────────────────┘
+                        probe succeeds
