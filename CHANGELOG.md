@@ -5,6 +5,40 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.34.56] — 2026-05-05
+
+### Fixed — Three more launch-quality renderer fixes (mermaid-text 0.43.0)
+
+- **Bug 1 — Subgraph border no longer overlaps downstream node box**
+  when a `direction TB` override inside `graph LR` inflates the
+  cluster's bounding-box width via `parallel_label_extra`. New
+  Sugiyama post-pass mirrors the Native LR branch's
+  `layer_parallel_label_extra_width` invariant. Visible artifact
+  `┌│──────────┐` (Heartbeat box pierced by Supervisor's right
+  border) → clean `│       ┌───────────┐` separation.
+- **B1 — State-diagram terminal `[*]` markers now render at the
+  rightmost layer.** Sugiyama longest-path layering placed the
+  `__end__` synthetic node at level 1 for short paths like
+  `Idle → [*]`, leaving Paused at level 3 — the final state
+  rendered mid-graph. New post-pass detects sinks whose id starts
+  with `__end__` and promotes them to `max_level` with a non-
+  colliding within-layer slot. Diagram 6 of the gallery now
+  renders the final state in the rightmost layer.
+- **Bug 5 — Parallel back-edge corridors now share a single
+  perimeter row.** Post-routing nudging pass in the new
+  `crate::layout::nudge` module detects horizontal back-edge
+  segments at adjacent rows with overlapping col ranges and shifts
+  the inner one onto the outer's row. `└──┴──┴──┘` shared corridor
+  instead of two stacked `└──┘` rows.
+
+Two router-local prior attempts at Bugs 4 and 5 (commits 4ebaa6f,
+516206b) were reverted because A* cost-tweaks change upstream
+routing decisions that ripple into specific cells with load-bearing
+direction-bit conventions. The post-routing nudging pass operates
+on path data after topology is fixed, structurally preserving
+those conventions. Bug 4 remains documented as a known limitation
+pending segment-level eviction work.
+
 ## [1.34.55] — 2026-05-04
 
 ### Fixed — Launch-quality renderer polish (mermaid-text 0.42.6)

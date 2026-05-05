@@ -3,7 +3,7 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## Unreleased — Launch-quality follow-ups
+## 0.43.0 — 2026-05-05 — Post-routing nudging pass + B1 + Bug 1
 
 ### Fixed
 
