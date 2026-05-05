@@ -151,6 +151,26 @@ flowchart TB
     API --> DB
 ```
 
+> **Known limitation — orthogonal direction overrides.** When a subgraph
+> declares a `direction` that is *orthogonal* to its parent diagram's
+> direction (e.g. a `direction TB` subgraph inside a `graph LR` parent),
+> edge labels inside that subgraph may render far from their endpoints.
+> The mechanism: collapsing the subgraph to a single parent-axis layer
+> turns same-axis edges into 1-cell vertical edges, leaving the label
+> placer no room to anchor the label near the path. Workarounds:
+>
+> - **Drop the override** when the parent's direction already works for
+>   the subgraph's contents — `subgraph S\n  F --> W\nend` inside a
+>   `graph LR` is rendered fine without an inner `direction TB`.
+> - **Place labels on the cross-subgraph edges** (those that exit on
+>   the parent's flow axis) — the label placer has more room there.
+> - **Split into two diagrams** if the subgraph's internal flow really
+>   does need to be vertical inside an LR parent.
+>
+> A real fix (true TB-inside-LR layout with a transposed coordinate
+> system per subgraph) is multi-week scope and tracked for a future
+> release.
+
 ### Edge styles and labels
 
 ```mermaid
