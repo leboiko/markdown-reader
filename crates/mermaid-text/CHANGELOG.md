@@ -7,6 +7,31 @@ This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Fixed
 
+- **Bug 5 — Parallel back-edge corridors now share a single
+  perimeter row.** When two back-edges flow co-directionally along
+  the bottom (or side) perimeter of an LR/RL diagram, they used to
+  carve separate corridor rows; now a post-routing nudging pass in
+  `crate::layout::nudge` detects horizontal segments at adjacent
+  rows with overlapping col ranges and shifts the inner one onto
+  the outer one's row. Bottom corridor produces `└──┴──┴──┘` with
+  shared `┴` tap-points instead of two stacked `└──┘` rows.
+
+  Architecturally important: the fix operates on path data AFTER
+  routing, not on A* cost classes. Two prior session attempts
+  (commits 4ebaa6f, 516206b) tried router-local cost tweaks
+  (NearNodeBox halo cost, reduced SAME_AXIS_COST_BACK) and both
+  broke `back_edge_attach_does_not_pierce_source_perimeter`
+  because cost-tweaks change UPSTREAM A* decisions that ripple
+  into specific cells with load-bearing direction-bit conventions.
+  The post-routing pass STRUCTURALLY can't break exit-stub
+  conventions because exit stubs are 1-axis cells (only H or only
+  V bits) and the merge logic only operates on horizontal
+  corridor segments.
+
+  Pinned by `back_edges_share_return_corridor` (un-`#[ignore]`d).
+  0 snapshot reclassifications — the pass is a no-op on diagrams
+  without 2+ adjacent back-edge corridors.
+
 - **Bug 1 — Subgraph border no longer overlaps downstream node box.**
   When a subgraph overrides the parent direction (e.g. `direction TB`
   inside `graph LR`) AND has parallel-edge groups, its bounding-box
@@ -93,11 +118,9 @@ gallery with concrete workarounds.
 
 - ~~**Bug 1** — Subgraph border can overlap downstream node box.~~
   **FIXED 2026-05-05** — see unreleased section above.
-- **Bug 5** — Excess vertical canvas / unshared back-edge corridors.
-  Fix would require a perimeter-aware reduction of `SAME_AXIS_COST`
-  in the A* router; complications across both backends. Pinned by
-  `#[ignore]`d test `back_edges_share_return_corridor` (currently
-  renders 11 lines, target ≤ 9 with corridor sharing).
+- ~~**Bug 5** — Excess vertical canvas / unshared back-edge corridors.~~
+  **FIXED 2026-05-05** via post-routing nudging pass. See
+  unreleased section above.
 - **Bug 6** — Edge labels in TB-inside-LR subgraphs land far from
   their endpoints. Documented in the gallery with three workarounds.
 - ~~**B1** — Terminal-state `[*]` sinks not promoted to last layer

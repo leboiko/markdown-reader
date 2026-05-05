@@ -68,11 +68,18 @@ struct Shift {
 /// the grid.
 ///
 /// `edge_is_back[i]` is true when edge `i` is a back-edge. Back-
-/// edges are the only candidates for parallel-merge in Phase C
-/// (forward edges have different attach-point semantics).
+/// edges are the only candidates for parallel-merge in Phase C.
+/// `tip_for(i)` returns the arrow-tip glyph for edge `i`.
 ///
-/// `tip_for(i)` returns the arrow-tip glyph for edge `i` so the
-/// re-drawn path can re-stamp the tip cell.
+/// **Phase D (Bug 4) deferred:** the plan's corner-displacement
+/// algorithm assumed bend cells (single-path with both H+V bits)
+/// would be the targets, but the diamond_join fixture's `├` glyph
+/// is a JUNCTION of two paths' separate bits — each path
+/// individually transits through the cell without bending. A real
+/// fix needs segment-level eviction: detect runs of cells in non-
+/// endpoint halos and shift the entire run outward, with bridges
+/// in the adjacent segments. That's a 2-3× expansion of this
+/// module's scope and is deferred to a follow-up.
 pub(crate) fn run(
     grid: &mut Grid,
     paths: &mut [Option<Vec<(usize, usize)>>],

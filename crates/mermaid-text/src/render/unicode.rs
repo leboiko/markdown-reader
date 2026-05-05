@@ -706,11 +706,8 @@ fn render_inner(
     );
 
     // Post-routing nudging pass: merges co-directional parallel
-    // back-edge corridors (Bug 5) and shifts route corners out of
-    // non-endpoint node halos (Bug 4 — Phase D). The pass operates on
-    // path data, not on A* cost classes, so it preserves the load-
-    // bearing direction-bit conventions (e.g. state-diagram `┴` exit
-    // stubs) that prior routing-time attempts at these bugs broke.
+    // back-edge corridors (Bug 5). Phase D (Bug 4 corner-in-halo)
+    // is deferred — see nudge.rs docstring for details.
     crate::layout::nudge::run(
         &mut grid,
         &mut paths,
@@ -3916,16 +3913,24 @@ if_state --> False: !condition";
     /// going DEEPER into halos before turning, instead of turning at
     /// the box-adjacent cell.
     ///
-    /// Conclusion: the libavoid blueprint exempts only the source/
-    /// destination *cell*, but in practice on the ASCII grid the
-    /// load-bearing convention is exempting the source box's entire
-    /// bottom-edge halo (where back-edge exit stubs render) and the
-    /// destination box's perimeter approach (where forward-edge
-    /// attach glyphs render). Encoding that needs per-edge-type
-    /// awareness in A* — out of scope for a router-local fix.
-    /// Defer to a post-routing nudging pass (Wybrow 2009 §4) that
-    /// can move corners off halos without forcing A* to navigate
-    /// blind. Pinned by `#[ignore]`d test below.
+    /// **Second attempt (2026-05-05 — Phase D of nudging-pass plan)**:
+    /// implemented single-path corner displacement in
+    /// `crate::layout::nudge::plan_corner_displacements`. The bend
+    /// detection was correct, but the diamond_join fixture's `├`
+    /// glyph ISN'T a single-path bend — it's a JUNCTION of two
+    /// paths' separate bits (one path transits vertically through
+    /// the cell, another path's source-attach contributes its
+    /// horizontal exit-bit). Each path individually has NO bend
+    /// inside B's halo, so the corner-displacement scan finds
+    /// nothing to shift.
+    ///
+    /// The correct fix needs **segment-level eviction**: detect
+    /// runs of cells in non-endpoint halos and shift the entire
+    /// run perpendicular to its axis, with bridges in the adjacent
+    /// segments. This is a 2-3× expansion of the nudge module's
+    /// scope (additional shift logic for vertical segments, halo-
+    /// run detection across full path length, more aggressive
+    /// feasibility checks). Deferred to a follow-up release.
     ///
     /// Trap-check: the fixture's 4 source boxes (A, B, C, D) and sink
     /// (Z) must all be rendered. A no-op render that swallows nodes
