@@ -3579,6 +3579,88 @@ if_state --> False: !condition";
         }
     }
 
+    /// **Known limitation (Bug 1, deferred from Phase 3.A)**: a subgraph
+    /// with `direction TB` override inside a `graph LR` parent has its
+    /// border WIDTH driven by `parallel_label_extra` + `label_width` in
+    /// `subgraph.rs::compute_subgraph_bounds`. The Sugiyama LR layout
+    /// (default backend since 0.17.0) assigns columns to non-member nodes
+    /// without consulting the subgraph's inflated bounding-box width.
+    /// Result: the subgraph's right border `│`/`╮` lands inside the
+    /// downstream node's bounding box.
+    ///
+    /// I attempted the fix on the Native backend's `compute_positions`
+    /// (mirror of the TD-side `sg_col_min` enforcement), but the visible
+    /// artifact is on the Sugiyama backend, which delegates layer
+    /// assignment to `ascii-dag` and applies layer offsets uniformly.
+    /// Porting the fix to both backends needs a refactor of the
+    /// post-pass pipeline that exceeds the launch-window scope.
+    ///
+    /// Workaround documented in `docs/mermaid-gallery.md`'s Bug-6 callout:
+    /// drop the inner `direction TB` (the projections fixture works
+    /// without it).
+    ///
+    /// This test is `#[ignore]`d so it doesn't block CI but stays as a
+    /// pinned target for future work — when Bug 1 is implemented across
+    /// both backends, remove the `#[ignore]` and verify it passes.
+    #[test]
+    #[ignore = "Bug 1: subgraph border can overlap downstream node box (deferred — needs cross-backend post-pass)"]
+    fn subgraph_border_does_not_overlap_downstream_node_box() {
+        let src = "graph LR
+    subgraph Supervisor
+        direction TB
+        F[Factory] -->|creates| W[Worker]
+        W -->|panics/exits| F
+    end
+    W -->|beat every cycle| HB[Heartbeat]";
+        let out = crate::render(src).expect("render must succeed");
+        let lines: Vec<Vec<char>> = out.lines().map(|l| l.chars().collect()).collect();
+
+        // Find Heartbeat box: row containing the "Heartbeat" label.
+        let (hb_row, hb_col) = lines
+            .iter()
+            .enumerate()
+            .find_map(|(r, l)| {
+                let chars: Vec<char> = "Heartbeat".chars().collect();
+                l.windows(chars.len())
+                    .position(|w| w == chars.as_slice())
+                    .map(|c| (r, c))
+            })
+            .expect("Heartbeat label not rendered");
+
+        // Heartbeat's box rows: top border at hb_row-1, mid at hb_row, bot at hb_row+1.
+        // Left border: hb_col-2 (1 padding cell + 1 border cell). Right border:
+        // hb_col + len("Heartbeat") + 1.
+        let hb_left = hb_col.saturating_sub(2);
+        let hb_right = hb_col + "Heartbeat".chars().count() + 1;
+
+        // Check for Supervisor's borders piercing Heartbeat's interior.
+        // Two failure modes:
+        // (a) Subgraph corner glyphs (`╭ ╮ ╰ ╯`) anywhere inside Heartbeat.
+        // (b) Vertical bar `│` at any column STRICTLY BETWEEN hb_left and
+        //     hb_right on a row inside Heartbeat. Heartbeat's own borders
+        //     are at hb_left and hb_right (not "between"), so an interior
+        //     `│` is Supervisor's right edge piercing through.
+        for r in hb_row.saturating_sub(1)..=hb_row + 1 {
+            for c in hb_left..=hb_right {
+                let ch = lines.get(r).and_then(|l| l.get(c)).copied().unwrap_or(' ');
+                assert!(
+                    !matches!(ch, '\u{256D}' | '\u{256E}' | '\u{2570}' | '\u{256F}'),
+                    "subgraph corner glyph {ch:?} at ({c},{r}) overlaps Heartbeat box \
+                     [{hb_left}..={hb_right}, {}..={}]\n\nFull:\n{out}",
+                    hb_row.saturating_sub(1),
+                    hb_row + 1
+                );
+                if c > hb_left && c < hb_right && ch == '\u{2502}' {
+                    panic!(
+                        "interior `│` at ({c},{r}) inside Heartbeat box — \
+                         Supervisor's vertical border is piercing through. \
+                         hb_left={hb_left}, hb_right={hb_right}\n\nFull:\n{out}"
+                    );
+                }
+            }
+        }
+    }
+
     /// Bug 7 — Perimeter back-edge labels must be placed near the SOURCE,
     /// not at the midpoint of the perimeter return run. The longest-
     /// horizontal-segment heuristic chooses the perimeter run's midpoint,
