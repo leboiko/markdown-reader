@@ -3710,52 +3710,85 @@ if_state --> False: !condition";
     /// path. Bug 4 + Bug 5 should be tackled together once the
     /// post-routing pipeline is in place.
     ///
-    /// Fixture: 5-node LR chain with 2 back-edges (E→A, D→B). Current
-    /// render is 11 lines tall: 5 lines for the box row, 1 for source
-    /// line, 1 for label, and ~4 for the two separate return corridors.
-    /// With corridor sharing the two back-edges merge onto one perimeter
-    /// row, saving 2 lines.
+    /// Fixture: 5-node LR chain with 2 back-edges (E→A, D→B). Both
+    /// back-edges flow leftward along the bottom perimeter; without
+    /// nudging they carve separate corridor rows. With the post-
+    /// routing nudge pass the bottom-most corridor row carries BOTH
+    /// back-edges' tap-points simultaneously, producing two `┴`
+    /// junctions where the back-edges turn upward to their source
+    /// boxes. Without sharing, that row has at most one `┴`.
     ///
-    /// This test is `#[ignore]`d so it doesn't block CI but stays as a
-    /// pinned target for future work — when Bug 5 is implemented, remove
-    /// the `#[ignore]` and verify the assertion passes.
+    /// Trap-checks (all must pass to defend against no-op renders):
+    /// 1. All 5 chain boxes (`│ A │` through `│ E │`) are present.
+    /// 2. At least 2 back-edge arrow tips (`◂` / `▴` / `◀` / `▾`)
+    ///    are rendered. A trivial implementation that drops back-edges
+    ///    would still have boxes but no tips.
+    /// 3. At least one row contains a `┴` junction (back-edges must
+    ///    actually be routed to the perimeter, not omitted).
     ///
-    /// Trap-check: a render that produces empty output, or fails to lay
-    /// out the chain, has < 5 lines and thus also passes `<= 9`. So the
-    /// test additionally requires that the canonical box content (`A`,
-    /// `B`, `C`, `D`, `E` boxes inside `│ X │` borders) is present —
-    /// a trivially-broken render fails on the count.
+    /// Bug 5 acceptance assertion: the LAST row containing a `┴`
+    /// (the bottommost perimeter corridor) carries 2+ `┴` glyphs —
+    /// proof that both back-edges share that row.
     #[test]
-    #[ignore = "Bug 5: back-edges don't share return corridors (deferred — needs perimeter-aware A* cost)"]
+    #[ignore = "Bug 5: back-edges don't share return corridors (pinned target for nudging pass)"]
     fn back_edges_share_return_corridor() {
         let src = "graph LR
     A --> B --> C --> D --> E
     E -->|back1| A
     D -->|back2| B";
         let out = crate::render(src).expect("render must succeed");
-        let lines: Vec<&str> = out.lines().collect();
-        let height = lines.len();
+        let lines: Vec<Vec<char>> = out.lines().map(|l| l.chars().collect()).collect();
+        let lines_str: Vec<String> = lines.iter().map(|l| l.iter().collect()).collect();
 
-        // Trap-check: confirm boxes for all 5 chain members are rendered.
-        // A no-op render or one that swallows nodes would have < 5 boxes
-        // and trivially pass the height bound.
         let box_count = ["│ A │", "│ B │", "│ C │", "│ D │", "│ E │"]
             .iter()
-            .filter(|needle| lines.iter().any(|l| l.contains(*needle)))
+            .filter(|needle| lines_str.iter().any(|l| l.contains(*needle)))
             .count();
         assert_eq!(
             box_count, 5,
             "trap-check: not all 5 chain boxes rendered ({box_count}/5).\nFull:\n{out}"
         );
 
-        // Bug 5 assertion: with corridor sharing, total height should be
-        // ≤ 9 lines. Current rendering produces 11 lines because each
-        // back-edge gets its own perimeter row.
+        let back_tip_count = lines
+            .iter()
+            .map(|l| {
+                l.iter()
+                    .filter(|&&c| matches!(c, '\u{25C2}' | '\u{25B4}' | '\u{25C0}' | '\u{25BE}'))
+                    .count()
+            })
+            .sum::<usize>();
         assert!(
-            height <= 9,
-            "diagram height {height} > 9 — back-edges aren't sharing the \
-             return corridor. Two back-edges in a 5-node chain should \
-             merge onto one perimeter row.\nFull:\n{out}"
+            back_tip_count >= 2,
+            "trap-check: expected ≥2 back-edge arrow tips; found {back_tip_count}.\n\
+             A nudge pass that drops a path during shift-apply would fail here \
+             without actually changing the corridor layout.\nFull:\n{out}"
+        );
+
+        let any_t_junction = lines.iter().any(|l| l.contains(&'\u{2534}'));
+        assert!(
+            any_t_junction,
+            "trap-check: no `┴` glyphs at all — back-edges aren't reaching the \
+             perimeter. Test cannot meaningfully assert sharing without taps.\n\
+             Full:\n{out}"
+        );
+
+        let (bottom_corridor_row, t_junction_count) = lines
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(r, line)| {
+                let count = line.iter().filter(|&&c| c == '\u{2534}').count();
+                if count > 0 { Some((r, count)) } else { None }
+            })
+            .expect("checked above that ≥1 `┴` exists");
+
+        assert!(
+            t_junction_count >= 2,
+            "Bug 5: bottom corridor row {bottom_corridor_row} has only \
+             {t_junction_count} `┴` junction(s); both back-edges should \
+             share this row (expected ≥2). Without sharing, each back-edge \
+             carves its own row and only one tap lands on the bottommost \
+             corridor.\nRender:\n{out}"
         );
     }
 
@@ -3909,6 +3942,26 @@ if_state --> False: !condition";
                 .any(|l| l.windows(n.len()).any(|w| w == n.as_slice()));
             assert!(found, "trap-check: {label} not rendered. Full:\n{out}");
         }
+
+        // Strong trap-check: all 4 source routes must reach Z. Without
+        // this, a render that drops some routes would have fewer corners
+        // to pierce halos and could trivially "pass" the halo assertion.
+        // We count arrow tips pointing right (▸ / ▶) anywhere in the
+        // rendering — each route to Z contributes one tip.
+        let arrow_tip_count = lines
+            .iter()
+            .map(|l| {
+                l.iter()
+                    .filter(|&&c| matches!(c, '\u{25B8}' | '\u{25B6}'))
+                    .count()
+            })
+            .sum::<usize>();
+        assert!(
+            arrow_tip_count >= 4,
+            "trap-check: expected ≥4 right-pointing arrow tips (one per route \
+             into Z); found {arrow_tip_count}. A render that drops routes \
+             would pass the halo check vacuously.\nFull:\n{out}"
+        );
 
         let halo_col = b_col + 5;
         let mut bad_glyphs = Vec::new();
