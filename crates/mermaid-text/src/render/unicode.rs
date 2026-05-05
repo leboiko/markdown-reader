@@ -3613,9 +3613,9 @@ if_state --> False: !condition";
         // Interior rows: between top and bottom, columns strictly between
         // diamond's outermost `╱`/`╲`. No `┼` (cross-junction) allowed —
         // that would indicate two routes crossing inside the diamond.
-        for r in (top_idx + 1)..bot_idx {
+        for (r, line) in lines.iter().enumerate().take(bot_idx).skip(top_idx + 1) {
             for c in (left + 2)..(right - 1) {
-                let ch = lines[r].get(c).copied().unwrap_or(' ');
+                let ch = line.get(c).copied().unwrap_or(' ');
                 assert_ne!(
                     ch, '\u{253C}',
                     "cross-junction `┼` at ({c},{r}) inside diamond bbox \
