@@ -7,6 +7,28 @@ This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Fixed
 
+- **Bug 1 — Subgraph border no longer overlaps downstream node box.**
+  When a subgraph overrides the parent direction (e.g. `direction TB`
+  inside `graph LR`) AND has parallel-edge groups, its bounding-box
+  width was inflated by `parallel_label_extra` so the labels could
+  breathe — but the Sugiyama backend (default since 0.17.0) had no
+  cluster-width feedback loop to ascii-dag, so external nodes were
+  placed in columns where the subgraph's right border landed inside
+  them. Visible artifact: `┌│──────────┐` (Heartbeat box pierced by
+  Supervisor's right border).
+  
+  Fix is a new post-pass (step 4.8 in `sugiyama_layout`) that mirrors
+  the Native LR branch's `layer_parallel_label_extra_width`
+  invariant: per direction-override subgraph, accumulate the required
+  parallel-label-extra at the subgraph's level, then shift every node
+  whose level is strictly greater right by that amount along the
+  parent flow axis. Idempotent across nested subgraphs.
+  
+  Pinned by `subgraph_border_does_not_overlap_downstream_node_box`
+  (un-`#[ignore]`d). 4 snapshots flipped — all clean
+  pierced-border-cleared deltas. 1 crossings test +1 (1→2 across
+  19 fixtures = +5%, well under the +10% scope ceiling).
+
 - **B1 — Terminal `[*]` markers now render at the rightmost layer.**
   State diagrams use a synthetic `__end__` node for the `[*]` final
   marker; longest-path layering (the only ranker `ascii-dag`
@@ -69,11 +91,8 @@ gallery with concrete workarounds.
 
 ### Known limitations (deferred with `#[ignore]`d tests)
 
-- **Bug 1** — Subgraph border can overlap downstream node box when a
-  `direction TB` override inside `graph LR` makes the subgraph's
-  border width exceed the LR layer's width. Fix would require a
-  cross-backend post-pass (Native AND Sugiyama). Workaround: drop
-  the inner `direction TB` override.
+- ~~**Bug 1** — Subgraph border can overlap downstream node box.~~
+  **FIXED 2026-05-05** — see unreleased section above.
 - **Bug 5** — Excess vertical canvas / unshared back-edge corridors.
   Fix would require a perimeter-aware reduction of `SAME_AXIS_COST`
   in the A* router; complications across both backends. Pinned by

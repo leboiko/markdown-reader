@@ -3624,7 +3624,6 @@ if_state --> False: !condition";
     /// pinned target for future work — when Bug 1 is implemented across
     /// both backends, remove the `#[ignore]` and verify it passes.
     #[test]
-    #[ignore = "Bug 1: subgraph border can overlap downstream node box (deferred — needs cross-backend post-pass)"]
     fn subgraph_border_does_not_overlap_downstream_node_box() {
         let src = "graph LR
     subgraph Supervisor

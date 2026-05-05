@@ -57,6 +57,7 @@ use ascii_dag::{Graph as AGraph, LayoutConfig as ALayoutConfig};
 use unicode_width::UnicodeWidthStr;
 
 use crate::layout::layered::{LayoutConfig, LayoutResult, node_box_height, node_box_width};
+use crate::layout::subgraph::parallel_label_extra;
 use crate::types::{Direction, Graph, Subgraph};
 
 // ---------------------------------------------------------------------------
@@ -542,6 +543,50 @@ fn apply_parallel_edge_widening(
 /// The `LayoutConfig`'s `node_gap` / `layer_gap` are passed
 /// through ascii-dag's spacing controls so behaviour matches
 /// our native pipeline.
+/// Recursive helper for Bug 1 layer-width post-pass: walk the subgraph
+/// tree and accumulate `parallel_label_extra` per ascii-dag layer.
+///
+/// `parent_axis_horizontal` is `true` for parent direction LR/RL (the
+/// flow-axis is `col`), `false` for TB/BT. `parallel_label_extra`
+/// returns `(extra_w, extra_h)` where extra_w is non-zero when the
+/// subgraph's direction is TB/BT and extra_h is non-zero when LR/RL.
+/// We only consume the component along the PARENT flow axis.
+fn collect_subgraph_extras(
+    graph: &Graph,
+    sg: &Subgraph,
+    parent_axis_horizontal: bool,
+    id_to_level: &HashMap<String, usize>,
+    layer_extra: &mut HashMap<usize, usize>,
+) {
+    let (extra_w, extra_h) = parallel_label_extra(graph, sg);
+    let extra = if parent_axis_horizontal { extra_w } else { extra_h };
+    if extra > 0 {
+        // All direct members share a level after the override pre-pass.
+        // Take the min level among members as the "boundary" — extras
+        // shift everything STRICTLY beyond that level.
+        let member_level = sg
+            .node_ids
+            .iter()
+            .filter_map(|nid| id_to_level.get(nid).copied())
+            .min();
+        if let Some(level) = member_level {
+            let cur = layer_extra.entry(level).or_insert(0);
+            *cur = (*cur).max(extra);
+        }
+    }
+    for child_id in &sg.subgraph_ids {
+        if let Some(child) = graph.find_subgraph(child_id) {
+            collect_subgraph_extras(
+                graph,
+                child,
+                parent_axis_horizontal,
+                id_to_level,
+                layer_extra,
+            );
+        }
+    }
+}
+
 pub fn sugiyama_layout(graph: &Graph, _config: &LayoutConfig) -> LayoutResult {
     if graph.nodes.is_empty() {
         return LayoutResult::default();
@@ -804,6 +849,56 @@ pub fn sugiyama_layout(graph: &Graph, _config: &LayoutConfig) -> LayoutResult {
     //      flow along the override axis.  Inner subgraphs are processed before
     //      outer ones (DFS post-order) so nested overrides compose correctly.
     apply_direction_overrides(&mut positions, graph, _config);
+
+    // 4.8. Bug 1 — Subgraph layer-width post-pass (mirrors Native LR's
+    //      `layer_parallel_label_extra_width` invariant). When a
+    //      subgraph overrides the parent direction (e.g. `direction TB`
+    //      inside `graph LR`) AND has parallel-edge groups, its
+    //      bounding-box width is inflated by `parallel_label_extra` so
+    //      the labels have breathing room. ascii-dag has no concept of
+    //      cluster-width feedback, so without this post-pass the
+    //      Supervisor-style subgraph's right border lands inside the
+    //      next layer's node box.
+    //
+    //      Algorithm:
+    //        1. Per subgraph with extra_w/h > 0, compute the parent
+    //           flow-axis level its members occupy (after direction-
+    //           override pre-pass, all members share one level).
+    //        2. For each occupied level L, accumulate `max(extra)`
+    //           across all subgraphs at that level.
+    //        3. Shift every node whose level > L right by that extra
+    //           (LR/RL: along col; TB/BT: along row).
+    //
+    //      Idempotent across multiple subgraphs at different levels:
+    //      level-2's extras stack on top of level-1's.
+    {
+        let parent_axis_horizontal = matches!(
+            graph.direction,
+            Direction::LeftToRight | Direction::RightToLeft
+        );
+        let mut layer_extra: HashMap<usize, usize> = HashMap::new();
+        for sg in &graph.subgraphs {
+            collect_subgraph_extras(graph, sg, parent_axis_horizontal, &id_to_level, &mut layer_extra);
+        }
+        if !layer_extra.is_empty() {
+            let mut levels: Vec<usize> = layer_extra.keys().copied().collect();
+            levels.sort();
+            for boundary_level in levels {
+                let extra = layer_extra[&boundary_level];
+                for (id, (col, row)) in positions.iter_mut() {
+                    if let Some(&node_level) = id_to_level.get(id)
+                        && node_level > boundary_level
+                    {
+                        if parent_axis_horizontal {
+                            *col += extra;
+                        } else {
+                            *row += extra;
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // Recompute max_x / max_y after widening and overrides so step 5's
     // mirror arithmetic uses the updated extents.
