@@ -3550,6 +3550,85 @@ if_state --> False: !condition";
         }
     }
 
+    /// Bug 4 — Regression guard. With a high-fan-out hub (Worker → 5
+    /// downstream nodes), routes splay outward and DON'T concentrate
+    /// against Worker's border on a clean topology. The visible "hugging"
+    /// in the projections fixture (`│▸│ Worker │┌───────┼┐`) appears to
+    /// be an interaction effect of Bug 1 (subgraph border collision) +
+    /// the fan-out cost equilibrium — isolating it requires the full
+    /// projections topology, and the underlying cause is not just the
+    /// router but the layout pipeline's column assignment.
+    ///
+    /// This test pins the clean-topology behaviour: no corners stacked
+    /// in the halo column adjacent to Worker. If a future routing change
+    /// (e.g. Phase 3.A's subgraph-layer-width enforcement) reaches into
+    /// the cost model, this guard catches accidental halo-hugging.
+    ///
+    /// The full Bug 4 fix (NearNodeBox halo penalty) is deferred to
+    /// post-Bug-1 evaluation — the planner's hypothesis is that Bug 1's
+    /// subgraph layer-width fix will indirectly resolve the projections
+    /// artifact by giving routes more room to splay. If after Bug 1 the
+    /// hugging persists, revisit Bug 4 with a richer fixture.
+    #[test]
+    fn routes_do_not_hug_non_endpoint_node_borders() {
+        // Diagram with a high-fan-out hub similar to the projections case:
+        // a central Worker node has many outgoing forward edges to nodes
+        // on different rows. The router has to channel those routes out
+        // of Worker; without the NearNodeBox halo penalty, multiple
+        // routes lay corner glyphs in the cell column immediately right
+        // of Worker's right border.
+        let src = "graph LR
+    W[Worker]
+    W --> A[Alpha]
+    W --> B[Beta]
+    W --> C[Gamma]
+    W --> D[Delta]
+    W --> E[Epsilon]";
+        let out = crate::render(src).expect("render must succeed");
+        let lines: Vec<Vec<char>> = out.lines().map(|l| l.chars().collect()).collect();
+
+        // Find Worker box: row containing the "Worker" label.
+        let (worker_row, worker_col) = lines
+            .iter()
+            .enumerate()
+            .find_map(|(r, l)| {
+                let s: String = l.iter().collect();
+                s.find("Worker").map(|c| (r, c))
+            })
+            .expect("Worker label not rendered");
+
+        // Worker's right-border column is `worker_col + len("Worker") + 1`
+        // (label + 1-cell padding). The cell IMMEDIATELY right of that
+        // border is the halo column we want to inspect.
+        let halo_col = worker_col + "Worker".len() + 2;
+
+        // Existence trap-check: at least one corner glyph somewhere.
+        let any_corner = lines.iter().flatten().any(|&c| {
+            matches!(c, '\u{250C}' | '\u{2510}' | '\u{2514}' | '\u{2518}'
+                       | '\u{252C}' | '\u{2534}' | '\u{251C}' | '\u{2524}'
+                       | '\u{253C}')
+        });
+        assert!(any_corner, "no corner glyphs in render — diagram empty:\n{out}");
+
+        // Count corners in the halo column across the rows that contain
+        // Worker's box (worker_row-1 .. worker_row+1).
+        let mut halo_corners = 0;
+        for r in worker_row.saturating_sub(1)..=worker_row + 1 {
+            let ch = lines.get(r).and_then(|l| l.get(halo_col)).copied().unwrap_or(' ');
+            if matches!(ch, '\u{250C}' | '\u{2510}' | '\u{2514}' | '\u{2518}'
+                          | '\u{252C}' | '\u{2534}' | '\u{251C}' | '\u{2524}'
+                          | '\u{253C}')
+            {
+                halo_corners += 1;
+            }
+        }
+        assert!(
+            halo_corners <= 1,
+            "{halo_corners} corner glyphs in halo column {halo_col} adjacent to Worker — \
+             routes are hugging Worker's right border. Render:\n{out}"
+        );
+    }
+
     /// Bug 3 — Regression guard. A decision diamond `{Label}` is registered
     /// as a rectangular `NodeBox` obstacle so A* cannot route any edge
     /// THROUGH the diamond's interior. This test pins that contract: render
