@@ -3,6 +3,59 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.42.6 — 2026-05-04 — Launch-quality polish (Bugs 2 + 7; 4 deferrals)
+
+This release ships the renderer-side fixes from the launch-quality
+plan (`docs/scope-launch-quality-plan-2026-05-04.md`). 4 of 9 catalogued
+bugs got real fixes; 5 are documented as known limitations with
+`#[ignore]`d tests pinning the future work.
+
+### Fixed
+
+- **Bug 2 — Subgraph BOTTOM border no longer accumulates junction
+  glyphs.** The G2 fix cleared seeded direction bits on the TOP border
+  only; bottom borders kept theirs. With high-fan-out members
+  (Worker → 3+ external nodes inside a Supervisor) the bottom border
+  accumulated `┼ ┬ ┴` stamps that read as visual noise. Now mirrors
+  the G2 clear to both top and bottom borders. Pinned by
+  `subgraph_bottom_border_has_at_most_one_junction_glyph`. 10 snapshots
+  re-accepted.
+
+- **Bug 7 — Perimeter back-edge labels biased toward the source.**
+  Labels on long perimeter back-edge routes (e.g. `F -->|done| A` in
+  a 6-node LR chain) used to land at the segment midpoint, far from
+  both endpoints. Now the col-anchor order for back-edge segments
+  prefers the source-side endpoint, putting the label visually
+  adjacent to the source box. Pinned by
+  `perimeter_back_edge_label_close_to_endpoint`. 13 snapshots
+  re-accepted.
+
+### Added — regression guards (no source change)
+
+- **Bug 3** — `diamond_interior_has_no_routing_glyphs` pins that
+  decision-diamond interiors stay route-free.
+- **Bug 4** — `routes_do_not_hug_non_endpoint_node_borders` pins that
+  high-fan-out hubs splay routes outward without halo accumulation.
+
+### Known limitations (deferred with `#[ignore]`d tests)
+
+- **Bug 1** — Subgraph border can overlap downstream node box when a
+  `direction TB` override inside `graph LR` makes the subgraph's
+  border width exceed the LR layer's width. Fix would require a
+  cross-backend post-pass (Native AND Sugiyama). Workaround: drop
+  the inner `direction TB` override.
+- **Bug 5** — Excess vertical canvas / unshared back-edge corridors.
+  Fix would require a perimeter-aware reduction of `SAME_AXIS_COST`
+  in the A* router; complications across both backends.
+- **Bug 6** — Edge labels in TB-inside-LR subgraphs land far from
+  their endpoints. Documented in the gallery with three workarounds.
+- **B1** — Terminal-state `[*]` sinks not promoted to last layer
+  when reached via short path. Existing `#[ignore]`d test
+  `final_state_renders_at_rightmost_column` documents the target.
+- **E1** — ER spine label right-edge alignment looks visually
+  stacked when 3+ relationships share the spine. Documented in
+  gallery, workaround: keep ER diagrams ≤ 5 entities.
+
 ## 0.42.5 — 2026-05-03 — Path B polish: back-edge corner glyph + regression guards
 
 ### Fixed

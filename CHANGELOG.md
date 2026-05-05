@@ -5,6 +5,26 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.34.55] — 2026-05-04
+
+### Fixed — Launch-quality renderer polish (mermaid-text 0.42.6)
+
+Two visible-quality fixes from the launch-quality plan:
+
+- **Subgraph bottom borders no longer accumulate junction glyphs**
+  (`╰┼──────┼──────┼──╯` → `╰─────────────╯`) when 2+ outgoing edges
+  cross. Affects every diagram with a high-fan-out member inside a
+  subgraph.
+- **Perimeter back-edge labels** are now biased toward the source
+  endpoint rather than the perimeter midpoint, putting labels like
+  "stop", "resume", "done" visually adjacent to where the action
+  starts rather than floating mid-route.
+
+5 known limitations documented with workarounds in
+`docs/mermaid-gallery.md` and `crates/mermaid-text/CHANGELOG.md` —
+all visible-but-functionally-correct cases that need cross-backend
+layout-engine work.
+
 ## [1.34.54] — 2026-05-04
 
 ### Fixed — idle CPU spike when terminal has mouse capture
