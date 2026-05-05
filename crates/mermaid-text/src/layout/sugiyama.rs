@@ -559,7 +559,11 @@ fn collect_subgraph_extras(
     layer_extra: &mut HashMap<usize, usize>,
 ) {
     let (extra_w, extra_h) = parallel_label_extra(graph, sg);
-    let extra = if parent_axis_horizontal { extra_w } else { extra_h };
+    let extra = if parent_axis_horizontal {
+        extra_w
+    } else {
+        extra_h
+    };
     if extra > 0 {
         // All direct members share a level after the override pre-pass.
         // Take the min level among members as the "boundary" — extras
@@ -735,15 +739,11 @@ pub fn sugiyama_layout(graph: &Graph, _config: &LayoutConfig) -> LayoutResult {
             .max()
             .unwrap_or(0);
         if max_level > 0 {
-            let has_outgoing: HashSet<&str> =
-                graph.edges.iter().map(|e| e.from.as_str()).collect();
+            let has_outgoing: HashSet<&str> = graph.edges.iter().map(|e| e.from.as_str()).collect();
             let sinks: HashSet<String> = graph
                 .nodes
                 .iter()
-                .filter(|n| {
-                    !has_outgoing.contains(n.id.as_str())
-                        && n.id.starts_with("__end__")
-                })
+                .filter(|n| !has_outgoing.contains(n.id.as_str()) && n.id.starts_with("__end__"))
                 .map(|n| n.id.clone())
                 .collect();
 
@@ -878,7 +878,13 @@ pub fn sugiyama_layout(graph: &Graph, _config: &LayoutConfig) -> LayoutResult {
         );
         let mut layer_extra: HashMap<usize, usize> = HashMap::new();
         for sg in &graph.subgraphs {
-            collect_subgraph_extras(graph, sg, parent_axis_horizontal, &id_to_level, &mut layer_extra);
+            collect_subgraph_extras(
+                graph,
+                sg,
+                parent_axis_horizontal,
+                &id_to_level,
+                &mut layer_extra,
+            );
         }
         if !layer_extra.is_empty() {
             let mut levels: Vec<usize> = layer_extra.keys().copied().collect();

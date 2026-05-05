@@ -2805,7 +2805,10 @@ fn architecture_beta_diagram38_compact_vertical_spacing() {
 
     // Basic sanity: required labels must be present.
     assert!(out.contains("Gateway"), "Gateway label missing:\n{out}");
-    assert!(out.contains("Backend"), "Backend group label missing:\n{out}");
+    assert!(
+        out.contains("Backend"),
+        "Backend group label missing:\n{out}"
+    );
     assert!(out.contains("API"), "API label missing:\n{out}");
     assert!(out.contains("Store"), "Store label missing:\n{out}");
 

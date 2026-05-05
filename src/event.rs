@@ -98,7 +98,9 @@ impl Drop for EventHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent};
+    use crossterm::event::{
+        KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
+    };
 
     /// Hover-motion mouse events MUST be dropped at the input boundary so
     /// the main render loop doesn't wake on every cursor movement when

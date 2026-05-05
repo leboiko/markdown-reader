@@ -134,10 +134,8 @@ fn render_flowchart_graph(graph: &Graph, max_width: Option<usize>) -> String {
         return result;
     }
 
-    const COMPACT_CONFIGS: &[LayoutConfig] = &[
-        LayoutConfig::with_gaps(1, 1),
-        LayoutConfig::with_gaps(1, 0),
-    ];
+    const COMPACT_CONFIGS: &[LayoutConfig] =
+        &[LayoutConfig::with_gaps(1, 1), LayoutConfig::with_gaps(1, 0)];
 
     let mut best = layout_and_render(graph, COMPACT_CONFIGS.last().expect("non-empty"));
     for cfg in COMPACT_CONFIGS {
