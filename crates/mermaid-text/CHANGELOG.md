@@ -3,6 +3,66 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.48.0 — 2026-05-06 — LR fanout destination-channel cleanup
+
+### Fixed
+
+- **No path overshooting through another edge's tip cell.** When two
+  edges arrive at the same destination — one approaching from below
+  via a U-route, one approaching from the side — the from-below
+  edge's vertical channel ran THROUGH the side-edge's protected
+  arrow tip cell, producing a visually orphaned arrow on the row
+  past the overshoot (the canonical case is the
+  `Worker→PostgreSQL` + `App→PostgreSQL` pair in the README's
+  dependency graph). Four coupled changes, all gated to the simple
+  LR/RL flowchart envelope used by 0.46.0/0.47.0:
+
+  1. **`compute_spread_attaches` runs `spread_sources` BEFORE
+     `spread_destinations`.** The destination-side reorder needs to
+     read the post-spread `src.row` (which the source-side reorder
+     pushes long skip-edges to outer slots).
+  2. **`spread_destinations` reorders by approach geometry.** New
+     `reorder_for_lr_fanout` flag (gated by
+     `destination_reordering_allowed`); when on, indices are sorted
+     ascending by `(src.row, src.col)` so the higher-source edge
+     claims the higher dst port and the from-below edge gets the
+     lower port. Mirrors the source-side reorder.
+  3. **New `evict_destination_channel_runs` nudge stage.** When a
+     path's pre-tip cell is another edge's tip cell, rebuilds the
+     path with the bend at a different column (or row for TD/BT),
+     preserving the original tip cell. Only applied when the
+     candidate shift does NOT increase total crossings.
+  4. **`Grid::erase_path` preserves protected interior cells.** The
+     nudge erases the old path before drawing the new one; without
+     this fix, erasing through another edge's protected tip cell
+     overwrote that tip's glyph and the arrow disappeared.
+
+  Pinned by `postgres_incoming_arrows_have_visible_feeds`
+  (every `▸` arrow on PostgreSQL's port column has a visible
+  incoming-line glyph in some cardinal direction) and
+  `worker_to_postgres_bends_before_destination_channel`
+  (`│ Worker │────▸│ PostgreSQL` substring no longer appears).
+
+### Snapshot churn
+
+10 snapshots updated. All bucket A (strict improvement). Crossings
+counts: `crossing_edges_with_cross_junction` improved 1 → 0; every
+other fixture unchanged. Notable improvements:
+- `flowchart_app_db_architecture`: Worker→PG bends at col 42 with a
+  clean `┘` corner; App→PG arrow now visible at the lower interior
+  port row.
+- `flowchart_crossing_edges`: cross-junction case simplified from
+  `┘└┐┴` stack to a single `┬` + `┘`.
+- `flowchart_label_midpoint_lr`: stray `┌││` corner artefact at the
+  destination's left side removed.
+
+### Documentation
+
+- `crates/mermaid-text/README.md` dependency-graph example updated
+  to match the new render.
+- `docs/scope-attach-border-row-exclusion.md` extended with the
+  destination-channel follow-up.
+
 ## 0.47.0 — 2026-05-06 — LR fanout destination-corner cleanup
 
 ### Fixed
