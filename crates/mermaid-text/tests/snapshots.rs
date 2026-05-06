@@ -575,6 +575,130 @@ fn postgres_left_border_has_no_arrow_into_corner() {
 }
 
 // ---------------------------------------------------------------------------
+// 18d. Two incoming arrows at PostgreSQL must not "share" a vertical channel
+//      where one path overshoots through the other's tip cell. Symptom: an
+//      arrow `▸` with no visible incoming-line glyph in any cardinal
+//      direction (left/above/below) — i.e., it appears to materialise out
+//      of nowhere because the path that fed it ran through the *other*
+//      arrow's protected cell. The fix needs both:
+//      (1) destination reorder by approach geometry, so the bottom-approach
+//          edge gets the bottom port, and
+//      (2) a post-routing nudge that bends side-edges before reaching the
+//          destination's vertical channel when that channel is reserved by
+//          a tip from another edge.
+// ---------------------------------------------------------------------------
+#[test]
+fn postgres_incoming_arrows_have_visible_feeds() {
+    let src = "graph LR
+    App --> DB[(PostgreSQL)]
+    App --> Cache[(Redis)]
+    App --> Queue[(RabbitMQ)]
+    Queue --> Worker[Worker]
+    Worker --> DB";
+    let out = mermaid_text::render(src).unwrap();
+
+    let lines: Vec<&str> = out.lines().collect();
+    let chars: Vec<Vec<char>> = lines.iter().map(|l| l.chars().collect()).collect();
+
+    // Glyphs whose strokes extend into the cell to their RIGHT (so they
+    // visibly feed an arrow at column+1 from the left).
+    let has_right_stroke = |c: char| {
+        matches!(
+            c,
+            '─' | '┌' | '└' | '├' | '┬' | '┴' | '┼' | '╭' | '╰' | '═' | '━'
+        )
+    };
+    // Glyphs whose strokes extend DOWN (so they feed an arrow at row+1 from above).
+    let has_down_stroke = |c: char| {
+        matches!(c, '│' | '┌' | '┐' | '├' | '┤' | '┬' | '┼' | '╭' | '╮')
+    };
+    // Glyphs whose strokes extend UP (so they feed an arrow at row-1 from below).
+    let has_up_stroke = |c: char| {
+        matches!(c, '│' | '└' | '┘' | '├' | '┤' | '┴' | '┼' | '╰' | '╯')
+    };
+
+    let pg_label_row_idx = lines
+        .iter()
+        .position(|l| l.contains("│ PostgreSQL │"))
+        .expect("PostgreSQL label row not found");
+    // PostgreSQL's left border is the `│` that immediately precedes ` PostgreSQL`
+    // — there are several earlier `│` glyphs on the same row from other boxes.
+    let label_byte_idx = lines[pg_label_row_idx]
+        .find("│ PostgreSQL │")
+        .expect("PostgreSQL label substring not found");
+    let pg_left_border_col = lines[pg_label_row_idx][..label_byte_idx].chars().count();
+    let arrow_col = pg_left_border_col
+        .checked_sub(1)
+        .expect("expected at least one column to the left of PostgreSQL's border");
+
+    // Inspect the three rows around the label (interior rows of the cylinder
+    // and the row above) for arrow tips on the destination's port column.
+    for r in [
+        pg_label_row_idx.saturating_sub(2),
+        pg_label_row_idx.saturating_sub(1),
+        pg_label_row_idx,
+        pg_label_row_idx + 1,
+    ] {
+        let Some(row) = chars.get(r) else { continue };
+        if row.get(arrow_col).copied() != Some('▸') {
+            continue;
+        }
+        let left = arrow_col
+            .checked_sub(1)
+            .and_then(|c| row.get(c))
+            .copied()
+            .unwrap_or(' ');
+        let above = r
+            .checked_sub(1)
+            .and_then(|rr| chars.get(rr))
+            .and_then(|line| line.get(arrow_col).copied())
+            .unwrap_or(' ');
+        let below = chars
+            .get(r + 1)
+            .and_then(|line| line.get(arrow_col).copied())
+            .unwrap_or(' ');
+
+        let fed = has_right_stroke(left) || has_down_stroke(above) || has_up_stroke(below);
+        assert!(
+            fed,
+            "Orphaned arrow `▸` at (col={arrow_col}, row={r}) entering PostgreSQL — \
+             no visible incoming-line glyph in any cardinal direction \
+             (left={left:?}, above={above:?}, below={below:?}). The path that \
+             ends here ran through *another* arrow's protected tip cell, so the \
+             feed line is invisible.\n\nFull output:\n{out}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 18e. Worker→PG must not run as a single straight horizontal segment that
+//      shares PostgreSQL's label row with the App→PG arrow tip. When it
+//      does, the App→PG vertical channel from below has to overshoot
+//      through the Worker→PG arrow tip cell to reach its own tip one row
+//      up — the exact "crossing" symptom from the user report. The fix
+//      forces a bend before the destination's vertical channel.
+// ---------------------------------------------------------------------------
+#[test]
+fn worker_to_postgres_bends_before_destination_channel() {
+    let src = "graph LR
+    App --> DB[(PostgreSQL)]
+    App --> Cache[(Redis)]
+    App --> Queue[(RabbitMQ)]
+    Queue --> Worker[Worker]
+    Worker --> DB";
+    let out = mermaid_text::render(src).unwrap();
+
+    assert!(
+        !out.contains("│ Worker │────▸│ PostgreSQL"),
+        "Worker→PG runs as a straight horizontal segment from Worker's right \
+         border directly into PostgreSQL's left border on PostgreSQL's label \
+         row — App→PG (which approaches from below) then has to overshoot \
+         through this arrow tip cell, producing the visual crossing.\n\n\
+         Full output:\n{out}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // 19. ANSI color regression guard — running through `render_with_options`
 //     with `color: false` must produce the exact same bytes as `render`.
 //     This is the structural promise that ANSI is opt-in.
