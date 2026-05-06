@@ -350,6 +350,77 @@ fn back_edge_lr_no_leading_blank_rows() {
 }
 
 // ---------------------------------------------------------------------------
+// 17a. Perpendicular-aligned edges in a TB subgraph (inside an LR parent)
+//      must use perpendicular attach points, not LR's right-source/
+//      left-destination semantics. Without this, both the forward
+//      `creates` edge and the back-edge `panics` route through the same
+//      left-side corridor (since both have to go from one box's
+//      right-side to the other box's left-side), forcing them to cross.
+//      The fix detects same-column nodes (LR/RL graph) or same-row nodes
+//      (TD/BT graph) and uses the perpendicular direction's attach +
+//      tip semantics. Hand-written assertions (not snapshot) so
+//      INSTA_UPDATE cannot silently re-bless the bug.
+// ---------------------------------------------------------------------------
+#[test]
+fn supervisor_perpendicular_edges_use_perpendicular_attaches() {
+    let src = "graph LR
+    subgraph Supervisor
+        direction TB
+        F[Factory] -->|creates| W[Worker]
+        W -->|panics| F
+    end
+    W -->|beat| HB[Heartbeat]
+    HB --> WD[Watchdog]";
+    let out = mermaid_text::render(src).unwrap();
+
+    assert!(out.contains("│ Factory │"), "Factory label missing:\n{out}");
+    assert!(out.contains("│ Worker │"), "Worker label missing:\n{out}");
+
+    // The forward `creates` edge (F→W in TB direction) must NOT enter
+    // Worker's left side. In the bug state, both edges use LR attaches
+    // (right-source / left-destination), producing `▸│ Worker │` —
+    // arrow entering Worker's left side from a corridor detour.
+    assert!(
+        !out.contains("▸│ Worker │"),
+        "Worker has an LR-style arrow entering its LEFT side from inside \
+         the subgraph — `creates` is detouring instead of routing straight \
+         down between vertically-aligned Factory and Worker.\n\n\
+         Full output:\n{out}"
+    );
+
+    // Symmetric: the back-edge `panics` must NOT enter Factory's left
+    // side either. With the perpendicular fix, panics routes via the
+    // right-side perimeter (perpendicular back-edge attaches).
+    assert!(
+        !out.contains("▸│ Factory │"),
+        "Factory has an LR-style arrow entering its LEFT side — `panics` \
+         is detouring through the same left corridor as `creates` instead \
+         of routing via the perpendicular (right-side) perimeter.\n\n\
+         Full output:\n{out}"
+    );
+
+    // Positive: forward TB tip `▾` must appear on Worker's top border
+    // (replacing one `─`). This is the structural marker that
+    // perpendicular routing engaged.
+    assert!(
+        out.contains('\u{25BE}'),
+        "expected `▾` (down-pointing arrow tip) in output — the forward \
+         perpendicular edge from Factory to Worker should enter Worker's \
+         TOP border with a TB tip, not Worker's left side with an LR \
+         tip.\n\nFull output:\n{out}"
+    );
+
+    // Positive: perpendicular back-edge tip `◂` must appear (entering
+    // Factory's right side via the perimeter).
+    assert!(
+        out.contains('\u{25C2}'),
+        "expected `◂` (left-pointing arrow tip) in output — the back-edge \
+         from Worker to Factory should enter Factory's RIGHT side via the \
+         perpendicular perimeter.\n\nFull output:\n{out}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // 17b. Bidirectional edges in a subgraph (Supervisor pattern).
 //      Regression guard: when two edges connect the same node pair (here
 //      Factory ↔ Worker, with both labels), the labels must NOT overwrite
