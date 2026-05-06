@@ -105,6 +105,7 @@ pub(crate) fn run(
     evict_foreign_halo_runs(grid, paths, edge_has_label, node_boxes, &tip_for);
     if enable_endpoint_corner_nudge {
         evict_endpoint_corner_runs(grid, paths, edge_has_label, node_boxes, &tip_for);
+        evict_destination_channel_runs(grid, paths, edge_has_label, node_boxes, &tip_for);
     }
 }
 
@@ -291,6 +292,233 @@ fn evict_endpoint_corner_runs(
     if let Some(shift) = plan_endpoint_corner_shift(paths, grid, edge_has_label, &rects) {
         apply_shifts(grid, paths, vec![shift], tip_for);
     }
+}
+
+/// Shift a path's halo run away from any cell that is *another edge's*
+/// arrow-tip cell. Without this, two edges sharing a destination column at
+/// adjacent rows produce a path that visibly overshoots through the other
+/// arrow's protected glyph — the user sees an "orphan" arrow on the row
+/// past the overshoot. Same conservative gating + crossings budget as the
+/// endpoint-corner nudge.
+fn evict_destination_channel_runs(
+    grid: &mut Grid,
+    paths: &mut [Option<Vec<(usize, usize)>>],
+    edge_has_label: &[bool],
+    node_boxes: &[(usize, usize, usize, usize)],
+    tip_for: &impl Fn(usize) -> char,
+) {
+    let rects: Vec<NodeRect> = node_boxes
+        .iter()
+        .map(|&(col, row, width, height)| NodeRect {
+            col,
+            row,
+            width,
+            height,
+        })
+        .collect();
+
+    if let Some(shift) = plan_destination_channel_shift(paths, grid, edge_has_label, &rects) {
+        apply_shifts(grid, paths, vec![shift], tip_for);
+    }
+}
+
+fn plan_destination_channel_shift(
+    paths: &[Option<Vec<(usize, usize)>>],
+    grid: &Grid,
+    edge_has_label: &[bool],
+    _rects: &[NodeRect],
+) -> Option<Shift> {
+    let baseline_crossings = count_crossings_in_grid(grid);
+    let tip_cells: Vec<Option<(usize, usize)>> = paths
+        .iter()
+        .map(|p_opt| p_opt.as_ref().and_then(|p| p.last().copied()))
+        .collect();
+
+    for (edge_idx, path_opt) in paths.iter().enumerate() {
+        if edge_has_label.get(edge_idx).copied().unwrap_or(false) {
+            continue;
+        }
+        let Some(path) = path_opt.as_ref() else {
+            continue;
+        };
+        if path.len() < 4 {
+            continue;
+        }
+
+        // Only fires when the cell directly preceding the tip is another
+        // edge's tip — i.e., this path's final segment runs through the
+        // destination's vertical port channel and overshoots past a
+        // different incoming arrow. The fix is to bend earlier so the
+        // final segment terminates at the tip without traversing other
+        // tips.
+        let tip = path[path.len() - 1];
+        let pre_tip = path[path.len() - 2];
+        let pre_tip_invasive = tip_cells
+            .iter()
+            .enumerate()
+            .any(|(other_idx, other_tip)| other_idx != edge_idx && *other_tip == Some(pre_tip));
+        if !pre_tip_invasive {
+            continue;
+        }
+
+        // Final segment must be axis-aligned (orthogonal routing).
+        let last_segment_vertical = pre_tip.0 == tip.0;
+        let last_segment_horizontal = pre_tip.1 == tip.1;
+        if !last_segment_vertical && !last_segment_horizontal {
+            continue;
+        }
+
+        let baseline = count_invasive_tip_cells(path, &tip_cells, edge_idx);
+
+        // Try increasing shift distances on each viable side.
+        for shift in shift_candidates(pre_tip, tip, last_segment_vertical) {
+            let Some(new_path) = build_tip_channel_evicted_path(path, shift) else {
+                continue;
+            };
+            if !path_is_feasible(grid, &new_path) {
+                continue;
+            }
+            let candidate = count_invasive_tip_cells(&new_path, &tip_cells, edge_idx);
+            let candidate_crossings =
+                crossings_after_shift(grid, path, &new_path).unwrap_or(usize::MAX);
+            let crosses_ok = candidate_crossings <= baseline_crossings;
+            if candidate < baseline && crosses_ok {
+                return Some(Shift { edge_idx, new_path });
+            }
+        }
+    }
+    None
+}
+
+/// Generate candidate (axis, target_coord) shifts to try in order.
+/// For a vertical last segment, we shift the bend column away from the
+/// tip in BOTH directions (toward source and away). The first feasible,
+/// crossings-safe shift wins.
+fn shift_candidates(
+    pre_tip: (usize, usize),
+    tip: (usize, usize),
+    last_segment_vertical: bool,
+) -> Vec<(Axis, usize)> {
+    let mut out = Vec::with_capacity(2 * MAX_HALO_EVICTION_SHIFT);
+    if last_segment_vertical {
+        // Bend column shifts. Try toward smaller cols first (toward LR
+        // sources) then toward larger.
+        for d in 1..=MAX_HALO_EVICTION_SHIFT {
+            if let Some(c) = pre_tip.0.checked_sub(d) {
+                out.push((Axis::Vertical, c));
+            }
+        }
+        for d in 1..=MAX_HALO_EVICTION_SHIFT {
+            out.push((Axis::Vertical, pre_tip.0 + d));
+        }
+    } else {
+        // Bend row shifts. Symmetric for horizontal last segment (TD/BT).
+        for d in 1..=MAX_HALO_EVICTION_SHIFT {
+            if let Some(r) = pre_tip.1.checked_sub(d) {
+                out.push((Axis::Horizontal, r));
+            }
+        }
+        for d in 1..=MAX_HALO_EVICTION_SHIFT {
+            out.push((Axis::Horizontal, pre_tip.1 + d));
+        }
+    }
+    let _ = tip;
+    out
+}
+
+/// Rebuild the path so its final segment bends at `(axis, target)` instead
+/// of at the original `pre_tip` position, preserving the tip cell. Returns
+/// `None` if the path doesn't have the expected shape (must end with at
+/// least one cell at the same row as `pre_tip` for vertical-last-segment,
+/// or at the same col for horizontal-last-segment).
+fn build_tip_channel_evicted_path(
+    old_path: &[(usize, usize)],
+    shift: (Axis, usize),
+) -> Option<Vec<(usize, usize)>> {
+    if old_path.len() < 3 {
+        return None;
+    }
+    let tip = *old_path.last()?;
+    let pre_tip = *old_path.get(old_path.len() - 2)?;
+    let (axis, target) = shift;
+
+    match axis {
+        Axis::Vertical => {
+            // Last segment is vertical at col == pre_tip.0 == tip.0.
+            // We bend at column `target` instead, so the new path goes:
+            // ... cells with col strictly between source-side and target,
+            // then horizontal to target at pre_tip.1, vertical at target
+            // from pre_tip.1 to tip.1, horizontal to tip at tip.1.
+            if target == pre_tip.0 {
+                return None;
+            }
+            // Find the largest prefix index whose cell row matches
+            // pre_tip.1 AND whose col is on the "source side" of target.
+            // For LR shifts (target < pre_tip.0), we want cells with
+            // col < target. For RL (target > pre_tip.0), col > target.
+            let shift_left = target < pre_tip.0;
+            let mut keep_until = None;
+            for (i, &(c, r)) in old_path.iter().enumerate().take(old_path.len() - 1) {
+                if r != pre_tip.1 {
+                    continue;
+                }
+                if (shift_left && c < target) || (!shift_left && c > target) {
+                    keep_until = Some(i);
+                } else {
+                    break;
+                }
+            }
+            let keep_until = keep_until?;
+            let last_kept = old_path[keep_until];
+
+            let mut new_path = old_path[..=keep_until].to_vec();
+            extend_horizontal(&mut new_path, pre_tip.1, last_kept.0, target);
+            extend_vertical(&mut new_path, target, pre_tip.1, tip.1);
+            extend_horizontal(&mut new_path, tip.1, target, tip.0);
+            Some(new_path)
+        }
+        Axis::Horizontal => {
+            if target == pre_tip.1 {
+                return None;
+            }
+            let shift_up = target < pre_tip.1;
+            let mut keep_until = None;
+            for (i, &(c, r)) in old_path.iter().enumerate().take(old_path.len() - 1) {
+                if c != pre_tip.0 {
+                    continue;
+                }
+                if (shift_up && r < target) || (!shift_up && r > target) {
+                    keep_until = Some(i);
+                } else {
+                    break;
+                }
+            }
+            let keep_until = keep_until?;
+            let last_kept = old_path[keep_until];
+
+            let mut new_path = old_path[..=keep_until].to_vec();
+            extend_vertical(&mut new_path, pre_tip.0, last_kept.1, target);
+            extend_horizontal(&mut new_path, target, pre_tip.0, tip.0);
+            extend_vertical(&mut new_path, tip.0, target, tip.1);
+            Some(new_path)
+        }
+    }
+}
+
+fn count_invasive_tip_cells(
+    path: &[(usize, usize)],
+    tip_cells: &[Option<(usize, usize)>],
+    own_edge_idx: usize,
+) -> usize {
+    path.iter()
+        .enumerate()
+        .filter(|(idx, _)| *idx > 0 && *idx + 1 < path.len())
+        .filter(|&(_, &(c, r))| {
+            tip_cells.iter().enumerate().any(|(other_idx, other_tip)| {
+                other_idx != own_edge_idx && *other_tip == Some((c, r))
+            })
+        })
+        .count()
 }
 
 fn plan_next_halo_shift(

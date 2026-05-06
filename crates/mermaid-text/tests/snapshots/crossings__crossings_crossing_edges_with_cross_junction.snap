@@ -2,4 +2,4 @@
 source: crates/mermaid-text/tests/crossings.rs
 expression: "fmt_count(\"crossing_edges_with_cross_junction\", n)"
 ---
-crossing_edges_with_cross_junction: 1 crossing(s)
+crossing_edges_with_cross_junction: 0 crossing(s)

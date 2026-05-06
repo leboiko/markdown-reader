@@ -67,6 +67,40 @@
   same `flowchart_app_db_architecture` canary in different render
   modes), all bucket A.
 
+- **Update — 2026-05-06 destination-channel crossing fix.** A second
+  destination-side issue surfaced after the corner fix landed: with
+  two incoming edges into PostgreSQL (one from below via U-route, one
+  from the side from Worker), the from-below edge's vertical channel
+  ran THROUGH the side-edge's protected arrow tip cell, producing a
+  visually orphaned arrow on the row past the overshoot. Three coupled
+  changes:
+  1. `compute_spread_attaches` now runs `spread_sources` BEFORE
+     `spread_destinations` so the destination reorder (next item) can
+     read the post-spread `src.row`.
+  2. `spread_destinations` accepts a `reorder_for_lr_fanout` flag
+     (gated by new `destination_reordering_allowed`); when on, the
+     indices are sorted ascending by `(src.row, src.col)` so the edge
+     with the smaller post-spread `src.row` claims the smaller dst
+     row. For the canary: Worker→PG (src.row=9) gets dst.row=8 (top
+     interior), App→PG (src.row=10 after source reorder) gets
+     dst.row=9 (bottom interior).
+  3. New `evict_destination_channel_runs` nudge stage in
+     `crates/mermaid-text/src/layout/nudge.rs`. For each path whose
+     pre-tip cell is another edge's tip, rebuilds the path with a
+     bend at a different column (or row, for TD/BT), preserving the
+     original tip cell. Only applies when the candidate shift does
+     not increase total crossings.
+  4. Bug-fix in `Grid::erase_path`: cells protected by another path's
+     tip glyph now retain their `cells[]` entry on subtraction —
+     previously a nudge-erased path could overwrite the protected tip
+     of an unrelated edge.
+
+  Pinned by `postgres_incoming_arrows_have_visible_feeds` and
+  `worker_to_postgres_bends_before_destination_channel`. Crossings
+  count improved on `crossing_edges_with_cross_junction` (1 → 0); all
+  10 snapshot diffs were bucket A. Same conservative gating envelope
+  as the source-side fixes.
+
 ## What was tried
 
 ### Attempt 1 — interior-only spread (sources + destinations)

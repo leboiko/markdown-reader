@@ -1751,7 +1751,15 @@ impl Grid {
             our_bits |= neighbor_bit(c, r, nc, nr);
             if our_bits != 0 && self.directions[r][c] & our_bits == our_bits {
                 self.directions[r][c] &= !our_bits;
-                self.cells[r][c] = DIR_TO_CHAR[self.directions[r][c] as usize];
+                // Preserve glyph on cells protected by another path's tip
+                // or label — only the path's OWN last cell (handled above
+                // in the `i == last` branch) is allowed to clear protected
+                // glyphs. Subtracting bits from a protected interior cell
+                // is fine; rewriting `cells[]` would overwrite e.g. an
+                // arrow tip that happens to sit on this path's middle.
+                if !self.protected[r][c] {
+                    self.cells[r][c] = DIR_TO_CHAR[self.directions[r][c] as usize];
+                }
             }
         }
     }

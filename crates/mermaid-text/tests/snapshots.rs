@@ -609,13 +609,10 @@ fn postgres_incoming_arrows_have_visible_feeds() {
         )
     };
     // Glyphs whose strokes extend DOWN (so they feed an arrow at row+1 from above).
-    let has_down_stroke = |c: char| {
-        matches!(c, '│' | '┌' | '┐' | '├' | '┤' | '┬' | '┼' | '╭' | '╮')
-    };
+    let has_down_stroke =
+        |c: char| matches!(c, '│' | '┌' | '┐' | '├' | '┤' | '┬' | '┼' | '╭' | '╮');
     // Glyphs whose strokes extend UP (so they feed an arrow at row-1 from below).
-    let has_up_stroke = |c: char| {
-        matches!(c, '│' | '└' | '┘' | '├' | '┤' | '┴' | '┼' | '╰' | '╯')
-    };
+    let has_up_stroke = |c: char| matches!(c, '│' | '└' | '┘' | '├' | '┤' | '┴' | '┼' | '╰' | '╯');
 
     let pg_label_row_idx = lines
         .iter()

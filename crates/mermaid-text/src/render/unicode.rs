@@ -1099,41 +1099,10 @@ fn compute_spread_attaches(
         })
         .collect();
 
-    // --- Spread destination endpoints ---
-    // Group edge indices by their base destination cell.
-    let mut dst_groups: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
-    for (i, pair) in pairs.iter().enumerate() {
-        if let Some((_, dst)) = pair {
-            dst_groups.entry((dst.col, dst.row)).or_default().push(i);
-        }
-    }
-
-    for indices in dst_groups.values() {
-        if indices.len() <= 1 {
-            continue;
-        }
-        // All edges in this group arrive at the same border cell on the same node.
-        // Identify the target node and its geometry so we know the spread bounds.
-        let first_edge = &graph.edges[indices[0]];
-        let Some(&to_pos) = positions.get(&first_edge.to) else {
-            continue;
-        };
-        let Some(&to_geom) = geoms.get(&first_edge.to) else {
-            continue;
-        };
-        let interior_clamp_for_lr = destination_interior_clamp_allowed(graph, indices);
-        spread_destinations(
-            &mut pairs,
-            indices,
-            to_pos,
-            to_geom,
-            graph.direction,
-            interior_clamp_for_lr,
-        );
-    }
-
-    // --- Spread source endpoints ---
-    // Group edge indices by their base source cell.
+    // --- Spread source endpoints first ---
+    // Sources are spread first so the destination-side reorder can read the
+    // post-spread `src.row` (the source-side reorder pushes long skip-edges
+    // to outer slots, which the destination-side reorder then mirrors).
     let mut src_groups: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
     for (i, pair) in pairs.iter().enumerate() {
         if let Some((src, _)) = pair {
@@ -1163,6 +1132,41 @@ fn compute_spread_attaches(
         );
     }
 
+    // --- Spread destination endpoints (after sources) ---
+    // Group edge indices by their base destination cell.
+    let mut dst_groups: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
+    for (i, pair) in pairs.iter().enumerate() {
+        if let Some((_, dst)) = pair {
+            dst_groups.entry((dst.col, dst.row)).or_default().push(i);
+        }
+    }
+
+    for indices in dst_groups.values() {
+        if indices.len() <= 1 {
+            continue;
+        }
+        // All edges in this group arrive at the same border cell on the same node.
+        // Identify the target node and its geometry so we know the spread bounds.
+        let first_edge = &graph.edges[indices[0]];
+        let Some(&to_pos) = positions.get(&first_edge.to) else {
+            continue;
+        };
+        let Some(&to_geom) = geoms.get(&first_edge.to) else {
+            continue;
+        };
+        let interior_clamp_for_lr = destination_interior_clamp_allowed(graph, indices);
+        let reorder_for_lr_fanout = destination_reordering_allowed(graph, indices);
+        spread_destinations(
+            &mut pairs,
+            indices,
+            to_pos,
+            to_geom,
+            graph.direction,
+            interior_clamp_for_lr,
+            reorder_for_lr_fanout,
+        );
+    }
+
     pairs
 }
 
@@ -1178,9 +1182,37 @@ fn spread_destinations(
     to_geom: NodeGeom,
     dir: Direction,
     interior_clamp: bool,
+    reorder_for_lr_fanout: bool,
 ) {
     let n = indices.len();
     let (to_col, to_row) = to_pos;
+
+    // Reorder destinations by approach geometry so an edge whose source is
+    // BELOW (larger src.row) arrives at the BOTTOM port of the destination,
+    // matching the user's intuition. Without this, the declaration order of
+    // edges decides arrival row, leaving from-below paths overshooting
+    // through other edges' tip cells. Gated to the same simple-LR/RL
+    // flowchart envelope as the source-side reorder; relies on
+    // `compute_spread_attaches` running this pass AFTER `spread_sources` so
+    // `pairs[idx].src.row` reflects the post-spread source.
+    let mut ordered_indices = indices.to_vec();
+    if reorder_for_lr_fanout && matches!(dir, Direction::LeftToRight | Direction::RightToLeft) {
+        ordered_indices.sort_by_key(|&idx| {
+            pairs[idx]
+                .as_ref()
+                .map(|(src, _)| (src.row, src.col))
+                .unwrap_or((usize::MAX, usize::MAX))
+        });
+    } else if reorder_for_lr_fanout
+        && matches!(dir, Direction::TopToBottom | Direction::BottomToTop)
+    {
+        ordered_indices.sort_by_key(|&idx| {
+            pairs[idx]
+                .as_ref()
+                .map(|(src, _)| (src.col, src.row))
+                .unwrap_or((usize::MAX, usize::MAX))
+        });
+    }
 
     match dir {
         Direction::LeftToRight | Direction::RightToLeft => {
@@ -1211,7 +1243,7 @@ fn spread_destinations(
             } else {
                 (min_row, max_row)
             };
-            for (i, &idx) in indices.iter().enumerate() {
+            for (i, &idx) in ordered_indices.iter().enumerate() {
                 // Symmetric centring: (2*i - (n-1)) * step / 2. For odd n
                 // this is identical to (i - (n-1)/2) * step. For even n it
                 // gives symmetric offsets [-step/2, +step/2, ...] instead of
@@ -1249,7 +1281,7 @@ fn spread_destinations(
             } else {
                 (min_col, max_col)
             };
-            for (i, &idx) in indices.iter().enumerate() {
+            for (i, &idx) in ordered_indices.iter().enumerate() {
                 // Symmetric centring: (2*i - (n-1)) * step / 2. For odd n
                 // this is identical to (i - (n-1)/2) * step. For even n it
                 // gives symmetric offsets [-step/2, +step/2, ...] instead of
@@ -1393,6 +1425,27 @@ fn destination_interior_clamp_allowed(graph: &Graph, indices: &[usize]) -> bool 
     // flowcharts, no subgraphs, rectangle/cylinder endpoints only) so that
     // the destination-side interior clamp ships with the same conservative
     // gating as the source-side reorder + corner-nudge.
+    if !graph_supports_simple_lr_fanout_heuristics(graph) {
+        return false;
+    }
+
+    indices.iter().all(|&idx| {
+        graph.edges.get(idx).is_some_and(|edge| {
+            graph
+                .node(&edge.from)
+                .is_some_and(|node| shape_supports_lr_fanout_ordering(node.shape))
+                && graph
+                    .node(&edge.to)
+                    .is_some_and(|node| shape_supports_lr_fanout_ordering(node.shape))
+        })
+    })
+}
+
+fn destination_reordering_allowed(graph: &Graph, indices: &[usize]) -> bool {
+    // Same conservative envelope as the interior-clamp and source-side
+    // reorder. The destination reorder lets a from-below edge claim the
+    // bottom port; ungated application would risk reflowing state diagrams
+    // and composite graphs.
     if !graph_supports_simple_lr_fanout_heuristics(graph) {
         return false;
     }
