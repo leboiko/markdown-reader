@@ -3,6 +3,63 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.46.0 — 2026-05-06 — LR fanout source-corner cleanup
+
+### Fixed
+
+- **No stray glyphs adjacent to LR fanout source corners.** The
+  README dependency-graph fixture rendered a stray `│` directly after
+  the `App` box's `┐` top-right corner — visible as `┌─────┐│` in the
+  output. Three narrow changes, each gated to the simple LR/RL
+  flowchart envelope so state diagrams and complex composites are
+  unaffected:
+
+  1. **`try_u_route` no longer turns at `src.col`.** The bypass path
+     sweeps `turn_col` from `src.col + 1`, so segment 1 is always a
+     real horizontal step away from the source halo before turning
+     down. Eliminates the U-route variant of the bug.
+  2. **Geometric ordering for shared LR/RL source attaches.** When
+     several edges share a source cell, `spread_sources` now sorts
+     them so nearer-layer targets occupy the inner slots and long
+     skip edges are pushed outward. Triggers only when every
+     endpoint in the source group is a rectangle/cylinder in a
+     subgraph-free flowchart (`source_reordering_allowed` +
+     `graph_supports_simple_lr_fanout_heuristics`).
+  3. **New `evict_endpoint_corner_runs` nudge stage.** Shifts route
+     runs out of the corner-adjacent halo of an endpoint node, but
+     only when the candidate shift does **not** increase total
+     crossings (`candidate_crossings <= baseline_crossings`). Same
+     gating envelope as (2).
+
+  An earlier interior-only `spread_sources` experiment was attempted
+  and reverted — it removed the source-border artefact but caused
+  crossings churn in dense LR / TD fixtures. Full discussion in
+  `docs/scope-attach-border-row-exclusion.md`.
+
+  Pinned by `app_top_border_row_has_no_stray_pipe_after_corner` —
+  hand-written assertion (not snapshot) so `INSTA_UPDATE` cannot
+  silently re-bless the bug.
+
+### Snapshot churn
+
+49 snapshots updated. **15 substantive diffs** (all Bucket A or B
+per `tests/regression_corpus/README.md` criteria); 34 cosmetic-only
+diffs (insta `assertion_line:` metadata removals on unchanged
+content). Crossings counts unchanged or improved on every fixture;
+architecture fixture remains at 0 crossings. Notable improvements:
+- `flowchart_app_db_architecture`: stray `│` adjacent to App's `┐`
+  removed; routes preserved.
+- `state_basic_machine`: corridor reorganised, content intact.
+- `flowchart_label_midpoint_lr`: cleaner inter-node spacing.
+
+### Documentation
+
+- `crates/mermaid-text/README.md` dependency-graph example updated
+  to match the new render.
+- New `docs/scope-attach-border-row-exclusion.md` documenting the
+  reverted interior-only experiment and the implementation that
+  shipped.
+
 ## 0.45.0 — 2026-05-05 — Singleton-layer smoothing pass
 
 ### Fixed
