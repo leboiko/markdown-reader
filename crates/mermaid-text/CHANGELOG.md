@@ -3,6 +3,41 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.50.0 — 2026-05-07 — Perpendicular edges keep their base attach + label uses effective direction
+
+### Fixed
+
+- **Edge labels of perpendicular-aligned edges no longer use LR-style
+  placement.** The label-placement context was passing
+  `graph.direction` instead of the per-edge `edge_effective_direction`,
+  so a perpendicular back-edge in an LR graph (e.g. Worker→Factory
+  inside a `direction TB` Supervisor subgraph) had its label placed
+  by LR rules — beside the source row instead of the back-edge's
+  vertical column.
+- **Perpendicular-aligned edges keep their base attach.** When a
+  perpendicular edge shared a base attach cell with a non-perpendicular
+  edge from the same node, `spread_sources` / `spread_destinations`
+  spread them together along the graph axis. That moved the
+  perpendicular edge onto a row/col where its back-edge border + path
+  stamps no longer matched the routed path — visible in the README's
+  Supervisor pattern as a stray `─┘` "ear" sticking out past Worker's
+  top-right corner. The grouping pass now skips edges whose effective
+  direction differs from the graph direction; their natural axis-
+  different routing already separates them visually from any same-
+  base parallel edges.
+
+### Snapshot churn
+
+5 snapshot files updated (the same Supervisor canary in 5 render
+modes). All bucket A. Notable improvements on the Supervisor canary:
+- "panics" label moved from Worker's middle row to the panics-edge
+  vertical column (row 7) — visually associated with the back-edge.
+- "beat" label moved from below Worker to Worker's middle row —
+  alongside the beat-edge horizontal segment.
+- "creates" label centered between Factory and Worker.
+- Worker's top border is now intact (`┌────▾───┐ │`) — the `─┘` ear
+  past the top-right corner is gone.
+
 ## 0.49.0 — 2026-05-06 — Perpendicular-aligned edges route on the perpendicular axis
 
 ### Fixed
