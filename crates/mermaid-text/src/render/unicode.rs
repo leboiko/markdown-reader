@@ -905,7 +905,10 @@ fn render_inner(
                     .then(|| prior_path_cells_by_pair.get(&edge_pair))
                     .flatten();
                 let label_context = LabelPlacementContext {
-                    dir: graph.direction,
+                    dir: edge_effective_dirs
+                        .get(edge_idx)
+                        .copied()
+                        .unwrap_or(graph.direction),
                     node_rects: &node_rects,
                     sg_bounds,
                     grid: &grid,
@@ -1188,9 +1191,25 @@ fn compute_spread_attaches(
     // Sources are spread first so the destination-side reorder can read the
     // post-spread `src.row` (the source-side reorder pushes long skip-edges
     // to outer slots, which the destination-side reorder then mirrors).
+    //
+    // Edges whose effective direction is perpendicular to the graph's flow
+    // (e.g. a `direction TB` subgraph edge inside a `graph LR` parent) keep
+    // their base attach: spreading them along the graph axis would move
+    // them onto a different row/col while their back-edge border + path
+    // stamps stay at the base position, decoupling the visible junction
+    // from the routed path. Their natural axis-different routing already
+    // separates them from any parallel-direction edges sharing the same
+    // base cell.
     let mut src_groups: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
     for (i, pair) in pairs.iter().enumerate() {
         if let Some((src, _)) = pair {
+            let dir = edge_effective_dirs
+                .get(i)
+                .copied()
+                .unwrap_or(graph.direction);
+            if dir != graph.direction {
+                continue;
+            }
             src_groups.entry((src.col, src.row)).or_default().push(i);
         }
     }
@@ -1218,10 +1237,19 @@ fn compute_spread_attaches(
     }
 
     // --- Spread destination endpoints (after sources) ---
-    // Group edge indices by their base destination cell.
+    // Group edge indices by their base destination cell. Same exclusion
+    // as the source-side: perpendicular-direction edges keep their base
+    // attach so back-edge stamps stay aligned with the routed path.
     let mut dst_groups: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
     for (i, pair) in pairs.iter().enumerate() {
         if let Some((_, dst)) = pair {
+            let dir = edge_effective_dirs
+                .get(i)
+                .copied()
+                .unwrap_or(graph.direction);
+            if dir != graph.direction {
+                continue;
+            }
             dst_groups.entry((dst.col, dst.row)).or_default().push(i);
         }
     }

@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 /// The direction in which a flowchart flows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Direction {
     /// Left-to-right (`LR`).
     LeftToRight,
