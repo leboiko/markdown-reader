@@ -2811,6 +2811,61 @@ fn xychart_beta_canonical_example() {
 }
 
 // ---------------------------------------------------------------------------
+// Edges to/from a composite state must attach to its OUTER border, not to
+// a synthesised inner `[*]` start/end marker. ROADMAP "Composite-edge
+// attach-to-border (state diagrams)". Hand-written assertion (not
+// snapshot) so the bug can't be silently re-blessed.
+//
+// Today's parser rewrites `X --> Composite` to `X --> __start__Composite`
+// and `Composite --> Y` to `__end__Composite --> Y` — synthesised inner
+// markers that render as `(  ●  )` circles inside the composite. After
+// the fix, the parser stops rewriting these edges and the orphaned
+// markers are GC'd, so the output contains zero `●` glyphs.
+// ---------------------------------------------------------------------------
+#[test]
+fn composite_edge_attaches_to_outer_border_not_inner_marker() {
+    let src = "stateDiagram-v2
+direction LR
+state Composite {
+    S1 --> S2
+}
+X --> Composite
+Composite --> Y";
+    let out = mermaid_text::render(src).unwrap();
+
+    // Sanity: structural elements intact.
+    assert!(out.contains("Composite"), "Composite label missing:\n{out}");
+    assert!(
+        out.contains("S1") && out.contains("S2"),
+        "internal states S1/S2 missing:\n{out}"
+    );
+    assert!(
+        out.contains(" X ") && out.contains(" Y "),
+        "external states X/Y missing:\n{out}"
+    );
+
+    // The synthesised `__start__Composite` and `__end__Composite` markers
+    // render as `(  ●  )` circles inside the composite. After the fix
+    // there should be zero `●` glyphs in the output.
+    let circle_count = out.matches('\u{25CF}').count();
+    assert_eq!(
+        circle_count, 0,
+        "expected zero `●` markers — composite-edges should attach to the \
+         outer border so the synthesised inner [*] markers are GC'd. \
+         Found {circle_count}.\n\n{out}"
+    );
+
+    // Positive: arrow tips exist for all three edges (S1→S2 internal,
+    // X→Composite external, Composite→Y external).
+    let arrow_count = out.matches('\u{25B8}').count();
+    assert!(
+        arrow_count >= 3,
+        "expected at least 3 arrow tips `▸` (S1→S2, X→Composite, \
+         Composite→Y), got {arrow_count}.\n\n{out}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // xychart-beta — labels of mixed display widths (e.g. `c0..c9` width 2 and
 // `c10..c14` width 3) must align consistently within their tick slots.
 // Today's centering logic (`col_width.saturating_sub(lw) / 2`) gives a
