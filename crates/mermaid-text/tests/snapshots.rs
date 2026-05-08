@@ -2823,7 +2823,6 @@ fn xychart_beta_canonical_example() {
 // markers that render as `(  ●  )` circles inside the composite.
 // ---------------------------------------------------------------------------
 #[test]
-#[ignore = "deferred — see docs/scope-composite-edge-attach.md; needs layout-level support"]
 fn composite_edge_attaches_to_outer_border_not_inner_marker() {
     let src = "stateDiagram-v2
 direction LR

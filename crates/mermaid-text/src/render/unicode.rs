@@ -318,6 +318,139 @@ fn has_rounded_bottom_border(shape: NodeShape) -> bool {
     )
 }
 
+/// Recognise a synthesised inner `[*]` marker that was inserted by the
+/// state-diagram parser to stand in for a composite-attached edge —
+/// e.g. `__start__Active` for `[*] --> Active` or `X --> Active`, and
+/// `__end__Active` for `Active --> [*]` or `Active --> Y`.
+///
+/// Top-level markers (`__start__` / `__end__` with empty composite path)
+/// are NOT composite-attached and return `None` — they continue to
+/// render as regular Circle / DoubleCircle nodes.
+///
+/// Nested composites: `__start__Outer__Inner` matches the `Inner`
+/// subgraph (innermost composite). Falls back to last-segment match
+/// if the full suffix doesn't match an exact subgraph id.
+fn composite_attached_marker_target<'a>(
+    id: &str,
+    sg_bounds: &'a [SubgraphBounds],
+) -> Option<&'a SubgraphBounds> {
+    let suffix = id
+        .strip_prefix("__start__")
+        .or_else(|| id.strip_prefix("__end__"))?;
+    if suffix.is_empty() {
+        return None;
+    }
+    if let Some(sg) = sg_bounds.iter().find(|sg| sg.id == suffix) {
+        return Some(sg);
+    }
+    // Nested composite: take the innermost segment.
+    let last = suffix.rsplit("__").next()?;
+    sg_bounds.iter().find(|sg| sg.id == last)
+}
+
+/// Compute the set of composite-attached markers whose ALL incident
+/// edges are boundary-crossing (i.e. the OTHER endpoint of every edge
+/// is NOT a member of the marker's owning composite). Such markers are
+/// purely layout anchors — they're not user-visible content; the
+/// renderer suppresses their box and redirects routing endpoints to
+/// the composite's outer border.
+///
+/// Markers with at least ONE internal edge (e.g. `__start__Active` in
+/// `state Active { [*] --> Inner }`) are kept visible and routed to
+/// their actual position so internal edges read normally.
+fn compute_externally_attached_markers(
+    graph: &Graph,
+    sg_bounds: &[SubgraphBounds],
+) -> HashSet<String> {
+    let mut result = HashSet::new();
+    for node in &graph.nodes {
+        let Some(target) = composite_attached_marker_target(&node.id, sg_bounds) else {
+            continue;
+        };
+        let Some(composite) = graph.subgraphs.iter().find(|sg| sg.id == target.id) else {
+            continue;
+        };
+        let composite_members: HashSet<String> =
+            graph.all_nodes_in_subgraph(composite).into_iter().collect();
+        let only_external = graph
+            .edges
+            .iter()
+            .filter(|e| e.from == node.id || e.to == node.id)
+            .all(|e| {
+                let other = if e.from == node.id { &e.to } else { &e.from };
+                !composite_members.contains(other)
+            });
+        if only_external {
+            result.insert(node.id.clone());
+        }
+    }
+    result
+}
+
+/// Resolve an edge endpoint id to its grid position + geometry. Three
+/// fallback layers, in order:
+/// 1. **Composite-attached marker** — id like `__start__Active`. Returns
+///    the matching subgraph's outer bounds so routing terminates on the
+///    composite border.
+/// 2. **Regular node** — looked up in `positions` + `geoms`.
+/// 3. **Bare composite id** — id like `Active` used directly as an edge
+///    endpoint (without parser rewrite). Looked up in `sg_bounds`.
+fn endpoint_geom(
+    id: &str,
+    positions: &HashMap<String, GridPos>,
+    geoms: &HashMap<String, NodeGeom>,
+    sg_bounds: &[SubgraphBounds],
+    externally_attached_markers: &HashSet<String>,
+) -> Option<(GridPos, NodeGeom)> {
+    // Only redirect to the composite's outer border when the marker is
+    // EXTERNALLY-attached (no internal edges). Markers with internal
+    // edges (e.g. `__start__Active --> Inner`) keep their regular
+    // position so internal edges read normally.
+    if externally_attached_markers.contains(id)
+        && let Some(target) = composite_attached_marker_target(id, sg_bounds)
+    {
+        let pos = (target.col, target.row);
+        let geom = NodeGeom {
+            width: target.width,
+            height: target.height,
+            text_row: 1,
+        };
+        return Some((pos, geom));
+    }
+    if let (Some(&pos), Some(&geom)) = (positions.get(id), geoms.get(id)) {
+        return Some((pos, geom));
+    }
+    sg_bounds.iter().find(|sg| sg.id == id).map(|sg| {
+        let pos = (sg.col, sg.row);
+        let geom = NodeGeom {
+            width: sg.width,
+            height: sg.height,
+            text_row: 1,
+        };
+        (pos, geom)
+    })
+}
+
+fn endpoint_pos(
+    id: &str,
+    positions: &HashMap<String, GridPos>,
+    sg_bounds: &[SubgraphBounds],
+    externally_attached_markers: &HashSet<String>,
+) -> Option<GridPos> {
+    if externally_attached_markers.contains(id)
+        && let Some(target) = composite_attached_marker_target(id, sg_bounds)
+    {
+        return Some((target.col, target.row));
+    }
+    if let Some(&p) = positions.get(id) {
+        return Some(p);
+    }
+    sg_bounds
+        .iter()
+        .find(|sg| sg.id == id)
+        .map(|sg| (sg.col, sg.row))
+}
+
 fn is_back_edge(from_pos: GridPos, to_pos: GridPos, dir: Direction) -> bool {
     let (fc, fr) = from_pos;
     let (tc, tr) = to_pos;
@@ -369,12 +502,22 @@ fn edge_effective_direction(
     graph: &Graph,
     edge: &crate::types::Edge,
     positions: &HashMap<String, GridPos>,
+    sg_bounds: &[SubgraphBounds],
+    externally_attached_markers: &HashSet<String>,
 ) -> Direction {
     if edge.from == edge.to {
         return graph.direction;
     }
-    match (positions.get(&edge.from), positions.get(&edge.to)) {
-        (Some(&fp), Some(&tp)) if same_layer(fp, tp, graph.direction) => {
+    match (
+        endpoint_pos(
+            &edge.from,
+            positions,
+            sg_bounds,
+            externally_attached_markers,
+        ),
+        endpoint_pos(&edge.to, positions, sg_bounds, externally_attached_markers),
+    ) {
+        (Some(fp), Some(tp)) if same_layer(fp, tp, graph.direction) => {
             perpendicular_direction(graph.direction)
         }
         _ => graph.direction,
@@ -423,6 +566,7 @@ fn grid_size(
     positions: &HashMap<String, GridPos>,
     geoms: &HashMap<String, NodeGeom>,
     sg_bounds: &[SubgraphBounds],
+    externally_attached_markers: &HashSet<String>,
 ) -> (usize, usize) {
     let mut max_col = 0usize;
     let mut max_row = 0usize;
@@ -469,10 +613,12 @@ fn grid_size(
         if e.from == e.to {
             return true;
         }
-        let Some(&fp) = positions.get(&e.from) else {
+        let Some(fp) = endpoint_pos(&e.from, positions, sg_bounds, externally_attached_markers)
+        else {
             return false;
         };
-        let Some(&tp) = positions.get(&e.to) else {
+        let Some(tp) = endpoint_pos(&e.to, positions, sg_bounds, externally_attached_markers)
+        else {
             return false;
         };
         is_back_edge(fp, tp, graph.direction)
@@ -564,7 +710,20 @@ fn render_inner(
         .map(|n| (n.id.clone(), NodeGeom::for_node(n)))
         .collect();
 
-    let (width, height) = grid_size(graph, positions, &geoms, sg_bounds);
+    // Composite-attached markers (e.g. `__start__Active`) whose edges
+    // ALL cross the composite boundary are layout anchors only —
+    // suppress their node box and redirect routing endpoints to the
+    // composite's outer border. Markers with at least one internal edge
+    // (e.g. `state Active { [*] --> Inner }`) are kept visible.
+    let externally_attached_markers = compute_externally_attached_markers(graph, sg_bounds);
+
+    let (width, height) = grid_size(
+        graph,
+        positions,
+        &geoms,
+        sg_bounds,
+        &externally_attached_markers,
+    );
     let mut grid = Grid::new(width, height);
 
     // Pass 0a: Draw subgraph borders FIRST, outermost-to-innermost, so that
@@ -589,6 +748,13 @@ fn render_inner(
     // Same loop captures `node_rects` for label-collision avoidance later.
     let mut node_rects: Vec<(usize, usize, usize, usize)> = Vec::with_capacity(graph.nodes.len());
     for node in &graph.nodes {
+        // Composite-attached markers are layout anchors, not visible
+        // nodes. Don't mark them as routing obstacles, so edges can
+        // route to the composite's outer border without being blocked
+        // by the marker's phantom cell.
+        if externally_attached_markers.contains(&node.id) {
+            continue;
+        }
         let Some(&(col, row)) = positions.get(&node.id) else {
             continue;
         };
@@ -630,13 +796,28 @@ fn render_inner(
     let edge_effective_dirs: Vec<Direction> = graph
         .edges
         .iter()
-        .map(|edge| edge_effective_direction(graph, edge, positions))
+        .map(|edge| {
+            edge_effective_direction(
+                graph,
+                edge,
+                positions,
+                sg_bounds,
+                &externally_attached_markers,
+            )
+        })
         .collect();
 
     // Compute spread-adjusted attach points for all edges before drawing.
     // Both exit and entry points are spread so that multiple edges sharing
     // the same border cell each get their own distinct row/column.
-    let attach_points = compute_spread_attaches(graph, positions, &geoms, &edge_effective_dirs);
+    let attach_points = compute_spread_attaches(
+        graph,
+        positions,
+        &geoms,
+        sg_bounds,
+        &externally_attached_markers,
+        &edge_effective_dirs,
+    );
 
     // Pass 1: Route all edges using A* obstacle-aware routing.
     //
@@ -675,8 +856,8 @@ fn render_inner(
                 .get(idx)
                 .copied()
                 .unwrap_or(graph.direction);
-            let fp = positions.get(&e.from).copied();
-            let tp = positions.get(&e.to).copied();
+            let fp = endpoint_pos(&e.from, positions, sg_bounds, &externally_attached_markers);
+            let tp = endpoint_pos(&e.to, positions, sg_bounds, &externally_attached_markers);
             match (fp, tp) {
                 (Some(fp), Some(tp)) => is_back_edge(fp, tp, dir),
                 _ => false,
@@ -720,11 +901,21 @@ fn render_inner(
         if !edge_is_back_flags[edge_idx] {
             continue;
         }
-        if let (Some(fp), Some(fg), Some(tp), Some(tg)) = (
-            positions.get(&edge.from).copied(),
-            geoms.get(&edge.from).copied(),
-            positions.get(&edge.to).copied(),
-            geoms.get(&edge.to).copied(),
+        if let (Some((fp, fg)), Some((tp, tg))) = (
+            endpoint_geom(
+                &edge.from,
+                positions,
+                &geoms,
+                sg_bounds,
+                &externally_attached_markers,
+            ),
+            endpoint_geom(
+                &edge.to,
+                positions,
+                &geoms,
+                sg_bounds,
+                &externally_attached_markers,
+            ),
         ) {
             // For self-loops the source and destination are the same node, so
             // `sb == db`. The router places `▴` at the entry cell (which equals
@@ -944,6 +1135,13 @@ fn render_inner(
     // Pass 2: Draw node box outlines (overwrite any stray edge lines inside
     // the node boundary).
     for node in &graph.nodes {
+        // Composite-attached markers are not drawn — the edge they
+        // anchor attaches to the composite's outer border via
+        // `endpoint_geom`, and the marker itself is purely a layout
+        // anchor (suppressed visually).
+        if externally_attached_markers.contains(&node.id) {
+            continue;
+        }
         let Some(&pos) = positions.get(&node.id) else {
             continue;
         };
@@ -1054,6 +1252,10 @@ fn render_inner(
     // targets this node — the hyperlink layer is orthogonal to the char layer
     // so it can be written in the same pass without ordering concerns.
     for node in &graph.nodes {
+        // Composite-attached markers have no label and aren't drawn.
+        if externally_attached_markers.contains(&node.id) {
+            continue;
+        }
         let Some(&pos) = positions.get(&node.id) else {
             continue;
         };
@@ -1146,6 +1348,8 @@ fn compute_spread_attaches(
     graph: &Graph,
     positions: &HashMap<String, GridPos>,
     geoms: &HashMap<String, NodeGeom>,
+    sg_bounds: &[SubgraphBounds],
+    externally_attached_markers: &HashSet<String>,
     edge_effective_dirs: &[Direction],
 ) -> Vec<Option<(Attach, Attach)>> {
     // --- Build the base (unspread) attach points ---
@@ -1164,10 +1368,20 @@ fn compute_spread_attaches(
         .iter()
         .enumerate()
         .map(|(idx, edge)| {
-            let from_pos = *positions.get(&edge.from)?;
-            let to_pos = *positions.get(&edge.to)?;
-            let from_geom = *geoms.get(&edge.from)?;
-            let to_geom = *geoms.get(&edge.to)?;
+            let (from_pos, from_geom) = endpoint_geom(
+                &edge.from,
+                positions,
+                geoms,
+                sg_bounds,
+                externally_attached_markers,
+            )?;
+            let (to_pos, to_geom) = endpoint_geom(
+                &edge.to,
+                positions,
+                geoms,
+                sg_bounds,
+                externally_attached_markers,
+            )?;
             let dir = edge_effective_dirs
                 .get(idx)
                 .copied()
@@ -1219,10 +1433,13 @@ fn compute_spread_attaches(
             continue;
         }
         let first_edge = &graph.edges[indices[0]];
-        let Some(&from_pos) = positions.get(&first_edge.from) else {
-            continue;
-        };
-        let Some(&from_geom) = geoms.get(&first_edge.from) else {
+        let Some((from_pos, from_geom)) = endpoint_geom(
+            &first_edge.from,
+            positions,
+            geoms,
+            sg_bounds,
+            externally_attached_markers,
+        ) else {
             continue;
         };
         let reorder_for_lr_fanout = source_reordering_allowed(graph, indices);
@@ -1261,10 +1478,13 @@ fn compute_spread_attaches(
         // All edges in this group arrive at the same border cell on the same node.
         // Identify the target node and its geometry so we know the spread bounds.
         let first_edge = &graph.edges[indices[0]];
-        let Some(&to_pos) = positions.get(&first_edge.to) else {
-            continue;
-        };
-        let Some(&to_geom) = geoms.get(&first_edge.to) else {
+        let Some((to_pos, to_geom)) = endpoint_geom(
+            &first_edge.to,
+            positions,
+            geoms,
+            sg_bounds,
+            externally_attached_markers,
+        ) else {
             continue;
         };
         let interior_clamp_for_lr = destination_interior_clamp_allowed(graph, indices);
