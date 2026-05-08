@@ -3,6 +3,30 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.52.0 — 2026-05-08 — xychart-beta mixed-width label drift fixed
+
+### Fixed
+
+- **xychart-beta x-axis labels of mixed display widths now align
+  consistently within their tick slots.** Previously,
+  `(col_width - lw) / 2` integer division gave width-2 labels (e.g.
+  `c0..c9`) a different `left_pad` than width-3 labels (e.g.
+  `c10..c14`) in the same slot when there was a parity mismatch — the
+  first character of each label drifted by ±1 cell at the
+  width-boundary, breaking the visual tick-to-label alignment. The
+  fix right-pads every label to the maximum display width across the
+  axis BEFORE slot centring, so the first character of every label
+  lands at the same offset within its slot and consecutive label
+  start positions are exactly `col_width` apart. Pinned by
+  `xychart_mixed_width_labels_align_consistently` — hand-written
+  assertion that the c0→c1 start-column distance equals the c9→c10
+  distance for every consecutive pair on a `c0..c14` fixture.
+
+### Snapshot churn
+
+0. The canonical xychart fixture uses uniform-width labels (`jan`,
+`feb`, …, `dec`) so its output is byte-identical to 0.51.0.
+
 ## 0.51.0 — 2026-05-08 — Sequence activation bars render as thick filled blocks
 
 ### Changed
