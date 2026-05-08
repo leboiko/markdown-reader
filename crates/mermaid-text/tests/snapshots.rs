@@ -1467,7 +1467,6 @@ B->>A: reply";
     assert_snapshot!("sequence_note_left_of_wraps", out);
 }
 
-#[test]
 // ---------------------------------------------------------------------------
 // Activation bars must render as a thick filled block, not a single-cell
 // heavy line. ROADMAP: "Wider activation bars … filled thick bar".
@@ -1497,8 +1496,9 @@ deactivate API";
     );
 }
 
+#[test]
 fn sequence_with_explicit_activation() {
-    // `activate X` / `deactivate X` overlay heavy `┃` bars on the
+    // `activate X` / `deactivate X` overlay filled `██` bars on the
     // participant's lifeline between the activate and deactivate rows.
     let src = "sequenceDiagram
 participant U as User
@@ -1508,7 +1508,7 @@ activate API
 API->>U: 200 OK
 deactivate API";
     let out = mermaid_text::render(src).unwrap();
-    assert!(out.contains('┃'), "expected activation bar in:\n{out}");
+    assert!(out.contains('█'), "expected activation bar in:\n{out}");
     assert_snapshot!("sequence_with_explicit_activation", out);
 }
 
@@ -1526,7 +1526,7 @@ API->>+DB: SELECT user
 DB-->>-API: user record
 API-->>-U: 200 + token";
     let out = mermaid_text::render(src).unwrap();
-    assert!(out.contains('┃'), "expected activation bar in:\n{out}");
+    assert!(out.contains('█'), "expected activation bar in:\n{out}");
     assert_snapshot!("sequence_with_inline_call_reply_activation", out);
 }
 
@@ -1543,7 +1543,7 @@ deactivate B
 B->>A: outer reply
 deactivate B";
     let out = mermaid_text::render(src).unwrap();
-    assert!(out.contains('┃'));
+    assert!(out.contains('█'));
     assert_snapshot!("sequence_with_nested_activations", out);
 }
 

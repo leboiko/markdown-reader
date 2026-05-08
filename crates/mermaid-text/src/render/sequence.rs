@@ -71,9 +71,13 @@ const H_DASH: char = '┄';
 /// Lifeline character.
 const LIFELINE: char = '┆';
 
-// Activation bar — solid heavy vertical, overlays the dashed lifeline.
-// Visually distinct from `┆` so the active span reads as "executing".
-const ACTIVATION_BAR: char = '┃';
+// Activation bar — full-block glyph, drawn ACTIVATION_BAR_WIDTH cells
+// wide centred on the lifeline so the active span reads as a "filled
+// rectangle" matching Mermaid's SVG output rather than a thin heavy
+// line. The bar overlays the dashed lifeline `┆` and skips cells
+// already holding arrow/junction glyphs from messages.
+const ACTIVATION_BAR: char = '█';
+const ACTIVATION_BAR_WIDTH: usize = 2;
 
 // ---------------------------------------------------------------------------
 // Canvas
@@ -933,9 +937,15 @@ pub fn render(diag: &SequenceDiagram) -> String {
         let r0 = arrow_r0.saturating_sub(1).max(BOX_HEIGHT);
         let (lo, hi) = if r0 <= r1 { (r0, r1) } else { (r1, r0) };
         for r in lo..=hi {
-            let cell = canvas.grid[r][cx];
-            if cell == LIFELINE || cell == ' ' {
-                canvas.put(r, cx, ACTIVATION_BAR);
+            for dx in 0..ACTIVATION_BAR_WIDTH {
+                let col = cx + dx;
+                if col >= canvas.width {
+                    break;
+                }
+                let cell = canvas.grid[r][col];
+                if cell == LIFELINE || cell == ' ' {
+                    canvas.put(r, col, ACTIVATION_BAR);
+                }
             }
         }
     }
