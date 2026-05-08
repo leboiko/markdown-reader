@@ -2811,6 +2811,69 @@ fn xychart_beta_canonical_example() {
 }
 
 // ---------------------------------------------------------------------------
+// xychart-beta — labels of mixed display widths (e.g. `c0..c9` width 2 and
+// `c10..c14` width 3) must align consistently within their tick slots.
+// Today's centering logic (`col_width.saturating_sub(lw) / 2`) gives a
+// different left-pad to width-2 vs width-3 labels in the same slot width
+// when there's a parity mismatch, causing labels to drift ±1 cell across
+// the axis. ROADMAP "xychart-beta mixed-width label centering".
+// Hand-written assertion (not snapshot) so the drift can't be silently
+// re-blessed.
+// ---------------------------------------------------------------------------
+#[test]
+fn xychart_mixed_width_labels_align_consistently() {
+    let src = "xychart-beta
+    title \"Mixed-width labels\"
+    x-axis [c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14]
+    y-axis \"Y\" 0 --> 10
+    bar [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5]";
+    let out = mermaid_text::render(src).unwrap();
+
+    let label_row = out
+        .lines()
+        .find(|l| l.contains("c14") && l.contains("c0"))
+        .expect("could not locate x-axis label row");
+
+    // Find the start column of each `cN` label by scanning chars.
+    let chars: Vec<char> = label_row.chars().collect();
+    let mut positions: Vec<usize> = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == 'c' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit() {
+            positions.push(i);
+            i += 1;
+            while i < chars.len() && chars[i].is_ascii_digit() {
+                i += 1;
+            }
+        } else {
+            i += 1;
+        }
+    }
+
+    assert_eq!(
+        positions.len(),
+        15,
+        "expected 15 labels c0..c14 in label row, found {} — row was {label_row:?}",
+        positions.len()
+    );
+
+    // All consecutive label start distances should be equal — that's the
+    // tick-to-tick `col_width`. The drift bug makes the c9→c10 distance
+    // differ by 1 from c0→c1 (because c9 is width-2 and c10 is width-3,
+    // and current centering uses different left_pad for each).
+    let distances: Vec<usize> = positions.windows(2).map(|w| w[1] - w[0]).collect();
+    let first = distances[0];
+    for (idx, &d) in distances.iter().enumerate() {
+        assert_eq!(
+            d, first,
+            "label start position drifts at slot {idx}: c{idx}→c{} distance is {d}, \
+             but c0→c1 distance is {first}. Full row: {label_row:?}",
+            idx + 1
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // xychart-beta — every data point must show a `●` marker.
 //
 //     Regression guard against asymmetric line markers. Pre-fix
