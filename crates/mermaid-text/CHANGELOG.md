@@ -3,6 +3,36 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.56.0 — 2026-05-11 — Sequence-diagram polish basket (self-messages, stacked activations, box groups)
+
+### Added
+
+- **Self-messages (`A->>A: text`) render as a U-shape loop** to the right of
+  the lifeline column. The three-row glyph (`├──┐` / vertical bar / `├◂──┘`)
+  keeps the label above the top leg and leaves the lifeline intact above and
+  below the loop.
+
+- **Stacked nested activations.** When `activate X` is called while X is
+  already active, the second activation bar is drawn immediately to the right
+  of the first (`ACTIVATION_BAR_WIDTH + 1` offset) so the two bars read as
+  distinct side-by-side filled rectangles rather than overlapping on the same
+  column. Triple (and deeper) nesting offsets each additional bar one step
+  further right.
+
+- **`box [colour] "label" ... end` participant grouping.** Wraps a subset of
+  participants in an outer labelled rectangle drawn above the header boxes and
+  mirrored below the footer boxes. Accepted colour forms match the `rect`
+  palette (rgb, rgba, #hex, CSS names; mapped to the same luminance-keyed
+  shade glyph). The box keyword is participant-scope: once any message line
+  appears, `box` is no longer accepted.
+
+### Snapshot churn
+
+0 existing snapshots reclassified. 3 new snapshots pinned:
+  - `self_message_u_shape`
+  - `nested_activations_stack_horizontally`
+  - `box_groups_participants_with_label`
+
 ## 0.55.0 — 2026-05-11 — `rect` colour background highlight blocks
 
 ### Added

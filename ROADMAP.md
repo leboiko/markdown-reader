@@ -99,9 +99,10 @@ mermaid-text 0.30.0; the regression tests live at
   edge-routing logic.
 - **Sequence-diagram polish follow-ups** — All small, all gated on user
   reports:
-  - **Wider activation bars** — currently single-cell-thick borders.
-    A real "filled thick bar" needs a multi-row block-fill primitive.
-    (Block-frame interior fills shipped in mermaid-text 0.54.0.)
+  - ~~**Wider activation bars**~~ — shipped in 0.54.0 (filled `██` block glyph).
+  - ~~**Self-messages (`A->>A`)**~~ — shipped in 0.56.0 as U-shape right-loop.
+  - ~~**Stacked nested activations**~~ — shipped in 0.56.0 (side-by-side bars).
+  - ~~**`box` participant grouping**~~ — shipped in 0.56.0 (labelled outer rect).
 - **`xychart-beta` mixed-width label centering** — when a chart mixes
   short and longer labels (e.g. `c0..c9` then `c10..c14`), label slots
   remain aligned but the label characters within the slots drift by
