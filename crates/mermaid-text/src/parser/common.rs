@@ -428,7 +428,7 @@ pub(crate) fn continuation_keyword_for(kind: BlockKind) -> Option<&'static str> 
         BlockKind::Alt => Some("else"),
         BlockKind::Par => Some("and"),
         BlockKind::Critical => Some("option"),
-        BlockKind::Loop | BlockKind::Opt | BlockKind::Break => None,
+        BlockKind::Loop | BlockKind::Opt | BlockKind::Break | BlockKind::Rect { .. } => None,
     }
 }
 

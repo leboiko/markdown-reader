@@ -27,6 +27,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::sequence::{
     AutonumberState, Block, BlockKind, MessageStyle, NoteAnchor, SequenceDiagram,
 };
+use crate::types::Rgb;
 
 // ---------------------------------------------------------------------------
 // Layout constants (mirroring termaid's naming conventions)
@@ -960,7 +961,11 @@ pub fn render(diag: &SequenceDiagram) -> String {
     //    Interior bounds are collected first; the shade fill is applied in a
     //    separate pass (step 6) AFTER all borders and labels are committed so
     //    that inner-frame labels are never overwritten by an outer-frame fill.
+    //    Rect blocks skip draw_block_frame entirely and are collected into a
+    //    separate vec for a post-fill pass (step 7).
     let mut frame_interiors: Vec<(usize, usize, usize, usize)> = Vec::new();
+    // (top, bottom, left, right, shade_glyph)
+    let mut rect_interiors: Vec<(usize, usize, usize, usize, char)> = Vec::new();
     let mut label_rows: std::collections::HashSet<usize> = std::collections::HashSet::new();
     for (i, b) in diag.blocks.iter().enumerate() {
         // Empty block (no inner messages) — nothing to draw.
@@ -982,6 +987,14 @@ pub fn render(diag: &SequenceDiagram) -> String {
         if top == 0 || bottom == 0 || top >= bottom {
             continue;
         }
+
+        // Rect blocks are borderless background fills — no frame drawn.
+        if let BlockKind::Rect { rgb, alpha } = b.kind {
+            let glyph = rect_shade_glyph(rgb, alpha);
+            rect_interiors.push((top, bottom, left, right, glyph));
+            continue;
+        }
+
         let kind_label = block_kind_label(b.kind);
         let opener_label = b.branches.first().map(|br| br.label.as_str()).unwrap_or("");
         // Branch dividers (continuations only — first branch has no
@@ -1029,6 +1042,24 @@ pub fn render(diag: &SequenceDiagram) -> String {
             for c in (left + 1)..right {
                 if canvas.grid[r][c] == ' ' {
                     canvas.put(r, c, '\u{2591}');
+                }
+            }
+        }
+    }
+
+    // 7. Rect fill — applied after the frame-interior fill so that a rect
+    //    nested inside a loop can overwrite the loop's `░` with a denser
+    //    glyph.  Replace cell when: space, OR existing shade is lighter than
+    //    the rect's shade (░ → ▒/▓, ▒ → ▓).
+    for (top, bottom, left, right, glyph) in rect_interiors {
+        for r in (top + 1)..bottom {
+            for c in (left + 1)..right {
+                let cell = canvas.grid[r][c];
+                let should_replace = cell == ' '
+                    || (cell == '\u{2591}' && (glyph == '\u{2592}' || glyph == '\u{2593}'))
+                    || (cell == '\u{2592}' && glyph == '\u{2593}');
+                if should_replace {
+                    canvas.put(r, c, glyph);
                 }
             }
         }
@@ -1091,6 +1122,24 @@ fn block_kind_label(kind: BlockKind) -> &'static str {
         BlockKind::Par => "par",
         BlockKind::Critical => "critical",
         BlockKind::Break => "break",
+        BlockKind::Rect { .. } => "",
+    }
+}
+
+/// Choose the fill glyph for a `rect` block using a luminance-keyed 3-step
+/// palette.  Effective intensity `I = (255 - luminance) * alpha_norm` where
+/// luminance uses the Rec. 601 weights (0.299 R + 0.587 G + 0.114 B).
+fn rect_shade_glyph(rgb: Rgb, alpha: Option<u8>) -> char {
+    let Rgb(r, g, b) = rgb;
+    let luminance = 0.299 * f32::from(r) + 0.587 * f32::from(g) + 0.114 * f32::from(b);
+    let alpha_norm = alpha.map_or(1.0_f32, |a| f32::from(a) / 255.0);
+    let intensity = (255.0 - luminance) * alpha_norm;
+    if intensity < 60.0 {
+        '\u{2591}' // light shade
+    } else if intensity < 130.0 {
+        '\u{2592}' // medium shade
+    } else {
+        '\u{2593}' // dark shade
     }
 }
 

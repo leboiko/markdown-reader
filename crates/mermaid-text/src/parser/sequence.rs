@@ -26,6 +26,7 @@ use crate::sequence::{
     Activation, AutonumberChange, AutonumberState, Block, BlockBranch, BlockKind, Message,
     MessageStyle, NoteEvent, Participant, SequenceDiagram,
 };
+use crate::types::Rgb;
 use std::collections::HashMap;
 
 /// Internal event collected during the parse loop. Activations are
@@ -280,7 +281,18 @@ pub fn parse(src: &str) -> Result<SequenceDiagram, Error> {
             continue;
         }
         if head == "rect" {
-            // Background-highlight colour form — ROADMAP-deferred.
+            let colour_str = strip_keyword_prefix(line, "rect").unwrap_or("").trim();
+            let (rgb, alpha) = parse_rect_colour(colour_str);
+            let at = diag.messages.len();
+            block_stack.push(OpenBlock {
+                kind: BlockKind::Rect { rgb, alpha },
+                start_message: at,
+                branches: vec![BlockBranch {
+                    label: String::new(),
+                    start_message: at,
+                    end_message: 0,
+                }],
+            });
             continue;
         }
 
@@ -490,6 +502,65 @@ fn try_parse_message(line: &str) -> Option<(Message, Option<bool>)> {
         }
     }
     None
+}
+
+/// Parse the colour argument of a `rect` directive into `(Rgb, Option<u8>)`.
+///
+/// Accepted forms (primary, per Mermaid spec): `rgb(R, G, B)`, `rgba(R, G, B, A)`.
+/// Best-effort: `#RRGGBB` / `#RGB` hex, bare CSS names (falls back to mid-grey).
+/// Alpha from `rgba` is normalised to u8 (decimal 0-255 or percentage 0-100%).
+fn parse_rect_colour(s: &str) -> (Rgb, Option<u8>) {
+    let s = s.trim();
+    let lower = s.to_lowercase();
+
+    // rgba(R, G, B, A)
+    if let Some(inner) = lower
+        .strip_prefix("rgba(")
+        .and_then(|t| t.strip_suffix(')'))
+    {
+        let parts: Vec<&str> = inner.split(',').map(str::trim).collect();
+        if parts.len() == 4 {
+            let r = parts[0].parse::<u8>().ok();
+            let g = parts[1].parse::<u8>().ok();
+            let b = parts[2].parse::<u8>().ok();
+            let a_str = parts[3];
+            let alpha = if let Some(pct) = a_str.strip_suffix('%') {
+                pct.trim()
+                    .parse::<f32>()
+                    .ok()
+                    .map(|v| (v / 100.0 * 255.0) as u8)
+            } else {
+                a_str.parse::<u8>().ok().or_else(|| {
+                    // float in 0..1 range (e.g. "0.1")
+                    a_str.parse::<f32>().ok().map(|v| (v * 255.0) as u8)
+                })
+            };
+            if let (Some(r), Some(g), Some(b), Some(a)) = (r, g, b, alpha) {
+                return (Rgb(r, g, b), Some(a));
+            }
+        }
+    }
+
+    // rgb(R, G, B)
+    if let Some(inner) = lower.strip_prefix("rgb(").and_then(|t| t.strip_suffix(')')) {
+        let parts: Vec<&str> = inner.split(',').map(str::trim).collect();
+        if parts.len() == 3 {
+            let r = parts[0].parse::<u8>().ok();
+            let g = parts[1].parse::<u8>().ok();
+            let b = parts[2].parse::<u8>().ok();
+            if let (Some(r), Some(g), Some(b)) = (r, g, b) {
+                return (Rgb(r, g, b), None);
+            }
+        }
+    }
+
+    // Hex colour (#RGB or #RRGGBB).
+    if s.starts_with('#') && let Some(rgb) = Rgb::parse_hex(s) {
+        return (rgb, None);
+    }
+
+    // Fallback: mid-grey for unrecognised CSS names or malformed input.
+    (Rgb(128, 128, 128), None)
 }
 
 // ---------------------------------------------------------------------------
@@ -995,15 +1066,42 @@ mod tests {
     }
 
     #[test]
-    fn parse_rect_block_silently_skipped() {
-        // `rect` colour-highlight blocks are ROADMAP-deferred. Parser
-        // accepts them so existing diagrams render, but no Block is
-        // recorded. The matching `end` belongs to a hypothetical
-        // outer block — but here there's none, so we just verify
-        // the `rect` keyword doesn't crash.
-        let diag = parse("sequenceDiagram\nrect rgb(200,150,255)\nA->>B: hi\nend");
-        // The standalone `end` here is an orphan (no matching `loop`/etc),
-        // so we expect an error — just confirm `rect` itself didn't error.
-        assert!(diag.is_err()); // orphan `end` after rect's silent skip
+    fn parse_rect_block_recorded() {
+        // `rect` colour-highlight blocks are now captured as BlockKind::Rect.
+        use crate::sequence::BlockKind;
+        use crate::types::Rgb;
+        let diag =
+            parse("sequenceDiagram\nrect rgb(200,150,255)\nA->>B: hi\nend").expect("valid rect");
+        assert_eq!(diag.blocks.len(), 1, "expected one block");
+        assert_eq!(
+            diag.blocks[0].kind,
+            BlockKind::Rect {
+                rgb: Rgb(200, 150, 255),
+                alpha: None
+            },
+            "block kind must be Rect with correct colour"
+        );
+        assert_eq!(
+            diag.messages.len(),
+            1,
+            "message inside rect must be recorded"
+        );
+    }
+
+    #[test]
+    fn parse_rect_rgba_block() {
+        use crate::sequence::BlockKind;
+        use crate::types::Rgb;
+        let diag = parse("sequenceDiagram\nrect rgba(0,0,0,128)\nA->>B: msg\nend")
+            .expect("valid rgba rect");
+        assert_eq!(diag.blocks.len(), 1);
+        assert_eq!(
+            diag.blocks[0].kind,
+            BlockKind::Rect {
+                rgb: Rgb(0, 0, 0),
+                alpha: Some(128)
+            },
+            "rgba alpha must be captured"
+        );
     }
 }

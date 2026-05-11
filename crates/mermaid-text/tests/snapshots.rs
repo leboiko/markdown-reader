@@ -3402,3 +3402,168 @@ fn architecture_beta_diagram38_compact_vertical_spacing() {
          layer_gap=6 adds 3 extra for a total of 6).\n\nFull output:\n{out}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// rect colour background highlight blocks (mermaid-text 0.55.0)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn rect_rgb_block_renders_as_borderless_fill() {
+    let src = "sequenceDiagram
+participant A
+participant B
+rect rgb(0, 0, 0)
+A->>B: hi
+end";
+    let out = mermaid_text::render(src).unwrap();
+
+    // rect is borderless — no box-drawing corners anywhere in the output.
+    assert_eq!(
+        out.chars().filter(|&c| c == '\u{2554}').count(),
+        0,
+        "rect must produce zero top-left corner glyphs (╔) — found some:\n{out}"
+    );
+    assert_eq!(
+        out.chars().filter(|&c| c == '\u{2557}').count(),
+        0,
+        "rect must produce zero top-right corner glyphs (╗) — found some:\n{out}"
+    );
+    assert_eq!(
+        out.chars().filter(|&c| c == '\u{255A}').count(),
+        0,
+        "rect must produce zero bottom-left corner glyphs (╚) — found some:\n{out}"
+    );
+    assert_eq!(
+        out.chars().filter(|&c| c == '\u{255D}').count(),
+        0,
+        "rect must produce zero bottom-right corner glyphs (╝) — found some:\n{out}"
+    );
+    // No vertical rail glyphs.
+    assert_eq!(
+        out.chars().filter(|&c| c == '\u{2551}').count(),
+        0,
+        "rect must produce zero vertical rail glyphs (║) — found some:\n{out}"
+    );
+    // No [Rect] or [rect] label tag.
+    assert!(
+        !out.contains("[Rect]") && !out.contains("[rect]"),
+        "rect must not produce a [Rect] or [rect] label tag:\n{out}"
+    );
+    // Black opaque -> I = 255 -> dark shade glyph.
+    assert!(
+        out.chars().filter(|&c| c == '\u{2593}').count() > 0,
+        "rect rgb(0,0,0) must produce at least one dark-shade glyph (\u{2593}):\n{out}"
+    );
+    // Message text appears exactly once.
+    assert_eq!(
+        out.matches("hi").count(),
+        1,
+        "message text 'hi' must appear exactly once:\n{out}"
+    );
+    // Arrow tip appears at least once.
+    assert!(
+        out.contains('\u{25B8}'),
+        "solid arrow tip (\u{25B8}) must appear at least once:\n{out}"
+    );
+    assert_snapshot!("rect_rgb_block_renders_as_borderless_fill", out);
+}
+
+#[test]
+fn rect_alpha_distinguishes_from_opaque() {
+    let opaque_src = "sequenceDiagram
+participant A
+participant B
+rect rgb(0, 0, 0)
+A->>B: msg
+end";
+    let alpha_src = "sequenceDiagram
+participant A
+participant B
+rect rgba(0, 0, 0, 26)
+A->>B: msg
+end";
+    let opaque = mermaid_text::render(opaque_src).unwrap();
+    let alpha = mermaid_text::render(alpha_src).unwrap();
+
+    // Opaque black -> I = 255 -> dark shade only.
+    assert!(
+        opaque.chars().filter(|&c| c == '\u{2593}').count() > 0,
+        "opaque rgb(0,0,0) must contain dark-shade (\u{2593}):\n{opaque}"
+    );
+    assert_eq!(
+        opaque.chars().filter(|&c| c == '\u{2591}').count(),
+        0,
+        "opaque rgb(0,0,0) must contain zero light-shade (\u{2591}):\n{opaque}"
+    );
+    // Black alpha 26/255 ~ 0.1 -> I = 255 * 0.1 = 25.5 -> light shade only.
+    assert!(
+        alpha.chars().filter(|&c| c == '\u{2591}').count() > 0,
+        "rgba(0,0,0,26) must contain light-shade (\u{2591}):\n{alpha}"
+    );
+    assert_eq!(
+        alpha.chars().filter(|&c| c == '\u{2593}').count(),
+        0,
+        "rgba(0,0,0,26) must contain zero dark-shade (\u{2593}):\n{alpha}"
+    );
+    // Both contain the message text.
+    assert!(
+        opaque.contains("msg"),
+        "opaque render must contain message text:\n{opaque}"
+    );
+    assert!(
+        alpha.contains("msg"),
+        "alpha render must contain message text:\n{alpha}"
+    );
+    assert_snapshot!("rect_alpha_opaque", opaque);
+    assert_snapshot!("rect_alpha_transparent", alpha);
+}
+
+#[test]
+fn rect_nested_inside_loop() {
+    let src = "sequenceDiagram
+participant A
+participant B
+loop daily
+rect rgb(0, 255, 0)
+A->>B: tick
+end
+end";
+    let out = mermaid_text::render(src).unwrap();
+
+    // Outer loop frame still renders with its label and borders.
+    assert!(
+        out.contains("[loop]"),
+        "outer loop frame must have [loop] label:\n{out}"
+    );
+    assert!(
+        out.chars().any(|c| c == '\u{2554}'),
+        "outer loop frame must have top-left corner (\u{2554}):\n{out}"
+    );
+    assert!(
+        out.chars().any(|c| c == '\u{255A}'),
+        "outer loop frame must have bottom-left corner (\u{255A}):\n{out}"
+    );
+    // Bright green opaque: luminance = 0.587*255 = ~150 -> I = (255-150)*1 = 105 -> medium shade.
+    let medium_count = out.chars().filter(|&c| c == '\u{2592}').count();
+    assert!(
+        medium_count > 0,
+        "rect rgb(0,255,0) must produce medium-shade (\u{2592}) inside rect span:\n{out}"
+    );
+    // The outer loop's frame_interiors fill produces light-shade cells OUTSIDE the rect.
+    // Both glyphs must appear: light-shade from loop exterior, medium-shade from rect interior.
+    let light_count = out.chars().filter(|&c| c == '\u{2591}').count();
+    assert!(
+        light_count > 0,
+        "outer loop fill must produce light-shade (\u{2591}) outside the rect span:\n{out}"
+    );
+    // No double-bordering: the output must not contain consecutive lines both starting with ╔.
+    let lines: Vec<&str> = out.lines().collect();
+    let consecutive_top_corners = lines
+        .windows(2)
+        .any(|w| w[0].contains('\u{2554}') && w[1].contains('\u{2554}'));
+    assert!(
+        !consecutive_top_corners,
+        "consecutive lines with \u{2554} detected — double-bordering:\n{out}"
+    );
+    assert_snapshot!("rect_nested_inside_loop", out);
+}

@@ -68,8 +68,11 @@ the historical source of truth.
   path fixed so manual tag rebuilds actually produce binaries (1.34.43).
 - **Block-frame interior fill primitive (May 8, 2026)** — `loop`/`alt`/`opt`/
   `par`/`critical`/`break` block-frame interiors now filled with `░`
-  (U+2591) on otherwise-empty cells (mermaid-text 0.54.0). Substrate for
-  0.55.0 `rect <colour>` background blocks.
+  (U+2591) on otherwise-empty cells (mermaid-text 0.54.0).
+- **`rect <colour>` background highlight blocks (May 11, 2026)** —
+  `rect rgb(R,G,B)` and `rect rgba(R,G,B,A)` in sequence diagrams rendered
+  as borderless fills with luminance-keyed 3-step shade palette (mermaid-text
+  0.55.0).
 
 ---
 
@@ -99,9 +102,6 @@ mermaid-text 0.30.0; the regression tests live at
   - **Wider activation bars** — currently single-cell-thick borders.
     A real "filled thick bar" needs a multi-row block-fill primitive.
     (Block-frame interior fills shipped in mermaid-text 0.54.0.)
-  - **`rect <colour>` background highlight blocks** — Mermaid's grammar
-    can't express hex colours easily, and ANSI bg-tinting fights the
-    layered colour system; defer until a clear request comes in.
 - **`xychart-beta` mixed-width label centering** — when a chart mixes
   short and longer labels (e.g. `c0..c9` then `c10..c14`), label slots
   remain aligned but the label characters within the slots drift by

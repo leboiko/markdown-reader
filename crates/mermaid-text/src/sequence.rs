@@ -212,6 +212,16 @@ pub enum BlockKind {
     Critical,
     /// `break <label>` — single branch.
     Break,
+    /// `rect rgb(R, G, B)` / `rect rgba(R, G, B, A)` — borderless background
+    /// fill block.  Rendered as a shade-glyph fill keyed by luminance; no
+    /// border, no label tag.
+    Rect {
+        /// Base colour of the background fill.
+        rgb: crate::types::Rgb,
+        /// Alpha channel, normalised to 0..=255.  `None` means fully opaque
+        /// (equivalent to `rgba(..., 255)` but encoded from `rgb(...)`).
+        alpha: Option<u8>,
+    },
 }
 
 /// State of the `autonumber` directive at a particular point in the
