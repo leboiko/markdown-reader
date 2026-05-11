@@ -73,6 +73,20 @@ the historical source of truth.
   `rect rgb(R,G,B)` and `rect rgba(R,G,B,A)` in sequence diagrams rendered
   as borderless fills with luminance-keyed 3-step shade palette (mermaid-text
   0.55.0).
+- **Sequence-diagram polish basket (May 11, 2026)** — Self-message U-shape
+  arrows, stacked nested activations (outer anchors at lifeline, inner
+  offsets right), and `box [colour] "label" ... end` participant grouping
+  with optional CSS colour (mermaid-text 0.56.0).
+- **Composite-edge attach-to-border (May 8, 2026)** — Edges from outside
+  a composite state attach to the composite's outer rectangle border
+  instead of the synthesised inner marker, via render-time intercept
+  (`compute_externally_attached_markers` + `endpoint_geom` redirect to
+  `SubgraphBounds`). Parser rewrite kept for layered-layout coherence
+  (mermaid-text 0.53.0).
+- **xychart-beta mixed-width label centering (May 7, 2026)** — Labels of
+  mixed display width (e.g. `c0..c9` then `c10..c14`) are pre-padded to
+  the maximum width before slot centering, eliminating ±1 cell drift
+  from integer-division (mermaid-text 0.52.0).
 
 ---
 
@@ -89,27 +103,10 @@ mermaid-text 0.30.0; the regression tests live at
 
 ### Medium projects (1-3 sessions)
 
-- **Composite-edge attach-to-border (state diagrams)** — Today
-  `Composite --> X` is rewritten at parse time to point at the composite's
-  synthesised inner `[*]` end. Works, but the arrow lands on the inner
-  marker rather than the composite border. A renderer extension that lets
-  edges target subgraph IDs (currently silently dropped — see
-  `crates/mermaid-text/src/render/unicode.rs:477`) would let the arrow
-  attach to the border like Mermaid's own renderer does. Needs new
-  edge-routing logic.
-- **Sequence-diagram polish follow-ups** — All small, all gated on user
-  reports:
-  - ~~**Wider activation bars**~~ — shipped in 0.54.0 (filled `██` block glyph).
-  - ~~**Self-messages (`A->>A`)**~~ — shipped in 0.56.0 as U-shape right-loop.
-  - ~~**Stacked nested activations**~~ — shipped in 0.56.0 (side-by-side bars).
-  - ~~**`box` participant grouping**~~ — shipped in 0.56.0 (labelled outer rect).
-- **`xychart-beta` mixed-width label centering** — when a chart mixes
-  short and longer labels (e.g. `c0..c9` then `c10..c14`), label slots
-  remain aligned but the label characters within the slots drift by
-  ±1 cell because integer-division centering can't perfectly centre
-  odd-width labels in even-width slots. Fix would need half-cell-aware
-  centering or padded-to-uniform-width labels. Same-width labels (the
-  common case) are unaffected.
+_(Empty — composite-edge attach-to-border, the sequence-diagram polish
+basket, and xychart-beta mixed-width label centering all shipped between
+0.52.0 and 0.56.0. Pick from "Bigger ideas" below or surface a new
+feature from CHANGELOG follow-ups.)_
 
 ---
 
