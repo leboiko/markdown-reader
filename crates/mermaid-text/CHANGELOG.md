@@ -3,6 +3,40 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.55.0 — 2026-05-11 — `rect` colour background highlight blocks
+
+### Added
+
+- **`rect rgb(R, G, B)` and `rect rgba(R, G, B, A)` in sequence diagrams.**
+  Previously these were silently discarded; they are now parsed and rendered
+  as borderless background fills over the messages they enclose.
+
+  Accepted colour forms: `rgb(R, G, B)`, `rgba(R, G, B, A)` (primary),
+  `#RRGGBB` / `#RGB` hex (best-effort), bare CSS name (falls back to
+  mid-grey `Rgb(128, 128, 128)`).
+
+  Fill glyph is chosen by luminance-keyed 3-step palette:
+
+  | Effective intensity I                         | Glyph |
+  |-----------------------------------------------|-------|
+  | `I < 60`                                      | `░`   |
+  | `60 <= I < 130`                               | `▒`   |
+  | `I >= 130`                                    | `▓`   |
+
+  Where `I = (255 - luminance(rgb)) * alpha_norm`, luminance from Rec. 601
+  (`0.299*R + 0.587*G + 0.114*B`), `alpha_norm = 1.0` for `rgb(...)` or
+  `alpha_u8 / 255.0` for `rgba(...)`.
+
+  `rect` blocks are **borderless**: no `╔ ╗ ╚ ╝` corners, no `║` rails,
+  no `[Rect]` label tag. When a `rect` is nested inside a `loop` / `alt` /
+  etc., the outer frame's `░` fill cells are overwritten with the denser
+  `▒` or `▓` glyph where warranted.
+
+### Snapshot churn
+
+0 existing snapshots reclassified. 3 new snapshots added for the three
+new `rect`-specific tests.
+
 ## 0.54.0 — 2026-05-08 — Block-frame interior fill primitive
 
 ### Added
