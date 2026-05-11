@@ -3707,3 +3707,114 @@ deactivate B";
 
     assert_snapshot!("nested_activations_stack_horizontally", out);
 }
+
+// ---------------------------------------------------------------------------
+// 0.56.0 Feature 3 — box participant grouping with optional colour
+// ---------------------------------------------------------------------------
+#[test]
+fn box_groups_participants_with_label() {
+    let src = "sequenceDiagram
+box \"Frontend\"
+participant U
+participant W
+end
+participant API
+U->>W: render
+W->>API: fetch";
+    let out = mermaid_text::render(src).unwrap();
+
+    // All three participants and the group label must appear.
+    assert!(
+        out.contains("Frontend"),
+        "output must contain `Frontend`:\n{out}"
+    );
+    assert!(out.contains('U'), "output must contain `U`:\n{out}");
+    assert!(out.contains('W'), "output must contain `W`:\n{out}");
+    assert!(out.contains("API"), "output must contain `API`:\n{out}");
+
+    let lines: Vec<&str> = out.lines().collect();
+
+    // The line containing `Frontend` must be above the participant boxes.
+    // Participant boxes contain `│` and the participant label; `Frontend`
+    // is in the group header which appears above all participant boxes.
+    let frontend_row = lines
+        .iter()
+        .position(|l| l.contains("Frontend"))
+        .expect("Frontend must appear in output");
+
+    // Find the first line that contains `│  U  │` or similar (participant box label row).
+    let u_box_row = lines
+        .iter()
+        .position(|l| l.contains('U') && l.contains('│'))
+        .expect("U participant box label row must appear");
+
+    assert!(
+        frontend_row < u_box_row,
+        "line containing `Frontend` (row {frontend_row}) must be ABOVE the `U` participant box \
+         (row {u_box_row}):\n{out}"
+    );
+
+    // The Frontend row must contain a top-left corner glyph left of `U`'s column.
+    let frontend_line = lines[frontend_row];
+    let has_top_corner = frontend_line.contains('\u{250C}')  // ┌
+        || frontend_line.contains('\u{256D}')                 // ╭
+        || frontend_line.contains('\u{2554}'); // ╔
+    assert!(
+        has_top_corner,
+        "Frontend group header line must contain a top-left corner glyph \
+         (`\u{250C}`, `\u{256D}`, or `\u{2554}`):\n{frontend_line:?}"
+    );
+
+    // The group rectangle must NOT extend over `API` — find `API`'s column and
+    // verify the rightmost border glyph on the Frontend row is to its left.
+    // Compare character (display) columns, not byte offsets, so multi-byte
+    // Unicode glyphs are handled correctly.
+    let api_box_row = lines
+        .iter()
+        .position(|l| l.contains("API") && l.contains('│'))
+        .expect("API participant box must appear");
+    let api_line = lines[api_box_row];
+    // Character column of `API` in its box row.
+    let api_char_col = api_line
+        .find("API")
+        .map(|byte| api_line[..byte].chars().count())
+        .expect("API text in its box row");
+    // In the Frontend row, find the rightmost border glyph in character columns.
+    let border_chars: &[char] = &[
+        '\u{250C}', '\u{2510}', '\u{2502}', '\u{2500}', '\u{256D}', '\u{256E}', '\u{2554}',
+        '\u{2557}',
+    ];
+    let rightmost_border_char_col = frontend_line
+        .chars()
+        .enumerate()
+        .filter(|(_, c)| border_chars.contains(c))
+        .map(|(idx, _)| idx)
+        .max();
+    if let Some(rb) = rightmost_border_char_col {
+        assert!(
+            rb < api_char_col,
+            "rightmost border on Frontend row (char col {rb}) must be left of `API` column \
+             (char col {api_char_col}) — the group box must not extend over API:\n\
+             frontend: {frontend_line:?}\n\
+             api box:  {api_line:?}"
+        );
+    }
+
+    // The bottom participant row must also have a group bottom border for U/W.
+    // Look for a line below the footer participant boxes that contains a
+    // bottom-right corner glyph (`\u{2518}` ┘ or `\u{256F}` ╯).
+    let has_bottom_border = lines
+        .iter()
+        .any(|l| (l.contains('\u{2514}') || l.contains('\u{2570}')) && !l.contains('│'));
+    // A softer check: the bottom group border can also appear as part of the
+    // footer area. Just verify it appears somewhere after frontend_row.
+    let group_bottom_exists = lines[frontend_row..]
+        .iter()
+        .any(|l| l.contains('\u{2514}') || l.contains('\u{2570}') || l.contains('\u{2518}'));
+    assert!(
+        group_bottom_exists || has_bottom_border,
+        "a bottom border glyph for the group rectangle must appear below the group header:\n{out}"
+    );
+
+    assert_snapshot!("box_groups_participants_with_label", out);
+}

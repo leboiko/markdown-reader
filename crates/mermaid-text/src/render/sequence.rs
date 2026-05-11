@@ -25,7 +25,7 @@
 use unicode_width::UnicodeWidthStr;
 
 use crate::sequence::{
-    AutonumberState, Block, BlockKind, MessageStyle, NoteAnchor, SequenceDiagram,
+    AutonumberState, Block, BlockKind, MessageStyle, NoteAnchor, ParticipantGroup, SequenceDiagram,
 };
 use crate::types::Rgb;
 
@@ -582,6 +582,58 @@ fn draw_self_message(canvas: &mut Canvas, cx: usize, row: usize, text: &str, sty
     canvas.put(row + 2, right, '┘');
 }
 
+/// Draw a participant group frame: a top-border line at `top_row` and a
+/// bottom-border line at `bottom_row` spanning the group's member columns.
+///
+/// Uses `┌─[Label]──┐` / `└──────────┘` corners (square, distinct from block
+/// frames which use double-line `╔╗╚╝` and notes which use rounded `╭╮╰╯`).
+/// The label is embedded in the top-border 2 cells from the left corner.
+fn draw_participant_group_frame(
+    canvas: &mut Canvas,
+    grp: &ParticipantGroup,
+    layouts: &[ParticipantLayout],
+    top_row: usize,
+    bottom_row: usize,
+) {
+    if grp.members.is_empty() {
+        return;
+    }
+    // Compute the column range spanning all member boxes.
+    let lo_idx = *grp.members.iter().min().expect("members non-empty");
+    let hi_idx = *grp.members.iter().max().expect("members non-empty");
+    if lo_idx >= layouts.len() || hi_idx >= layouts.len() {
+        return;
+    }
+    let left = layouts[lo_idx]
+        .center
+        .saturating_sub(layouts[lo_idx].box_width / 2 + 1);
+    let right = layouts[hi_idx].center + layouts[hi_idx].box_width / 2 + 1;
+    if right <= left {
+        return;
+    }
+
+    // Top border: ┌─[Label]──┐
+    canvas.put(top_row, left, '┌');
+    for c in (left + 1)..right {
+        canvas.put(top_row, c, '─');
+    }
+    canvas.put(top_row, right, '┐');
+    // Embed the label tag starting 2 cells from the left corner.
+    if !grp.label.is_empty() {
+        let tag = format!("[{}]", grp.label);
+        canvas.put_str(top_row, left + 2, &tag);
+    }
+
+    // Bottom border: └──────────┘
+    if bottom_row != top_row {
+        canvas.put(bottom_row, left, '└');
+        for c in (left + 1)..right {
+            canvas.put(bottom_row, c, '─');
+        }
+        canvas.put(bottom_row, right, '┘');
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Public render entry point
 // ---------------------------------------------------------------------------
@@ -666,7 +718,20 @@ pub fn render(diag: &SequenceDiagram) -> String {
     // Mirror the header participant boxes at the bottom of the canvas
     // (Mermaid convention — lifelines are bracketed top *and* bottom).
     // Add another `BOX_HEIGHT` rows for the footer.
-    let height = BOX_HEIGHT + body_rows + note_rows + block_rows + BOX_HEIGHT;
+    // When participant groups exist, add 1 row above the header boxes for group
+    // top-borders and 1 row below the footer boxes for group bottom-borders.
+    let group_frame_rows: usize = if diag.participant_groups.is_empty() {
+        0
+    } else {
+        1
+    };
+    let height = group_frame_rows
+        + BOX_HEIGHT
+        + body_rows
+        + note_rows
+        + block_rows
+        + BOX_HEIGHT
+        + group_frame_rows;
 
     // Canvas width: rightmost participant box right edge + 1 margin.
     let last = &layouts[n - 1];
@@ -706,19 +771,40 @@ pub fn render(diag: &SequenceDiagram) -> String {
 
     // 1. Draw participant boxes — header (top) and footer (bottom)
     //    mirror, matching Mermaid's bracketed-lifeline convention.
-    let footer_top = height - BOX_HEIGHT;
+    //    When participant groups exist, boxes are shifted down by group_frame_rows
+    //    so there is room for the group top-border row above them.
+    let header_top = group_frame_rows;
+    let footer_top = height - BOX_HEIGHT - group_frame_rows;
     for (i, p) in diag.participants.iter().enumerate() {
         let cx = layouts[i].center;
         let w = layouts[i].box_width;
-        draw_participant_box(&mut canvas, cx, w, &p.label, 0);
+        draw_participant_box(&mut canvas, cx, w, &p.label, header_top);
         draw_participant_box(&mut canvas, cx, w, &p.label, footer_top);
+    }
+
+    // 1a. Draw participant group frames above the header boxes and below the
+    //     footer boxes. Each group gets a top-border row at `header_top - 1`
+    //     (i.e. row 0 when group_frame_rows == 1) and a bottom-border row at
+    //     `footer_top + BOX_HEIGHT` (the row right after the footer boxes).
+    if group_frame_rows > 0 {
+        let group_top_row = 0usize;
+        let group_bottom_row = footer_top + BOX_HEIGHT;
+        for grp in &diag.participant_groups {
+            draw_participant_group_frame(
+                &mut canvas,
+                grp,
+                &layouts,
+                group_top_row,
+                group_bottom_row,
+            );
+        }
     }
 
     // 2. Draw lifelines between the header and footer boxes — they
     //    must terminate one row above the footer's top border so the
     //    box outline reads as a clean bracket (lifeline glyphs would
     //    otherwise punch through the `┌────┐`).
-    let lifeline_start = BOX_HEIGHT; // row right below the header
+    let lifeline_start = header_top + BOX_HEIGHT; // row right below the header
     let lifeline_end = footer_top.saturating_sub(1);
     for layout in &layouts {
         draw_lifeline(&mut canvas, layout.center, lifeline_start, lifeline_end);
@@ -731,7 +817,7 @@ pub fn render(diag: &SequenceDiagram) -> String {
     // Self-messages span `SELF_MSG_ROW_H` rows because their loop draws a
     // top leg and a bottom leg — placing the next message's label on
     // `row+1` would overlap the self-loop's bottom leg.
-    let mut arrow_row = BOX_HEIGHT + 1;
+    let mut arrow_row = header_top + BOX_HEIGHT + 1;
     let mut autonumber = AutonumberState::Off;
     let mut autonumber_cursor = 0usize;
 
@@ -937,12 +1023,12 @@ pub fn render(diag: &SequenceDiagram) -> String {
             let arrow_r0 = message_arrow_rows
                 .get(act.start_message)
                 .copied()
-                .unwrap_or(BOX_HEIGHT + 1);
+                .unwrap_or(lifeline_start + 1);
             let r1 = message_arrow_rows
                 .get(act.end_message)
                 .copied()
                 .unwrap_or_else(|| height.saturating_sub(2));
-            let r0 = arrow_r0.saturating_sub(1).max(BOX_HEIGHT);
+            let r0 = arrow_r0.saturating_sub(1).max(lifeline_start);
             let (lo, hi) = if r0 <= r1 { (r0, r1) } else { (r1, r0) };
             Some((lo, hi, pi))
         })

@@ -24,7 +24,7 @@ use crate::parser::common::{
 };
 use crate::sequence::{
     Activation, AutonumberChange, AutonumberState, Block, BlockBranch, BlockKind, Message,
-    MessageStyle, NoteEvent, Participant, SequenceDiagram,
+    MessageStyle, NoteEvent, Participant, ParticipantGroup, SequenceDiagram,
 };
 use crate::types::Rgb;
 use std::collections::HashMap;
@@ -60,6 +60,15 @@ const ARROWS: &[(&str, MessageStyle)] = &[
     ("->", MessageStyle::SolidLine),
 ];
 
+/// In-flight `box … end` group during participant-scope parsing.
+struct OpenBox {
+    label: String,
+    rgb: Option<Rgb>,
+    alpha: Option<u8>,
+    /// Participant indices collected so far for this box.
+    members: Vec<usize>,
+}
+
 /// Parse a `sequenceDiagram` source string into a [`SequenceDiagram`].
 ///
 /// The `sequenceDiagram` header line is required (the caller may pass the
@@ -86,6 +95,10 @@ pub fn parse(src: &str) -> Result<SequenceDiagram, Error> {
     let mut diag = SequenceDiagram::default();
     let mut act_events: Vec<ActEvent> = Vec::new();
     let mut block_stack: Vec<OpenBlock> = Vec::new();
+    // In-flight box group; set between `box` and `end` during participant scope.
+    let mut open_box: Option<OpenBox> = None;
+    // Once the first message is encountered, boxes are no longer accepted.
+    let mut participants_finalized = false;
 
     for raw in src.lines() {
         // Strip inline `%% comment` (outside quoted strings) before
@@ -208,13 +221,65 @@ pub fn parse(src: &str) -> Result<SequenceDiagram, Error> {
             continue;
         }
 
+        // `box [colour] "label"` — participant-scope grouping. Only accepted
+        // before the first message line; once messages start, boxes are closed.
+        // `end` inside an open box closes the box, not a message-scope block.
+        let lower = line.to_lowercase();
+        let head = lower.split_whitespace().next().unwrap_or("");
+
+        // When inside an open box, `participant`/`actor`/`end` have
+        // special meanings.
+        if let Some(ref mut ob) = open_box {
+            if let Some(rest) = strip_keyword_prefix(line, "participant")
+                .or_else(|| strip_keyword_prefix(line, "actor"))
+            {
+                let p = parse_participant_decl(rest)?;
+                let idx = if let Some(existing) = diag.participant_index(&p.id) {
+                    diag.participants[existing].label = p.label;
+                    existing
+                } else {
+                    let idx = diag.participants.len();
+                    diag.participants.push(p);
+                    idx
+                };
+                ob.members.push(idx);
+                continue;
+            }
+            if head == "end" {
+                let ob = open_box.take().expect("open_box was Some");
+                diag.participant_groups.push(ParticipantGroup {
+                    label: ob.label,
+                    rgb: ob.rgb,
+                    alpha: ob.alpha,
+                    members: ob.members,
+                });
+                continue;
+            }
+            // Any other line inside a box declaration is a parse error.
+            return Err(Error::ParseError(format!(
+                "unexpected line inside `box` group (only `participant`/`actor`/`end` \
+                 are valid inside a box): {line:?}"
+            )));
+        }
+
+        // `box` opens a participant group. Not accepted once messages start.
+        if head == "box" && !participants_finalized {
+            let rest = strip_keyword_prefix(line, "box").unwrap_or("").trim();
+            let (rgb, alpha, label) = parse_box_colour_and_label(rest);
+            open_box = Some(OpenBox {
+                label,
+                rgb,
+                alpha,
+                members: Vec::new(),
+            });
+            continue;
+        }
+
         // Block statements: `loop`/`alt`/`opt`/`par`/`critical`/`break`
         // open; `else`/`and`/`option` open additional branches inside
         // their respective parents; `end` closes the innermost open
         // block. `rect <colour>` background highlight is silently
         // skipped — its colour grammar is out of scope per ROADMAP.
-        let lower = line.to_lowercase();
-        let head = lower.split_whitespace().next().unwrap_or("");
         if let Some(kind) = block_kind_from_keyword(head) {
             // Strip the keyword prefix to extract the inline label.
             let label = strip_keyword_prefix(line, head)
@@ -318,6 +383,7 @@ pub fn parse(src: &str) -> Result<SequenceDiagram, Error> {
         //     `Activation`'s doc-comment, this preserves the canonical
         //     call/reply pattern `A->>+B; B-->>-A`)
         if let Some((msg, marker)) = try_parse_message(line) {
+            participants_finalized = true;
             let from = msg.from.clone();
             let to = msg.to.clone();
             let msg_idx = diag.messages.len();
@@ -555,12 +621,76 @@ fn parse_rect_colour(s: &str) -> (Rgb, Option<u8>) {
     }
 
     // Hex colour (#RGB or #RRGGBB).
-    if s.starts_with('#') && let Some(rgb) = Rgb::parse_hex(s) {
+    if s.starts_with('#')
+        && let Some(rgb) = Rgb::parse_hex(s)
+    {
         return (rgb, None);
     }
 
     // Fallback: mid-grey for unrecognised CSS names or malformed input.
     (Rgb(128, 128, 128), None)
+}
+
+/// Parse the colour+label portion of a `box [colour] "label"` line.
+///
+/// Returns `(Option<Rgb>, Option<u8>, label_string)`. Colour is optional —
+/// when absent the group renders without a fill shade. Label may be
+/// quoted or unquoted and may be empty.
+///
+/// Strategy: try to consume a known colour prefix (rgb/rgba/hex/#) from the
+/// start of the rest string, then treat the remainder as the label. Labels
+/// may be quoted with `"…"` — the quotes are stripped. Unquoted labels are
+/// trimmed. When no colour prefix is found, the whole remainder is the label.
+fn parse_box_colour_and_label(rest: &str) -> (Option<Rgb>, Option<u8>, String) {
+    let rest = rest.trim();
+
+    // Helper: strip outer double-quotes from a label if present.
+    let strip_quotes = |s: &str| -> String {
+        let s = s.trim();
+        if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 {
+            s[1..s.len() - 1].to_string()
+        } else {
+            s.to_string()
+        }
+    };
+
+    let lower = rest.to_lowercase();
+
+    // Try rgba(…) prefix.
+    if lower.starts_with("rgba(")
+        && let Some(close) = rest.find(')')
+    {
+        let colour_str = &rest[..=close];
+        let label_part = rest[close + 1..].trim();
+        let (rgb, alpha) = parse_rect_colour(colour_str);
+        return (Some(rgb), alpha, strip_quotes(label_part));
+    }
+
+    // Try rgb(…) prefix.
+    if lower.starts_with("rgb(")
+        && let Some(close) = rest.find(')')
+    {
+        let colour_str = &rest[..=close];
+        let label_part = rest[close + 1..].trim();
+        let (rgb, _) = parse_rect_colour(colour_str);
+        return (Some(rgb), None, strip_quotes(label_part));
+    }
+
+    // Try hex prefix (#RRGGBB or #RGB).
+    if rest.starts_with('#') {
+        // Hex token ends at first whitespace.
+        let end = rest
+            .find(|c: char| c.is_ascii_whitespace())
+            .unwrap_or(rest.len());
+        let colour_str = &rest[..end];
+        if let Some(rgb) = Rgb::parse_hex(colour_str) {
+            let label_part = rest[end..].trim();
+            return (Some(rgb), None, strip_quotes(label_part));
+        }
+    }
+
+    // No colour found — the whole rest is the label.
+    (None, None, strip_quotes(rest))
 }
 
 // ---------------------------------------------------------------------------

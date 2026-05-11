@@ -245,6 +245,22 @@ pub struct AutonumberChange {
     pub state: AutonumberState,
 }
 
+/// A `box [colour] "label" ... end` participant group, drawn as an outer
+/// labelled rectangle around a contiguous subset of participants at the
+/// top and bottom of the diagram.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParticipantGroup {
+    /// Display label shown in the top-left tab of the group rectangle.
+    pub label: String,
+    /// Optional base fill colour (from the colour spec after `box`).
+    pub rgb: Option<crate::types::Rgb>,
+    /// Optional alpha channel (from `rgba(…)` form).
+    pub alpha: Option<u8>,
+    /// Indices into `SequenceDiagram::participants` of members, in
+    /// declaration order.  All indices are < participants.len().
+    pub members: Vec<usize>,
+}
+
 /// A parsed sequence diagram, ready for rendering.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SequenceDiagram {
@@ -268,6 +284,9 @@ pub struct SequenceDiagram {
     /// `autonumber` state changes ordered by `at_message`. Empty
     /// when the directive is never used.
     pub autonumber_changes: Vec<AutonumberChange>,
+    /// Participant groups declared with `box [colour] "label" … end`.
+    /// Empty when no `box` directives appear.
+    pub participant_groups: Vec<ParticipantGroup>,
 }
 
 impl SequenceDiagram {
