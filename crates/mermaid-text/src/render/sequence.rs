@@ -956,6 +956,12 @@ pub fn render(diag: &SequenceDiagram) -> String {
     //    last so side rails sit on top of lifelines / activation bars
     //    (still skipping arrow / junction glyphs to read as "behind"
     //    arrows).
+    //
+    //    Interior bounds are collected first; the shade fill is applied in a
+    //    separate pass (step 6) AFTER all borders and labels are committed so
+    //    that inner-frame labels are never overwritten by an outer-frame fill.
+    let mut frame_interiors: Vec<(usize, usize, usize, usize)> = Vec::new();
+    let mut label_rows: std::collections::HashSet<usize> = std::collections::HashSet::new();
     for (i, b) in diag.blocks.iter().enumerate() {
         // Empty block (no inner messages) — nothing to draw.
         if b.start_message > b.end_message || message_arrow_rows.get(b.start_message).is_none() {
@@ -988,6 +994,13 @@ pub fn render(diag: &SequenceDiagram) -> String {
             .map(|(j, branch)| (branch_divider_rows[i][j], branch.label.as_str()))
             .filter(|(row, _)| *row != 0)
             .collect();
+        // Record every row that carries label text so the fill pass can
+        // skip them and avoid overwriting spaces embedded in labels.
+        label_rows.insert(top);
+        label_rows.insert(bottom);
+        for &(dr, _) in &branches {
+            label_rows.insert(dr);
+        }
         draw_block_frame(
             &mut canvas,
             top,
@@ -998,6 +1011,27 @@ pub fn render(diag: &SequenceDiagram) -> String {
             opener_label,
             &branches,
         );
+        frame_interiors.push((top, bottom, left, right));
+    }
+
+    // 6. Interior fill — applied after ALL block frames and labels are
+    //    committed so that no outer-frame fill can overwrite an inner-frame
+    //    label.  Only plain space cells (`' '`) are replaced; every other
+    //    glyph (arrows, lifelines, activation bars, labels, borders) is
+    //    already non-space and is left untouched.  Rows that carry frame
+    //    labels (top borders and dividers of any frame) are skipped entirely
+    //    so embedded spaces within label text stay as spaces.
+    for (top, bottom, left, right) in frame_interiors {
+        for r in (top + 1)..bottom {
+            if label_rows.contains(&r) {
+                continue;
+            }
+            for c in (left + 1)..right {
+                if canvas.grid[r][c] == ' ' {
+                    canvas.put(r, c, '\u{2591}');
+                }
+            }
+        }
     }
 
     canvas.into_string()

@@ -66,6 +66,10 @@ the historical source of truth.
 - **Version-check on exit + release-pipeline patch** — quit-time crates.io
   upgrade banner (1.34.34), `release.yml` `workflow_dispatch` back-fill
   path fixed so manual tag rebuilds actually produce binaries (1.34.43).
+- **Block-frame interior fill primitive (May 8, 2026)** — `loop`/`alt`/`opt`/
+  `par`/`critical`/`break` block-frame interiors now filled with `░`
+  (U+2591) on otherwise-empty cells (mermaid-text 0.54.0). Substrate for
+  0.55.0 `rect <colour>` background blocks.
 
 ---
 
@@ -92,9 +96,9 @@ mermaid-text 0.30.0; the regression tests live at
   edge-routing logic.
 - **Sequence-diagram polish follow-ups** — All small, all gated on user
   reports:
-  - **Wider activation bars / block-frame fills** — both currently render
-    single-cell-thick borders. A real "filled thick bar / rectangle"
-    needs a multi-row block-fill primitive.
+  - **Wider activation bars** — currently single-cell-thick borders.
+    A real "filled thick bar" needs a multi-row block-fill primitive.
+    (Block-frame interior fills shipped in mermaid-text 0.54.0.)
   - **`rect <colour>` background highlight blocks** — Mermaid's grammar
     can't express hex colours easily, and ANSI bg-tinting fights the
     layered colour system; defer until a clear request comes in.

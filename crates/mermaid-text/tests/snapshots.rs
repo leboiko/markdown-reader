@@ -1637,6 +1637,72 @@ end";
 }
 
 // ---------------------------------------------------------------------------
+// 0.54.0 — block-frame interior fill with `░` (U+2591 LIGHT SHADE)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn block_frame_interior_is_filled_with_shade() {
+    // Reuses the same minimal loop fixture as `sequence_with_loop_block`.
+    // The interior must be filled with '░' (U+2591) on formerly-blank cells.
+    // Strong assertions — a no-op or deletion of the fill MUST fail all of them.
+    let src = "sequenceDiagram
+participant A
+participant B
+loop forever
+A->>B: tick
+end";
+    let out = mermaid_text::render(src).unwrap();
+
+    // a. At least 6 shade cells must exist (conservative lower bound for a
+    //    3-interior-row loop with padding on both sides of each lifeline).
+    let shade_count = out.chars().filter(|&c| c == '\u{2591}').count();
+    assert!(
+        shade_count >= 6,
+        "expected >= 6 '░' cells in loop interior, got {shade_count}:\n{out}"
+    );
+
+    // b. Every '░' glyph must appear on an INTERIOR row of the block frame,
+    //    i.e. NOT on the top border line (contains '╔') or the bottom border
+    //    line (contains '╚'). Collect which lines have shade vs. border corners.
+    let lines: Vec<&str> = out.lines().collect();
+    for line in &lines {
+        if line.contains('╔') || line.contains('╚') {
+            assert!(
+                !line.contains('\u{2591}'),
+                "shade glyph leaked into border row: {line:?}"
+            );
+        }
+    }
+
+    // c. No shade glyph appears on rows OUTSIDE the block frame entirely
+    //    (rows before the '╔' line or after the '╚' line).
+    let top_border_idx = lines
+        .iter()
+        .position(|l| l.contains('╔'))
+        .expect("no top border");
+    let bot_border_idx = lines
+        .iter()
+        .position(|l| l.contains('╚'))
+        .expect("no bot border");
+    for (i, line) in lines.iter().enumerate() {
+        if i < top_border_idx || i > bot_border_idx {
+            assert!(
+                !line.contains('\u{2591}'),
+                "shade glyph outside block frame at line {i}: {line:?}"
+            );
+        }
+    }
+
+    // d. The top-border corners survive — fill must not overwrite them.
+    let top_border = lines[top_border_idx];
+    assert!(top_border.contains('╔'), "top-left corner '╔' missing");
+    assert!(top_border.contains('╗'), "top-right corner '╗' missing");
+    let bot_border = lines[bot_border_idx];
+    assert!(bot_border.contains('╚'), "bot-left corner '╚' missing");
+    assert!(bot_border.contains('╝'), "bot-right corner '╝' missing");
+}
+
+// ---------------------------------------------------------------------------
 // Pie charts (0.9.4) — first full diagram-type addition since sequence in
 // 0.9.0. Renders as a horizontal bar chart in monospace text.
 // ---------------------------------------------------------------------------
