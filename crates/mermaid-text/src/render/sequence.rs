@@ -921,27 +921,52 @@ pub fn render(diag: &SequenceDiagram) -> String {
     //    (arrow_row - 1) so single-message activations still produce a
     //    visible bar even when the arrow row itself is overwritten by
     //    arrow chars.
-    for act in &diag.activations {
+    //
+    //    Nesting: when two activations on the same participant overlap in row
+    //    range, the inner bar is drawn one step to the right of the outer bar
+    //    (offset = ACTIVATION_BAR_WIDTH + 1 per nesting level) so the two
+    //    filled rectangles appear side-by-side instead of on the same column.
+    //
+    //    Pre-compute (lo, hi, participant_index) for every activation so the
+    //    nesting-depth query doesn't need to repeat the row-translation work.
+    let act_ranges: Vec<(usize, usize, usize)> = diag
+        .activations
+        .iter()
+        .filter_map(|act| {
+            let pi = diag.participant_index(&act.participant)?;
+            let arrow_r0 = message_arrow_rows
+                .get(act.start_message)
+                .copied()
+                .unwrap_or(BOX_HEIGHT + 1);
+            let r1 = message_arrow_rows
+                .get(act.end_message)
+                .copied()
+                .unwrap_or_else(|| height.saturating_sub(2));
+            let r0 = arrow_r0.saturating_sub(1).max(BOX_HEIGHT);
+            let (lo, hi) = if r0 <= r1 { (r0, r1) } else { (r1, r0) };
+            Some((lo, hi, pi))
+        })
+        .collect();
+
+    for (i, act) in diag.activations.iter().enumerate() {
         let Some(pi) = diag.participant_index(&act.participant) else {
             continue;
         };
         let cx = layouts[pi].center;
-        let arrow_r0 = message_arrow_rows
-            .get(act.start_message)
-            .copied()
-            .unwrap_or(BOX_HEIGHT + 1);
-        let r1 = message_arrow_rows
-            .get(act.end_message)
-            .copied()
-            .unwrap_or_else(|| height.saturating_sub(2));
-        // Include the label row above the activating message so the bar
-        // is at least 2 rows tall (label + arrow), guaranteeing
-        // visibility even when start == end.
-        let r0 = arrow_r0.saturating_sub(1).max(BOX_HEIGHT);
-        let (lo, hi) = if r0 <= r1 { (r0, r1) } else { (r1, r0) };
+        let (lo, hi, _) = act_ranges[i];
+        // Count activations on the same participant that strictly contain or
+        // overlap this one AND were created earlier (lower index) — that count
+        // is the horizontal stack depth for this bar.
+        let depth = act_ranges[..i]
+            .iter()
+            .filter(|&&(other_lo, other_hi, other_pi)| {
+                other_pi == pi && other_lo <= hi && other_hi >= lo
+            })
+            .count();
+        let col_offset = depth * (ACTIVATION_BAR_WIDTH + 1);
         for r in lo..=hi {
             for dx in 0..ACTIVATION_BAR_WIDTH {
-                let col = cx + dx;
+                let col = cx + col_offset + dx;
                 if col >= canvas.width {
                     break;
                 }

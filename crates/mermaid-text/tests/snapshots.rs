@@ -3648,3 +3648,62 @@ fn self_message_renders_as_u_shape() {
 
     assert_snapshot!("self_message_u_shape", out);
 }
+
+// ---------------------------------------------------------------------------
+// 0.56.0 Feature 2 — Stacked nested activations offset horizontally
+// ---------------------------------------------------------------------------
+#[test]
+fn nested_activations_stack_horizontally() {
+    let src = "sequenceDiagram
+participant A
+participant B
+A->>B: m1
+activate B
+B->>B: m2
+activate B
+B-->>A: r2
+deactivate B
+B-->>A: r1
+deactivate B";
+    let out = mermaid_text::render(src).unwrap();
+
+    // All four message labels must appear.
+    for label in &["m1", "m2", "r1", "r2"] {
+        assert!(out.contains(label), "output must contain `{label}`:\n{out}");
+    }
+
+    // Both activation bars use `\u{2588}` (full block).
+    assert!(
+        out.contains('\u{2588}'),
+        "output must contain activation-bar glyph (`\u{2588}`):\n{out}"
+    );
+
+    // Find at least one row that contains TWO distinct `\u{2588}` runs
+    // separated by at least one non-`\u{2588}` cell (or they start at
+    // different columns with a gap of 0+), meaning the bars are side-by-side.
+    let lines: Vec<&str> = out.lines().collect();
+    let has_two_bar_runs = lines.iter().any(|line| {
+        let chars: Vec<char> = line.chars().collect();
+        // Scan for at least two distinct contiguous `\u{2588}` runs.
+        let mut run_count = 0usize;
+        let mut in_run = false;
+        for &ch in &chars {
+            if ch == '\u{2588}' {
+                if !in_run {
+                    run_count += 1;
+                    in_run = true;
+                }
+            } else {
+                in_run = false;
+            }
+        }
+        run_count >= 2
+    });
+    assert!(
+        has_two_bar_runs,
+        "at least one row must contain two distinct `\u{2588}` runs (stacked activation bars \
+         should appear side-by-side, not overlapping):\n{out}"
+    );
+
+    assert_snapshot!("nested_activations_stack_horizontally", out);
+}
