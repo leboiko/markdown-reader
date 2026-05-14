@@ -77,6 +77,13 @@ the historical source of truth.
   arrows, stacked nested activations (outer anchors at lifeline, inner
   offsets right), and `box [colour] "label" ... end` participant grouping
   with optional CSS colour (mermaid-text 0.56.0).
+- **Text-backend selector exposed in config (May 14, 2026)** — The
+  `mermaid_text_backend` config field (Sugiyama default, opt-in Native,
+  new opt-in `Auto`) surfaces in `c` settings. `Auto` resolves to Native
+  only for the documented Sugiyama coverage gap (subgraph with inner
+  `direction` override), and to Sugiyama everywhere else. Scope and
+  shipping notes in `docs/scope-mermaid-backend-selection.md`
+  (markdown-tui-explorer 1.34.70).
 - **Composite-edge attach-to-border (May 8, 2026)** — Edges from outside
   a composite state attach to the composite's outer rectangle border
   instead of the synthesised inner marker, via render-time intercept

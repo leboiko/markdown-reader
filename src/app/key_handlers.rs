@@ -51,8 +51,9 @@ impl App {
         // [mermaid_start]        → Mermaid: mode Auto
         // [mermaid_start + 1]    → Mermaid: mode Text only
         // [mermaid_start + 2]    → Mermaid: mode Image only
-        // [mermaid_start + 3]    → Mermaid: text backend Sugiyama
-        // [mermaid_start + 4]    → Mermaid: text backend Native
+        // [mermaid_start + 3]    → Mermaid: text backend Auto
+        // [mermaid_start + 4]    → Mermaid: text backend Sugiyama
+        // [mermaid_start + 5]    → Mermaid: text backend Native
         const MARKDOWN_ROWS: usize = 1; // "Show line numbers"
         const PANELS_ROWS: usize = 2; // "Tree left", "Tree right"
         const SEARCH_ROWS: usize = 2; // "Full line preview", "Snippet preview"
@@ -102,10 +103,14 @@ impl App {
             // Text-mode backend choice — clear the cache so existing
             // diagrams re-render under the new layout backend on the next
             // frame.
-            self.mermaid_text_backend = crate::config::MermaidTextBackend::Sugiyama;
+            self.mermaid_text_backend = crate::config::MermaidTextBackend::Auto;
             self.mermaid_cache.clear();
             self.persist_config();
         } else if cursor == mermaid_start + 4 {
+            self.mermaid_text_backend = crate::config::MermaidTextBackend::Sugiyama;
+            self.mermaid_cache.clear();
+            self.persist_config();
+        } else if cursor == mermaid_start + 5 {
             self.mermaid_text_backend = crate::config::MermaidTextBackend::Native;
             self.mermaid_cache.clear();
             self.persist_config();

@@ -581,11 +581,75 @@ pub fn create_picker() -> Option<Picker> {
 pub const TMUX_DISABLED_REASON: &str = "disable tmux for graphics";
 
 /// Map a [`MermaidTextBackend`] config value to its [`mermaid_text`] equivalent.
-fn to_layout_backend(backend: MermaidTextBackend) -> mermaid_text::layout::LayoutBackend {
+///
+/// `Auto` is resolved against the source: when the source contains a
+/// `subgraph` block with an inner `direction` override (the shape that
+/// Sugiyama is documented to render less compactly than Native — see
+/// `RenderOptions::backend` in `mermaid-text`), `Auto` resolves to
+/// `Native`.  Every other shape resolves to `Sugiyama`.
+///
+/// The choice is conservative on purpose: Sugiyama is the library's default
+/// and handles almost every diagram cleanly, so `Auto` only deviates from it
+/// when there is a documented reason to.
+fn to_layout_backend(
+    backend: MermaidTextBackend,
+    source: &str,
+) -> mermaid_text::layout::LayoutBackend {
     match backend {
         MermaidTextBackend::Sugiyama => mermaid_text::layout::LayoutBackend::Sugiyama,
         MermaidTextBackend::Native => mermaid_text::layout::LayoutBackend::Native,
+        MermaidTextBackend::Auto => {
+            if auto_prefers_native(source) {
+                mermaid_text::layout::LayoutBackend::Native
+            } else {
+                mermaid_text::layout::LayoutBackend::Sugiyama
+            }
+        }
     }
+}
+
+/// True when the source contains a `subgraph` block that has its own
+/// `direction` line — the shape where Sugiyama is less compact than Native.
+///
+/// Detection is purely lexical: we scan the lines, increment a depth counter
+/// on each `subgraph` opener, decrement on `end`, and look for `direction`
+/// anywhere inside a non-zero-depth region.  This avoids parsing the source
+/// twice (mermaid-text would otherwise parse it again immediately after) and
+/// is robust to indentation, comments, and the various keyword forms the
+/// flowchart parser accepts.
+fn auto_prefers_native(source: &str) -> bool {
+    let mut depth: usize = 0;
+    for line in source.lines() {
+        let trimmed = line.trim_start();
+        // `subgraph FOO`, `subgraph "Foo Bar"`, or a bare `subgraph`. Match
+        // the keyword with a trailing boundary so identifiers that happen to
+        // start with `subgraph` aren't caught.
+        if let Some(rest) = trimmed.strip_prefix("subgraph")
+            && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+        {
+            depth += 1;
+            continue;
+        }
+        if depth == 0 {
+            continue;
+        }
+        // `end` (alone, or followed by whitespace / comment) closes the
+        // innermost subgraph.  Edge labels like `endorse` must not match.
+        if trimmed == "end"
+            || trimmed.starts_with("end ")
+            || trimmed.starts_with("end\t")
+            || trimmed.starts_with("end%")
+        {
+            depth -= 1;
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix("direction")
+            && rest.starts_with(char::is_whitespace)
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// Render mermaid source to Unicode box-drawing text via `mermaid-text`.
@@ -610,7 +674,7 @@ fn try_text_render(
 ) -> Result<String, String> {
     let opts = mermaid_text::RenderOptions {
         max_width,
-        backend: to_layout_backend(backend),
+        backend: to_layout_backend(backend, source),
         ..Default::default()
     };
     mermaid_text::render_with_options(source, &opts).map_err(|e| format!("{e}"))
@@ -648,7 +712,7 @@ pub fn try_text_render_with_gaps(
 ) -> Result<String, String> {
     let opts = mermaid_text::RenderOptions {
         gaps_override: Some((layer_gap, node_gap)),
-        backend: to_layout_backend(backend),
+        backend: to_layout_backend(backend, source),
         ..Default::default()
     };
     mermaid_text::render_with_options(source, &opts).map_err(|e| format!("{e}"))
@@ -1009,6 +1073,121 @@ mod tests {
             "modal `+`/`-` zoom path must honour the user's text_backend \
              choice — if equal, the argument is being dropped at the \
              try_text_render_with_gaps wrapper boundary"
+        );
+    }
+
+    // ── Auto backend resolution ──────────────────────────────────────────────
+
+    /// `auto_prefers_native` must detect the documented Sugiyama coverage
+    /// gap: a subgraph block that has an inner `direction` line.
+    #[test]
+    fn auto_prefers_native_when_subgraph_has_inner_direction() {
+        // GRAPH_LR_1 is the resilience fixture used by
+        // `backend_threads_through_render_with_options`. Its `Supervisor`
+        // subgraph carries `direction TB` inside an outer `graph LR` — the
+        // exact shape that the test docstring above (and the scope doc at
+        // docs/scope-mermaid-backend-selection.md) call out as Sugiyama's
+        // weak spot.
+        assert!(
+            auto_prefers_native(GRAPH_LR_1),
+            "GRAPH_LR_1 has a subgraph with `direction TB` inside `graph LR` \
+             — the load-bearing fixture for this heuristic. If this fails, \
+             the detection regressed or the fixture was edited."
+        );
+    }
+
+    /// A flat dependency graph (no subgraphs) must NOT trigger the Native
+    /// override — Auto should resolve to Sugiyama for the common case.
+    #[test]
+    fn auto_does_not_prefer_native_for_flat_dag() {
+        let src = "graph LR\n    A --> B\n    B --> C\n    C --> D\n";
+        assert!(
+            !auto_prefers_native(src),
+            "flat LR chains must take the Sugiyama path under Auto"
+        );
+    }
+
+    /// A subgraph WITHOUT an inner `direction` line must NOT trigger Native
+    /// — the heuristic is intentionally narrow.  Pinning this prevents the
+    /// detection from drifting into "any subgraph triggers Native" (which
+    /// would flip far too many gallery snapshots).
+    #[test]
+    fn auto_does_not_prefer_native_for_plain_subgraph() {
+        let src = "graph LR\n\
+                   subgraph cluster\n\
+                       A --> B\n\
+                   end\n\
+                   B --> C\n";
+        assert!(
+            !auto_prefers_native(src),
+            "subgraph without inner `direction` must NOT trigger Native — \
+             only the documented Sugiyama coverage gap (subgraph + inner \
+             direction) should opt in"
+        );
+    }
+
+    /// A nested `direction` inside a `subgraph` block (regardless of which
+    /// flow direction) must trigger Native. This pins the keyword
+    /// detection logic, not the specific direction value.
+    #[test]
+    fn auto_prefers_native_for_any_nested_direction_value() {
+        for dir in ["TB", "BT", "LR", "RL"] {
+            let src = format!(
+                "graph LR\n\
+                 subgraph cluster\n\
+                     direction {dir}\n\
+                     A --> B\n\
+                 end\n"
+            );
+            assert!(
+                auto_prefers_native(&src),
+                "inner `direction {dir}` must trigger Native"
+            );
+        }
+    }
+
+    /// An edge label or node id that starts with the substring "direction"
+    /// (e.g. an unfortunate variable name) must NOT trigger Native — the
+    /// detection requires the keyword to be followed by whitespace.
+    #[test]
+    fn auto_detection_requires_keyword_boundary() {
+        // `directional --> A` would be a regression if we matched substrings;
+        // pin that the detection is keyword-bounded.
+        let src = "graph LR\n\
+                   subgraph cluster\n\
+                       directional --> A\n\
+                   end\n";
+        assert!(
+            !auto_prefers_native(src),
+            "an identifier starting with `direction` must NOT be treated \
+             as the `direction` keyword"
+        );
+    }
+
+    /// `Auto` must produce the same bytes as `Sugiyama` for the flat-DAG
+    /// case AND the same bytes as `Native` for the subgraph-with-inner-
+    /// direction case.  Strongest assertion possible: it pins that Auto
+    /// is genuinely routing, not just defaulting either way.
+    #[test]
+    fn auto_routes_to_expected_backend() {
+        let flat = "graph LR\n    A --> B --> C\n";
+        let auto_flat = try_text_render_public(flat, None, MermaidTextBackend::Auto)
+            .expect("Auto flat render must succeed");
+        let sugiyama_flat = try_text_render_public(flat, None, MermaidTextBackend::Sugiyama)
+            .expect("Sugiyama flat render must succeed");
+        assert_eq!(
+            auto_flat, sugiyama_flat,
+            "Auto must produce Sugiyama output for a flat LR chain"
+        );
+
+        let auto_subgraph = try_text_render_public(GRAPH_LR_1, None, MermaidTextBackend::Auto)
+            .expect("Auto subgraph render must succeed");
+        let native_subgraph = try_text_render_public(GRAPH_LR_1, None, MermaidTextBackend::Native)
+            .expect("Native subgraph render must succeed");
+        assert_eq!(
+            auto_subgraph, native_subgraph,
+            "Auto must produce Native output for a subgraph with inner \
+             `direction TB` — the documented Sugiyama coverage gap"
         );
     }
 

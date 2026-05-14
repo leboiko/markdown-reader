@@ -101,6 +101,12 @@ pub enum MermaidMode {
 /// layered layout that has fuller coverage of subgraph-heavy diagrams,
 /// parallel-edge groups, and nested direction overrides.
 ///
+/// `Auto` is a conservative selector that picks `Native` only for the one
+/// shape where Sugiyama is known to render less compactly — a `subgraph`
+/// block with an inner `direction` override — and falls back to `Sugiyama`
+/// for every other diagram.  It is opt-in for now; the plan is to promote it
+/// to the default once it has a release cycle of real-world exercise.
+///
 /// This setting only affects text-mode flowchart and state diagrams; sequence,
 /// pie, ER, mindmap and the various beta diagram types have their own
 /// pipelines and are unaffected. Image-mode rendering (which goes through
@@ -108,6 +114,9 @@ pub enum MermaidMode {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MermaidTextBackend {
+    /// Conservative selector — `Native` for subgraphs with inner `direction`
+    /// overrides, `Sugiyama` everywhere else.
+    Auto,
     /// `ascii-dag`-backed Sugiyama layout. The historical default.
     #[default]
     Sugiyama,
@@ -227,6 +236,7 @@ impl Config {
     /// Return a [`MermaidTextBackend`] label suitable for display (e.g. in the UI).
     pub fn mermaid_text_backend_label(backend: MermaidTextBackend) -> &'static str {
         match backend {
+            MermaidTextBackend::Auto => "Backend: Auto (subgraph-aware)",
             MermaidTextBackend::Sugiyama => "Backend: Sugiyama (default)",
             MermaidTextBackend::Native => "Backend: Native (subgraph-friendly)",
         }
@@ -320,6 +330,47 @@ mermaid_text_backend = "native"
 "#;
         let config: Config = toml::from_str(toml_str).expect("deserialization failed");
         assert_eq!(config.mermaid_text_backend, MermaidTextBackend::Native);
+    }
+
+    /// An explicit `mermaid_text_backend = "auto"` in TOML must deserialise to
+    /// the `Auto` variant — pins the serde rename and guards against the
+    /// new variant being silently dropped by a missing match arm.
+    #[test]
+    fn mermaid_text_backend_explicit_auto_is_honoured() {
+        let toml_str = r#"
+theme = "default"
+mermaid_text_backend = "auto"
+"#;
+        let config: Config = toml::from_str(toml_str).expect("deserialization failed");
+        assert_eq!(config.mermaid_text_backend, MermaidTextBackend::Auto);
+    }
+
+    /// `Auto` must survive a TOML round-trip — the persistence path is the
+    /// usual culprit when a new variant breaks down silently.
+    #[test]
+    fn mermaid_text_backend_auto_round_trips() {
+        let config = Config {
+            mermaid_text_backend: MermaidTextBackend::Auto,
+            ..Config::default()
+        };
+        let serialized = toml::to_string_pretty(&config).expect("serialization failed");
+        let deserialized: Config = toml::from_str(&serialized).expect("deserialization failed");
+        assert_eq!(deserialized.mermaid_text_backend, MermaidTextBackend::Auto);
+    }
+
+    /// Every variant must have a distinct, non-empty label so the popup
+    /// renders a real choice for the user.  Catches a forgotten match arm
+    /// in `mermaid_text_backend_label` (which would not be flagged by the
+    /// compiler since the return type is `&'static str`).
+    #[test]
+    fn mermaid_text_backend_label_covers_all_variants() {
+        let auto = Config::mermaid_text_backend_label(MermaidTextBackend::Auto);
+        let sugiyama = Config::mermaid_text_backend_label(MermaidTextBackend::Sugiyama);
+        let native = Config::mermaid_text_backend_label(MermaidTextBackend::Native);
+        assert!(!auto.is_empty() && !sugiyama.is_empty() && !native.is_empty());
+        assert_ne!(auto, sugiyama);
+        assert_ne!(auto, native);
+        assert_ne!(sugiyama, native);
     }
 
     /// `MermaidMode` must round-trip through TOML.

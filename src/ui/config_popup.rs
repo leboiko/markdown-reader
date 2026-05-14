@@ -42,9 +42,9 @@ const INACTIVE_BULLET: &str = "○";
 /// * `f`      - Ratatui frame to render into.
 /// * `params` - All display parameters (theme, flags, palette, etc.).
 pub fn render_config_popup(f: &mut Frame, params: &ConfigPopupParams<'_>) {
-    // content-sized: 46 cols fits the longest config label; 29 rows = original 22 + 1 blank
-    //   + 1 "Mermaid" section header + 3 mode options + 2 text-backend options
-    let area = centered_rect(46, 29, f.area());
+    // content-sized: 46 cols fits the longest config label; 30 rows = original 22 + 1 blank
+    //   + 1 "Mermaid" section header + 3 mode options + 3 text-backend options
+    let area = centered_rect(46, 30, f.area());
     f.render_widget(Clear, area);
 
     let lines = build_lines(params);
@@ -222,9 +222,21 @@ fn build_lines<'a>(params: &ConfigPopupParams<'_>) -> Vec<Line<'a>> {
         dim_style,
     ));
     row += 1;
-    // Two text-backend options live inside the Mermaid section (no
+    // Three text-backend options live inside the Mermaid section (no
     // separate header) — they only affect text-mode flowchart and state
     // diagrams, so they read as a sub-choice of the mode rows above.
+    // Auto comes first so it's the visible recommendation as we move
+    // toward making it the default in a follow-up release.
+    lines.push(option_line(
+        row == state.cursor,
+        mermaid_text_backend == MermaidTextBackend::Auto,
+        Config::mermaid_text_backend_label(MermaidTextBackend::Auto),
+        cursor_style,
+        active_style,
+        text_style,
+        dim_style,
+    ));
+    row += 1;
     lines.push(option_line(
         row == state.cursor,
         mermaid_text_backend == MermaidTextBackend::Sugiyama,

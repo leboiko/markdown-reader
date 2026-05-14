@@ -5,6 +5,44 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.34.70] — 2026-05-14
+
+### Added — `Auto` text-backend selector
+
+`MermaidTextBackend::Auto` joins `Sugiyama` and `Native` in the
+settings popup (`c` → Mermaid section). It is opt-in for this
+release; `Sugiyama` remains the default. The heuristic resolves
+`Auto` to `Native` only when the source contains a `subgraph` block
+with an inner `direction` override — the documented Sugiyama
+coverage gap pinned by `backend_threads_through_render_with_options`.
+Every other shape resolves to `Sugiyama`, so users who do not pick
+`Auto` see byte-identical rendering.
+
+Detection is lexical (depth-counted `subgraph` / `end` with
+keyword-bounded `direction` matching) — no double parse and no
+mutation of the existing render path. The resolution helper
+`to_layout_backend(MermaidTextBackend, &str)` flows through both
+`try_text_render` and `try_text_render_with_gaps` so the modal
+`+`/`-` zoom path honours the user's choice too. Pinned by six new
+tests: `auto_prefers_native_when_subgraph_has_inner_direction`,
+`auto_does_not_prefer_native_for_flat_dag`,
+`auto_does_not_prefer_native_for_plain_subgraph`,
+`auto_prefers_native_for_any_nested_direction_value`,
+`auto_detection_requires_keyword_boundary`, and the load-bearing
+`auto_routes_to_expected_backend` (byte-equality vs the explicit
+backend forms — strongest possible regression guard).
+
+`mermaid-text` is unchanged at 0.56.0 — the new selector lives
+entirely in the app's resolution layer, so the gallery output is
+byte-identical for existing users.
+
+Scope and shipping notes in
+`docs/scope-mermaid-backend-selection.md`. The deviation from the
+original scope doc (Auto opt-in rather than default) is documented
+there with rationale: "narrow gating envelope first", queue the
+promotion to default for a follow-up release once `Auto` has a
+release cycle of field exercise.
+
 ## [1.34.58] — 2026-05-05
 
 ### Fixed — Singleton-layer smoothing (mermaid-text 0.45.0)

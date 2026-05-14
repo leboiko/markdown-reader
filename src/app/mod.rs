@@ -310,7 +310,7 @@ impl ConfigPopupState {
         ("Markdown", 1),
         ("Panels", 2),
         ("Search", 2),
-        ("Mermaid", 5), // Mode: Auto / Text only / Image only — Backend: Sugiyama / Native
+        ("Mermaid", 6), // Mode: Auto / Text only / Image only — Backend: Auto / Sugiyama / Native
     ];
 
     /// Total number of rows across all sections.
