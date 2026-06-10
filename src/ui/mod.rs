@@ -175,6 +175,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             state: popup_state,
             theme: app.theme,
             show_line_numbers: app.show_line_numbers,
+            show_file_tree: app.show_file_tree,
             tree_position: app.tree_position,
             search_preview: app.search_preview,
             mermaid_mode: app.mermaid_mode,

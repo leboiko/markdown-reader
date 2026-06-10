@@ -20,6 +20,8 @@ pub struct ConfigPopupParams<'a> {
     pub theme: Theme,
     /// Whether line numbers are shown in the viewer.
     pub show_line_numbers: bool,
+    /// Whether the file-tree panel is shown.
+    pub show_file_tree: bool,
     /// Which side the file-tree panel is on.
     pub tree_position: TreePosition,
     /// Active search-result preview mode.
@@ -42,9 +44,9 @@ const INACTIVE_BULLET: &str = "○";
 /// * `f`      - Ratatui frame to render into.
 /// * `params` - All display parameters (theme, flags, palette, etc.).
 pub fn render_config_popup(f: &mut Frame, params: &ConfigPopupParams<'_>) {
-    // content-sized: 46 cols fits the longest config label; 30 rows = original 22 + 1 blank
-    //   + 1 "Mermaid" section header + 3 mode options + 3 text-backend options
-    let area = centered_rect(46, 30, f.area());
+    // Content-sized: 46 cols fits the longest config label; 35 rows leaves room
+    // for every section row plus borders and the footer on typical terminals.
+    let area = centered_rect(46, 35, f.area());
     f.render_widget(Clear, area);
 
     let lines = build_lines(params);
@@ -65,6 +67,7 @@ fn build_lines<'a>(params: &ConfigPopupParams<'_>) -> Vec<Line<'a>> {
         state,
         theme,
         show_line_numbers,
+        show_file_tree,
         tree_position,
         search_preview,
         mermaid_mode,
@@ -73,6 +76,7 @@ fn build_lines<'a>(params: &ConfigPopupParams<'_>) -> Vec<Line<'a>> {
     } = params;
     let theme = *theme;
     let show_line_numbers = *show_line_numbers;
+    let show_file_tree = *show_file_tree;
     let tree_position = *tree_position;
     let search_preview = *search_preview;
     let mermaid_mode = *mermaid_mode;
@@ -136,6 +140,16 @@ fn build_lines<'a>(params: &ConfigPopupParams<'_>) -> Vec<Line<'a>> {
         Span::styled("  ", text_style),
         Span::styled(ConfigPopupState::SECTIONS[2].0, section_style),
     ]));
+    lines.push(option_line(
+        row == state.cursor,
+        show_file_tree,
+        "Show file tree",
+        cursor_style,
+        active_style,
+        text_style,
+        dim_style,
+    ));
+    row += 1;
     lines.push(option_line(
         row == state.cursor,
         tree_position == TreePosition::Left,

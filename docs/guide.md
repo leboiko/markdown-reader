@@ -289,14 +289,15 @@ sections:
 - **Markdown** — toggle the line-number gutter on or off with `Enter`.
   The gutter appears on the left of the viewer with display line
   numbers aligned with what `:` and `Ctrl+f` use.
-- **Panels** — choose whether the file tree sits on the left (default)
-  or right side of the viewer. The width ratio is preserved either way.
+- **Panels** — show or hide the file tree, and choose whether it sits on
+  the left (default) or right side of the viewer. The width ratio is
+  preserved either way.
 
 Navigate with `j`/`k` or arrows, `Enter` to apply, `Esc` or `c` to
 close the modal. All changes are persisted to disk immediately so the
 next launch reopens with your choices.
 
-To start with the file tree hidden, add `show_file_tree = false` to
+The same file-tree visibility choice is stored as `show_file_tree` in
 `config.toml`. The `H` shortcut still toggles the tree during the
 current session.
 

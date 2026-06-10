@@ -308,7 +308,7 @@ impl ConfigPopupState {
     pub const SECTIONS: &'static [(&'static str, usize)] = &[
         ("Theme", Theme::ALL.len()),
         ("Markdown", 1),
-        ("Panels", 2),
+        ("Panels", 3),
         ("Search", 2),
         ("Mermaid", 6), // Mode: Auto / Text only / Image only — Backend: Auto / Sugiyama / Native
     ];
