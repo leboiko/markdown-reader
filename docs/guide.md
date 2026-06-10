@@ -296,6 +296,10 @@ Navigate with `j`/`k` or arrows, `Enter` to apply, `Esc` or `c` to
 close the modal. All changes are persisted to disk immediately so the
 next launch reopens with your choices.
 
+To start with the file tree hidden, add `show_file_tree = false` to
+`config.toml`. The `H` shortcut still toggles the tree during the
+current session.
+
 ## Session resume
 
 When you quit, the app writes a small file recording:
@@ -315,7 +319,7 @@ of a stale or missing entry.
 
 ### Where the files live
 
-- `config.toml` — the settings modal's choices:
+- `config.toml` — the settings modal's choices plus TOML-only preferences:
   - Linux: `~/.config/markdown-reader/config.toml`
   - macOS: `~/Library/Application Support/markdown-reader/config.toml`
   - Windows: `%APPDATA%\markdown-reader\config.toml`

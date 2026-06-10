@@ -184,8 +184,9 @@ drawn on the left of the viewer content when enabled.
 - **Git status colors** — new/untracked files appear in green, modified
   files in yellow, with the entire ancestor directory chain colored so
   changed subtrees are easy to spot at a glance.
-- **Configurable tree position** — place the file tree on the left
-  (default) or right side of the viewer via the settings modal.
+- **Configurable file tree** — place the file tree on the left
+  (default) or right side of the viewer via the settings modal, or start
+  with it hidden by setting `show_file_tree = false` in `config.toml`.
 - **Hybrid live-preview editing** — press `i` to enter hybrid mode: all
   blocks stay fully rendered, but the block under the cursor reveals its
   raw markdown source for editing (powered by
@@ -723,6 +724,7 @@ Fields:
 ```toml
 theme = "dracula"          # default | dracula | solarized_dark | solarized_light | nord | gruvbox_dark | gruvbox_light | github_light
 show_line_numbers = true
+show_file_tree = true      # true | false; false starts hidden (H still toggles)
 tree_position = "left"     # left | right
 ```
 

@@ -57,6 +57,13 @@ fn default_use_hybrid_by_default() -> bool {
     true
 }
 
+/// Default value for [`Config::show_file_tree`].
+///
+/// Returns `true` so existing users keep seeing the file tree at launch.
+fn default_show_file_tree() -> bool {
+    true
+}
+
 /// Which side of the viewer the file-tree panel is rendered on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -147,6 +154,11 @@ pub struct Config {
     pub theme: Theme,
     #[serde(default)]
     pub show_line_numbers: bool,
+    /// Whether the file tree is visible when the app starts.
+    ///
+    /// Runtime toggles via `H` do not rewrite this startup default.
+    #[serde(default = "default_show_file_tree")]
+    pub show_file_tree: bool,
     #[serde(default)]
     pub tree_position: TreePosition,
     #[serde(default)]
@@ -185,6 +197,7 @@ impl Default for Config {
         Self {
             theme: Theme::default(),
             show_line_numbers: false,
+            show_file_tree: default_show_file_tree(),
             tree_position: TreePosition::default(),
             search_preview: SearchPreview::default(),
             mermaid_mode: MermaidMode::default(),
@@ -269,6 +282,37 @@ mod tests {
         let toml_str = r#"theme = "default""#;
         let config: Config = toml::from_str(toml_str).expect("deserialization failed");
         assert_eq!(config.search_preview, SearchPreview::default());
+    }
+
+    /// A TOML file without `show_file_tree` must keep the historical visible tree.
+    #[test]
+    fn show_file_tree_missing_field_defaults_to_true() {
+        let toml_str = r#"theme = "default""#;
+        let config: Config = toml::from_str(toml_str).expect("deserialization failed");
+        assert!(config.show_file_tree);
+    }
+
+    /// An explicit `show_file_tree = false` must be honoured.
+    #[test]
+    fn show_file_tree_explicit_false_is_honoured() {
+        let toml_str = r#"
+theme = "default"
+show_file_tree = false
+"#;
+        let config: Config = toml::from_str(toml_str).expect("deserialization failed");
+        assert!(!config.show_file_tree);
+    }
+
+    /// `show_file_tree = false` must survive a TOML round-trip.
+    #[test]
+    fn show_file_tree_false_round_trips() {
+        let config = Config {
+            show_file_tree: false,
+            ..Config::default()
+        };
+        let serialized = toml::to_string_pretty(&config).expect("serialization failed");
+        let deserialized: Config = toml::from_str(&serialized).expect("deserialization failed");
+        assert!(!deserialized.show_file_tree);
     }
 
     /// `mermaid_max_height` must survive a TOML round-trip with a custom value.
