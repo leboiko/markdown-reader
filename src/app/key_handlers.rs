@@ -79,9 +79,15 @@ impl App {
             self.show_line_numbers = !self.show_line_numbers;
             self.persist_config();
         } else if cursor == panels_start {
-            self.show_file_tree = !self.show_file_tree;
-            self.tree_hidden = !self.show_file_tree;
-            if self.show_file_tree {
+            // Toggle live visibility and persist it as the startup preference so
+            // the bullet always reflects the panel's actual state.
+            self.tree_hidden = !self.tree_hidden;
+            self.show_file_tree = !self.tree_hidden;
+            if self.tree_hidden {
+                if self.focus == Focus::Tree {
+                    self.focus = Focus::Viewer;
+                }
+            } else {
                 self.ensure_tree_discovered();
                 self.refresh_git_status();
             }

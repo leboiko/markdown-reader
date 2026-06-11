@@ -2577,3 +2577,162 @@ fn mouse_scroll_does_not_pass_through_open_config_popup() {
         "viewer scroll must not move while config popup is open"
     );
 }
+
+// ── File-tree visibility setting (PR #15) ────────────────────────────────────
+
+/// Reproduce the production cursor-offset arithmetic so a regression in
+/// `PANELS_ROWS` (or any earlier section count) that silently mis-routes every
+/// setting below Panels fails loudly. Each assertion pins an exact value, so a
+/// no-op or wrongly-shifted route cannot satisfy it.
+#[tokio::test]
+async fn config_selection_routing_pins_settings_to_their_sections() {
+    use crate::config::SearchPreview;
+    let theme_count = Theme::ALL.len();
+    let panels_start = theme_count + 1; // +1 for the single Markdown row
+    let search_start = panels_start + 3; // 3 Panels rows: show-tree, left, right
+    let mermaid_start = search_start + 2; // 2 Search rows
+
+    // `panels_start` must toggle tree visibility and leave Search untouched.
+    crate::config::use_isolated_test_config();
+    let mut app = App::new(PathBuf::from("."), None, None);
+    app.search_preview = SearchPreview::Snippet;
+    let hidden_before = app.tree_hidden;
+    app.apply_config_selection(panels_start);
+    assert_ne!(
+        app.tree_hidden, hidden_before,
+        "panels_start must toggle tree visibility"
+    );
+    assert_eq!(
+        app.search_preview,
+        SearchPreview::Snippet,
+        "panels_start must NOT touch the search preview"
+    );
+
+    // `search_start` must set the Search preview, proving the Panels rows did
+    // not shift the Search section. Starts from Snippet so FullLine is a change.
+    let mut app2 = App::new(PathBuf::from("."), None, None);
+    app2.search_preview = SearchPreview::Snippet;
+    app2.apply_config_selection(search_start);
+    assert_eq!(
+        app2.search_preview,
+        SearchPreview::FullLine,
+        "search_start must route to the Search section (FullLine)"
+    );
+
+    // `mermaid_start` must change the mermaid mode, not the search preview.
+    let mut app3 = App::new(PathBuf::from("."), None, None);
+    app3.search_preview = SearchPreview::Snippet;
+    app3.apply_config_selection(mermaid_start);
+    assert_eq!(
+        app3.search_preview,
+        SearchPreview::Snippet,
+        "mermaid_start must NOT touch the search preview"
+    );
+    assert_eq!(
+        app3.mermaid_mode,
+        crate::config::MermaidMode::Auto,
+        "mermaid_start must route to the Mermaid section (Auto)"
+    );
+}
+
+/// `H` lazily discovers the tree on first reveal and the `tree_discovered`
+/// latch survives a re-hide, so repeated toggles never queue duplicate walks.
+#[test]
+fn h_key_lazy_discovers_tree_and_latch_persists() {
+    crate::config::use_isolated_test_config();
+    let mut app = App::new(PathBuf::from("."), None, None);
+    // Simulate launching with `show_file_tree = false`.
+    app.tree_hidden = true;
+    app.show_file_tree = false;
+    app.tree_discovered = false;
+    app.focus = Focus::Viewer;
+
+    // First reveal must unhide and mark discovered (even with no action_tx).
+    app.handle_key(KeyCode::Char('H'), KeyModifiers::NONE);
+    assert!(!app.tree_hidden, "H must reveal the tree");
+    assert!(
+        app.tree_discovered,
+        "first reveal must mark the tree discovered before spawning the walk"
+    );
+
+    // Re-hide must not reset the discovery latch.
+    app.handle_key(KeyCode::Char('H'), KeyModifiers::NONE);
+    assert!(app.tree_hidden, "second H must hide the tree");
+    assert!(
+        app.tree_discovered,
+        "re-hiding must not reset tree_discovered"
+    );
+}
+
+/// `H` is an ephemeral runtime toggle: it must never rewrite the persisted
+/// `show_file_tree` startup preference.
+#[test]
+fn h_key_does_not_rewrite_startup_preference() {
+    crate::config::use_isolated_test_config();
+    let mut app = App::new(PathBuf::from("."), None, None);
+    app.show_file_tree = true;
+    app.tree_hidden = false;
+    app.focus = Focus::Viewer;
+
+    app.handle_key(KeyCode::Char('H'), KeyModifiers::NONE);
+    assert!(app.tree_hidden, "H must hide the tree");
+    assert!(
+        app.show_file_tree,
+        "H must leave the persisted startup preference untouched"
+    );
+}
+
+/// Toggling "Show file tree" in the settings popup flips live visibility, keeps
+/// the persisted preference in sync (so the bullet always matches reality), and
+/// redirects focus off the tree when it disappears.
+#[tokio::test]
+async fn config_toggle_syncs_visibility_focus_and_preference() {
+    crate::config::use_isolated_test_config();
+    let mut app = App::new(PathBuf::from("."), None, None);
+    app.tree_hidden = false;
+    app.show_file_tree = true;
+    app.focus = Focus::Tree;
+    let panels_start = Theme::ALL.len() + 1;
+
+    // Toggle off: tree hides, preference follows, focus leaves the hidden panel.
+    app.apply_config_selection(panels_start);
+    assert!(app.tree_hidden, "toggle must hide the tree");
+    assert!(
+        !app.show_file_tree,
+        "persisted preference must mirror the hidden state"
+    );
+    assert_eq!(
+        app.focus,
+        Focus::Viewer,
+        "focus must move off the now-hidden tree"
+    );
+
+    // Toggle on: tree shows, preference follows, discovery is ensured.
+    app.apply_config_selection(panels_start);
+    assert!(!app.tree_hidden, "toggle must reveal the tree");
+    assert!(
+        app.show_file_tree,
+        "persisted preference must mirror the visible state"
+    );
+    assert!(
+        app.tree_discovered,
+        "revealing via the popup must ensure the tree is discovered"
+    );
+}
+
+/// A `FilesChanged` event while the tree has never been discovered must not
+/// trigger a background walk or flip the discovery latch.
+#[test]
+fn files_changed_while_undiscovered_skips_rediscovery() {
+    crate::config::use_isolated_test_config();
+    let mut app = App::new(PathBuf::from("."), None, None);
+    app.tree_hidden = true;
+    app.show_file_tree = false;
+    app.tree_discovered = false;
+
+    app.handle_action(Action::FilesChanged(vec![PathBuf::from("/fake/x.md")]));
+    assert!(
+        !app.tree_discovered,
+        "FilesChanged must not discover the tree while it is hidden+undiscovered"
+    );
+}

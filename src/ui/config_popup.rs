@@ -20,8 +20,9 @@ pub struct ConfigPopupParams<'a> {
     pub theme: Theme,
     /// Whether line numbers are shown in the viewer.
     pub show_line_numbers: bool,
-    /// Whether the file-tree panel is shown.
-    pub show_file_tree: bool,
+    /// Whether the file-tree panel is currently visible (live state, not the
+    /// persisted startup preference).
+    pub file_tree_visible: bool,
     /// Which side the file-tree panel is on.
     pub tree_position: TreePosition,
     /// Active search-result preview mode.
@@ -44,12 +45,15 @@ const INACTIVE_BULLET: &str = "○";
 /// * `f`      - Ratatui frame to render into.
 /// * `params` - All display parameters (theme, flags, palette, etc.).
 pub fn render_config_popup(f: &mut Frame, params: &ConfigPopupParams<'_>) {
-    // Content-sized: 46 cols fits the longest config label; 35 rows leaves room
-    // for every section row plus borders and the footer on typical terminals.
-    let area = centered_rect(46, 35, f.area());
-    f.render_widget(Clear, area);
-
     let lines = build_lines(params);
+
+    // Content-sized: 46 cols fits the longest config label; height is derived
+    // from the rendered rows plus 2 for the top/bottom border, then clamped to
+    // the terminal so it never overflows on short screens. Deriving it means
+    // adding a section never silently clips the popup.
+    let height = crate::cast::u16_sat(lines.len() + 2).min(f.area().height);
+    let area = centered_rect(46, height, f.area());
+    f.render_widget(Clear, area);
 
     let block = Block::default()
         .title(" Settings ")
@@ -67,7 +71,7 @@ fn build_lines<'a>(params: &ConfigPopupParams<'_>) -> Vec<Line<'a>> {
         state,
         theme,
         show_line_numbers,
-        show_file_tree,
+        file_tree_visible,
         tree_position,
         search_preview,
         mermaid_mode,
@@ -76,7 +80,7 @@ fn build_lines<'a>(params: &ConfigPopupParams<'_>) -> Vec<Line<'a>> {
     } = params;
     let theme = *theme;
     let show_line_numbers = *show_line_numbers;
-    let show_file_tree = *show_file_tree;
+    let file_tree_visible = *file_tree_visible;
     let tree_position = *tree_position;
     let search_preview = *search_preview;
     let mermaid_mode = *mermaid_mode;
@@ -142,7 +146,7 @@ fn build_lines<'a>(params: &ConfigPopupParams<'_>) -> Vec<Line<'a>> {
     ]));
     lines.push(option_line(
         row == state.cursor,
-        show_file_tree,
+        file_tree_visible,
         "Show file tree",
         cursor_style,
         active_style,

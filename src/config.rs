@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
@@ -234,7 +235,21 @@ impl Config {
         let Ok(text) = toml::to_string_pretty(self) else {
             return;
         };
-        let _ = fs::write(&path, text);
+        // Write atomically: a partial write (crash, or a concurrent reader) must
+        // never leave a truncated/corrupt config behind. Write to a unique
+        // sibling temp file, then rename — rename is atomic on the same
+        // filesystem, so a reader sees either the old file or the complete new
+        // one, never a tear. The temp name is per-process-and-call unique so
+        // concurrent savers never clobber each other's temp file.
+        static SAVE_SEQ: AtomicU64 = AtomicU64::new(0);
+        let seq = SAVE_SEQ.fetch_add(1, Ordering::Relaxed);
+        let tmp = path.with_file_name(format!(".{CONFIG_FILE}.{}.{seq}.tmp", std::process::id()));
+        if fs::write(&tmp, text).is_err() {
+            return;
+        }
+        if fs::rename(&tmp, &path).is_err() {
+            let _ = fs::remove_file(&tmp);
+        }
     }
 
     /// Return a [`MermaidMode`] label suitable for display (e.g. in the UI).
@@ -256,7 +271,28 @@ impl Config {
     }
 }
 
+/// Test-only override for the config directory. Set once per test binary so
+/// unit tests never read from — or clobber — the user's real `config.toml`.
+#[cfg(test)]
+static CONFIG_DIR_OVERRIDE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Redirect config I/O to a throwaway per-process temp directory for the
+/// duration of the test binary. Idempotent: the first call wins, later calls
+/// are no-ops, so every test shares one isolated config dir.
+#[cfg(test)]
+pub(crate) fn use_isolated_test_config() {
+    CONFIG_DIR_OVERRIDE.get_or_init(|| {
+        let dir = std::env::temp_dir().join(format!("mdr-test-cfg-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        dir
+    });
+}
+
 fn config_path() -> Option<PathBuf> {
+    #[cfg(test)]
+    if let Some(dir) = CONFIG_DIR_OVERRIDE.get() {
+        return Some(dir.join(CONFIG_FILE));
+    }
     let mut path = dirs::config_dir()?;
     path.push(APP_NAME);
     path.push(CONFIG_FILE);

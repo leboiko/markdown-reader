@@ -762,20 +762,29 @@ impl App {
         });
     }
 
+    /// Walk the filesystem on a background thread and deliver the result as
+    /// [`Action::TreeDiscovered`]. No-ops when `action_tx` is not yet set.
+    fn spawn_tree_discovery(&self) {
+        let Some(tx) = self.action_tx.clone() else {
+            return;
+        };
+        let root = self.root.clone();
+        tokio::task::spawn_blocking(move || {
+            let _ = tx.send(Action::TreeDiscovered(FileEntry::discover(&root)));
+        });
+    }
+
     /// Discover the file tree on a background thread if it was skipped at startup.
+    ///
+    /// Marks the tree as discovered *before* spawning so repeated reveals (e.g.
+    /// rapid `H` presses) are idempotent and never queue duplicate walks,
+    /// regardless of whether `action_tx` is wired yet.
     fn ensure_tree_discovered(&mut self) {
         if self.tree_discovered {
             return;
         }
-        let Some(tx) = self.action_tx.clone() else {
-            return;
-        };
         self.tree_discovered = true;
-        let root = self.root.clone();
-        tokio::task::spawn_blocking(move || {
-            let entries = FileEntry::discover(&root);
-            let _ = tx.send(Action::TreeDiscovered(entries));
-        });
+        self.spawn_tree_discovery();
     }
 
     // ── Re-render helpers ────────────────────────────────────────────────────
@@ -916,17 +925,12 @@ impl App {
                 self.reload_changed_tabs(&changed);
                 if self.tree_discovered {
                     self.refresh_git_status();
-                    if let Some(tx) = self.action_tx.clone() {
-                        let root = self.root.clone();
-                        tokio::task::spawn_blocking(move || {
-                            let entries = FileEntry::discover(&root);
-                            let _ = tx.send(Action::TreeDiscovered(entries));
-                        });
-                    }
+                    self.spawn_tree_discovery();
                 }
             }
             Action::TreeDiscovered(entries) => {
-                self.tree_discovered = true;
+                // `tree_discovered` is already set by `ensure_tree_discovered`
+                // before the walk is spawned, so no need to set it here.
                 self.tree.rebuild(entries);
                 if let Some(path) = self
                     .tabs
