@@ -44,13 +44,33 @@ pub struct FlatItem {
 }
 
 impl FileTreeState {
-    /// Replace the entry tree and rebuild the flat list, preserving selection.
+    /// Replace the entry tree and rebuild the flat list, preserving the
+    /// selection by path.
+    ///
+    /// The watcher fires `rebuild` on every filesystem change, so the cursor
+    /// must follow the *same item* across a rebuild rather than a fixed index —
+    /// otherwise an added/removed sibling row would shift the highlight under
+    /// the user (and on noisy filesystems re-running this every second would
+    /// make the tree unusable, see #17). When the previously selected path is
+    /// gone, the old index is clamped into range so the cursor stays near where
+    /// it was; an empty tree clears the selection.
     pub fn rebuild(&mut self, entries: Vec<FileEntry>) {
+        let prev_path = self.selected_path().map(Path::to_path_buf);
+        let prev_idx = self.list_state.selected();
         self.entries = entries;
         self.flatten_visible();
-        if !self.flat_items.is_empty() && self.list_state.selected().is_none() {
-            self.list_state.select(Some(0));
+
+        if self.flat_items.is_empty() {
+            self.list_state.select(None);
+            return;
         }
+
+        let restored = prev_path
+            .as_deref()
+            .and_then(|p| self.flat_items.iter().position(|item| item.path == p))
+            .or_else(|| prev_idx.map(|i| i.min(self.flat_items.len() - 1)))
+            .unwrap_or(0);
+        self.list_state.select(Some(restored));
     }
 
     /// Rebuild `flat_items` from the current `entries` and `expanded` set.

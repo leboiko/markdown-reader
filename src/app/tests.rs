@@ -2736,3 +2736,169 @@ fn files_changed_while_undiscovered_skips_rediscovery() {
         "FilesChanged must not discover the tree while it is hidden+undiscovered"
     );
 }
+
+/// Repro for #17: with a file open, the filesystem watcher fires `TreeDiscovered`
+/// roughly once a second on noisy filesystems (e.g. Chrostini inotify emitting
+/// spurious `IN_ACCESS`). Each rediscovery must NOT snap the tree cursor back to
+/// the open file — doing so strands the user, who can never navigate to or open
+/// a different file. The *first* discovery still aligns the tree with the viewer.
+#[test]
+fn watcher_rediscovery_preserves_user_tree_selection() {
+    use crate::fs::discovery::FileEntry;
+
+    let file_a = PathBuf::from("/fake/test.md"); // the open file (active tab)
+    let file_b = PathBuf::from("/fake/other.md"); // where the user navigates
+
+    let (mut app, _path) = make_app_with_tab("# A");
+    app.focus = Focus::Tree;
+    app.tree_discovered = true;
+
+    let entries = vec![
+        FileEntry {
+            path: file_a.clone(),
+            name: "test.md".into(),
+            is_dir: false,
+            children: vec![],
+        },
+        FileEntry {
+            path: file_b.clone(),
+            name: "other.md".into(),
+            is_dir: false,
+            children: vec![],
+        },
+    ];
+
+    // First discovery aligns the tree to the open file — intended behaviour.
+    app.handle_action(Action::TreeDiscovered(entries.clone()));
+    assert_eq!(
+        app.tree.selected_path(),
+        Some(file_a.as_path()),
+        "first discovery must align the tree to the open file"
+    );
+
+    // The user navigates down to the second file.
+    app.tree.move_down();
+    assert_eq!(
+        app.tree.selected_path(),
+        Some(file_b.as_path()),
+        "precondition: user moved the selection to the second file"
+    );
+
+    // The watcher fires again (inotify noise) → another TreeDiscovered.
+    app.handle_action(Action::TreeDiscovered(entries.clone()));
+
+    // The user's selection must survive: NOT snapped back to the open file.
+    assert_eq!(
+        app.tree.selected_path(),
+        Some(file_b.as_path()),
+        "#17: watcher rediscovery must not steal the cursor back to the open file"
+    );
+}
+
+// ── #16: focus must never land on a hidden file tree ──────────────────────────
+//
+// Every handler that returns focus "to the tree" must resolve to the viewer
+// when the tree is hidden. Each test drives the real entry point twice — once
+// with the tree visible (must reach `Focus::Tree`) and once hidden (must reach
+// `Focus::Viewer`) — so an implementation that always picks one branch fails.
+
+/// `Tab` from the viewer.
+#[test]
+fn tab_from_viewer_respects_hidden_tree() {
+    let (mut app, _p) = make_app_with_tab("body");
+
+    app.tree_hidden = false;
+    app.focus = Focus::Viewer;
+    app.handle_viewer_key(KeyCode::Tab, KeyModifiers::NONE);
+    assert_eq!(app.focus, Focus::Tree, "Tab focuses the visible tree");
+
+    app.tree_hidden = true;
+    app.focus = Focus::Viewer;
+    app.handle_viewer_key(KeyCode::Tab, KeyModifiers::NONE);
+    assert_eq!(
+        app.focus,
+        Focus::Viewer,
+        "#16: Tab must not focus a hidden tree"
+    );
+}
+
+/// Closing the last tab from the viewer (`x`).
+#[test]
+fn last_tab_close_respects_hidden_tree() {
+    for (hidden, expected) in [(false, Focus::Tree), (true, Focus::Viewer)] {
+        let (mut app, _p) = make_app_with_tab("body");
+        app.tree_hidden = hidden;
+        app.focus = Focus::Viewer;
+        app.handle_viewer_key(KeyCode::Char('x'), KeyModifiers::NONE);
+        assert!(app.tabs.is_empty(), "precondition: the last tab is closed");
+        assert_eq!(
+            app.focus, expected,
+            "#16: closing the last tab with tree_hidden={hidden} must focus {expected:?}"
+        );
+    }
+}
+
+/// `Esc` out of the search overlay.
+#[test]
+fn search_esc_respects_hidden_tree() {
+    for (hidden, expected) in [(false, Focus::Tree), (true, Focus::Viewer)] {
+        let (mut app, _p) = make_app_with_tab("body");
+        app.tree_hidden = hidden;
+        app.search.active = true;
+        app.focus = Focus::Search;
+        app.handle_search_key(KeyCode::Esc, KeyModifiers::NONE);
+        assert!(!app.search.active, "Esc closes the search overlay");
+        assert_eq!(
+            app.focus, expected,
+            "#16: search Esc with tree_hidden={hidden} must focus {expected:?}"
+        );
+    }
+}
+
+/// Dismissing the copy-path popup (Enter and Esc).
+#[test]
+fn copy_menu_dismiss_respects_hidden_tree() {
+    for code in [KeyCode::Esc, KeyCode::Enter] {
+        for (hidden, expected) in [(false, Focus::Tree), (true, Focus::Viewer)] {
+            let (mut app, _p) = make_app_with_tab("body");
+            app.tree_hidden = hidden;
+            app.focus = Focus::CopyMenu;
+            app.copy_menu = Some(CopyMenuState {
+                cursor: 1, // filename branch — avoids touching the clipboard path
+                path: PathBuf::from("/fake/test.md"),
+                name: "test.md".into(),
+            });
+            app.handle_copy_menu_key(code);
+            assert!(app.copy_menu.is_none(), "{code:?} dismisses the copy menu");
+            assert_eq!(
+                app.focus, expected,
+                "#16: copy-menu {code:?} with tree_hidden={hidden} must focus {expected:?}"
+            );
+        }
+    }
+}
+
+/// `FocusLeft` and `ExitSearch` actions.
+#[test]
+fn focus_actions_respect_hidden_tree() {
+    for (hidden, expected) in [(false, Focus::Tree), (true, Focus::Viewer)] {
+        let (mut app, _p) = make_app_with_tab("body");
+
+        app.tree_hidden = hidden;
+        app.focus = Focus::Viewer;
+        app.handle_action(Action::FocusLeft);
+        assert_eq!(
+            app.focus, expected,
+            "#16: FocusLeft with tree_hidden={hidden} must focus {expected:?}"
+        );
+
+        app.tree_hidden = hidden;
+        app.search.active = true;
+        app.focus = Focus::Search;
+        app.handle_action(Action::ExitSearch);
+        assert_eq!(
+            app.focus, expected,
+            "#16: ExitSearch with tree_hidden={hidden} must focus {expected:?}"
+        );
+    }
+}

@@ -749,6 +749,21 @@ impl App {
         tokio::task::spawn_blocking(move || config.save());
     }
 
+    /// Move focus to the file tree, or to the viewer when the tree is hidden.
+    ///
+    /// Every handler that returns focus "to the tree" (closing the last tab,
+    /// dismissing search/copy-menu overlays, `Tab`/`FocusLeft`) must route
+    /// through here. Setting `Focus::Tree` directly while `tree_hidden` is true
+    /// strands focus on a panel that isn't rendered, leaving the user on an
+    /// invisible pane until they blind-press a key to escape (#16).
+    fn focus_tree_or_viewer(&mut self) {
+        self.focus = if self.tree_hidden {
+            Focus::Viewer
+        } else {
+            Focus::Tree
+        };
+    }
+
     /// Re-run `git status` on a background thread and send the result back as
     /// [`Action::GitStatusReady`]. No-ops when `action_tx` is not yet set.
     fn refresh_git_status(&self) {
@@ -851,7 +866,7 @@ impl App {
         match action {
             Action::RawKey(key) => self.handle_key(key.code, key.modifiers),
             Action::Quit => self.running = false,
-            Action::FocusLeft => self.focus = Focus::Tree,
+            Action::FocusLeft => self.focus_tree_or_viewer(),
             Action::FocusRight => self.focus = Focus::Viewer,
             Action::TreeUp => self.tree.move_up(),
             Action::TreeDown => self.tree.move_down(),
@@ -904,7 +919,7 @@ impl App {
             }
             Action::ExitSearch => {
                 self.search.active = false;
-                self.focus = Focus::Tree;
+                self.focus_tree_or_viewer();
             }
             Action::SearchInput(c) => {
                 self.search.query.push(c);
@@ -931,11 +946,22 @@ impl App {
             Action::TreeDiscovered(entries) => {
                 // `tree_discovered` is already set by `ensure_tree_discovered`
                 // before the walk is spawned, so no need to set it here.
+                //
+                // Only align the tree to the open file on the *first* discovery
+                // (when nothing is selected yet). The watcher re-runs discovery
+                // on every filesystem change — on noisy filesystems that is once
+                // a second — and re-revealing here each time would yank the
+                // cursor back to the open file, stranding the user mid-navigation
+                // (#17). `rebuild` already preserves the user's selection across
+                // the refresh. Intentional reveals (open, search jump, link pick)
+                // still call `reveal_path` directly at their own call sites.
+                let first_discovery = self.tree.selected_path().is_none();
                 self.tree.rebuild(entries);
-                if let Some(path) = self
-                    .tabs
-                    .active_tab()
-                    .and_then(|tab| tab.view.current_path.clone())
+                if first_discovery
+                    && let Some(path) = self
+                        .tabs
+                        .active_tab()
+                        .and_then(|tab| tab.view.current_path.clone())
                 {
                     self.tree.reveal_path(&path);
                 }
@@ -1114,7 +1140,7 @@ impl App {
                 if let Some(id) = close_hit {
                     self.tabs.close(id);
                     if self.tabs.is_empty() {
-                        self.focus = Focus::Tree;
+                        self.focus_tree_or_viewer();
                     }
                     return;
                 }
