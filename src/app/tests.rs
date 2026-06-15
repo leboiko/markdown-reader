@@ -2878,6 +2878,135 @@ fn copy_menu_dismiss_respects_hidden_tree() {
     }
 }
 
+/// Closing the last tab via the mouse close button (×) — the separate
+/// `handle_mouse` path, distinct from the keyboard `x` covered above.
+#[test]
+fn mouse_last_tab_close_respects_hidden_tree() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+
+    for (hidden, expected) in [(false, Focus::Tree), (true, Focus::Viewer)] {
+        let (mut app, _p) = make_app_with_tab("body");
+        app.tree_hidden = hidden;
+        app.focus = Focus::Viewer;
+
+        // Inject a close-button rect so the click resolves to the close path.
+        let tab_id = app.tabs.active.expect("an active tab must exist");
+        app.tab_close_rects = vec![(
+            tab_id,
+            ratatui::layout::Rect {
+                x: 5,
+                y: 0,
+                width: 1,
+                height: 1,
+            },
+        )];
+
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 5,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+
+        assert!(app.tabs.is_empty(), "mouse close must close the last tab");
+        assert_eq!(
+            app.focus, expected,
+            "#16: mouse tab-close with tree_hidden={hidden} must focus {expected:?}"
+        );
+    }
+}
+
+/// The tree realigns to the open file on first discovery, but the `aligned`
+/// latch then stays set — so even a transient empty tree (all files deleted,
+/// then recreated) does NOT re-steal the cursor back to the open file. This is
+/// the edge a "nothing selected yet" heuristic would mishandle.
+#[test]
+fn tree_realigns_only_until_first_alignment() {
+    use crate::fs::discovery::FileEntry;
+
+    // Order matters: the open file (file_a) is NOT at index 0, so a forced
+    // realign (reveal) is observably different from rebuild's default-to-row-0.
+    let file_a = PathBuf::from("/fake/test.md"); // the open file (index 1)
+    let file_b = PathBuf::from("/fake/other.md"); // index 0
+    let entries = || {
+        vec![
+            FileEntry {
+                path: file_b.clone(),
+                name: "other.md".into(),
+                is_dir: false,
+                children: vec![],
+            },
+            FileEntry {
+                path: file_a.clone(),
+                name: "test.md".into(),
+                is_dir: false,
+                children: vec![],
+            },
+        ]
+    };
+
+    let (mut app, _p) = make_app_with_tab("# A");
+    app.focus = Focus::Tree;
+    app.tree_discovered = true;
+
+    // First discovery aligns to the open file (index 1) and latches `aligned`.
+    app.handle_action(Action::TreeDiscovered(entries()));
+    assert_eq!(app.tree.selected_path(), Some(file_a.as_path()));
+    assert!(app.tree.aligned, "first discovery must latch aligned");
+
+    // All files vanish (e.g. directory wiped) → selection clears.
+    app.handle_action(Action::TreeDiscovered(vec![]));
+    assert_eq!(app.tree.selected_path(), None);
+
+    // Files reappear. A "nothing selected" heuristic would re-reveal here and
+    // jump to file_a (index 1); the latch prevents that, so rebuild's default
+    // leaves the cursor on row 0 (file_b) — NOT forced onto the open file.
+    app.handle_action(Action::TreeDiscovered(entries()));
+    assert_eq!(
+        app.tree.selected_path(),
+        Some(file_b.as_path()),
+        "#17: a transient empty tree must not re-trigger a forced realign to the open file"
+    );
+}
+
+/// Revealing a hidden tree (lazy discovery via the latch) must still align it
+/// to the open file the first time — the latch must not suppress the *initial*
+/// alignment.
+#[test]
+fn lazy_discovery_aligns_hidden_tree_to_open_file() {
+    use crate::fs::discovery::FileEntry;
+
+    let file_a = PathBuf::from("/fake/test.md");
+    let file_b = PathBuf::from("/fake/other.md");
+
+    let (mut app, _p) = make_app_with_tab("# A");
+    // Simulate a hidden tree that has never been discovered: empty + not aligned.
+    app.tree_hidden = true;
+    app.tree_discovered = true; // pretend H just triggered discovery
+    assert!(!app.tree.aligned, "precondition: tree not yet aligned");
+
+    app.handle_action(Action::TreeDiscovered(vec![
+        FileEntry {
+            path: file_b.clone(),
+            name: "other.md".into(),
+            is_dir: false,
+            children: vec![],
+        },
+        FileEntry {
+            path: file_a.clone(),
+            name: "test.md".into(),
+            is_dir: false,
+            children: vec![],
+        },
+    ]));
+
+    assert_eq!(
+        app.tree.selected_path(),
+        Some(file_a.as_path()),
+        "first discovery of a previously-hidden tree must align to the open file"
+    );
+}
+
 /// `FocusLeft` and `ExitSearch` actions.
 #[test]
 fn focus_actions_respect_hidden_tree() {

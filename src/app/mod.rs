@@ -947,17 +947,18 @@ impl App {
                 // `tree_discovered` is already set by `ensure_tree_discovered`
                 // before the walk is spawned, so no need to set it here.
                 //
-                // Only align the tree to the open file on the *first* discovery
-                // (when nothing is selected yet). The watcher re-runs discovery
-                // on every filesystem change — on noisy filesystems that is once
-                // a second — and re-revealing here each time would yank the
-                // cursor back to the open file, stranding the user mid-navigation
-                // (#17). `rebuild` already preserves the user's selection across
-                // the refresh. Intentional reveals (open, search jump, link pick)
-                // still call `reveal_path` directly at their own call sites.
-                let first_discovery = self.tree.selected_path().is_none();
+                // Align the tree to the open file only until the first successful
+                // alignment (tracked by the `tree.aligned` latch, which
+                // `reveal_path` sets). The watcher re-runs discovery on every
+                // filesystem change — on noisy filesystems that is once a second —
+                // and re-revealing here each time would yank the cursor back to
+                // the open file, stranding the user mid-navigation (#17).
+                // `rebuild` preserves the user's selection across the refresh;
+                // intentional reveals (open, search jump, link pick) align via
+                // `reveal_path` at their own call sites and flip the same latch.
+                let needs_align = !self.tree.aligned;
                 self.tree.rebuild(entries);
-                if first_discovery
+                if needs_align
                     && let Some(path) = self
                         .tabs
                         .active_tab()
@@ -1160,11 +1161,15 @@ impl App {
                     return;
                 }
 
-                // Tree click.
-                if let Some(tree_rect) = self.tree_area_rect
+                // Tree click. The `!tree_hidden` guard rejects clicks that land
+                // in a stale `tree_area_rect` left over from when the tree was
+                // last rendered — without it, a click at the old coordinates
+                // would strand focus on the hidden tree (#16, mouse path).
+                if !self.tree_hidden
+                    && let Some(tree_rect) = self.tree_area_rect
                     && contains(tree_rect, col, row)
                 {
-                    self.focus = Focus::Tree;
+                    self.focus_tree_or_viewer();
                     // The List widget renders items inside the block border.
                     // inner.y = tree_rect.y + 1 (top border).
                     let inner_y = tree_rect.y + 1;
