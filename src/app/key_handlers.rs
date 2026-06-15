@@ -360,7 +360,7 @@ impl App {
                     tab.view.cursor_to_bottom(vh);
                 }
             }
-            KeyCode::Tab => self.focus = Focus::Tree,
+            KeyCode::Tab => self.focus_tree_or_viewer(),
             KeyCode::Char('[') => self.shrink_tree(),
             KeyCode::Char(']') => self.grow_tree(),
             // `x` closes the active tab.
@@ -368,7 +368,7 @@ impl App {
                 if let Some(id) = self.tabs.active {
                     self.tabs.close(id);
                     if self.tabs.is_empty() {
-                        self.focus = Focus::Tree;
+                        self.focus_tree_or_viewer();
                     }
                 }
             }
@@ -678,7 +678,7 @@ impl App {
         match code {
             KeyCode::Esc => {
                 self.search.active = false;
-                self.focus = Focus::Tree;
+                self.focus_tree_or_viewer();
             }
             KeyCode::Enter => self.confirm_search(),
             KeyCode::Backspace => {
@@ -730,11 +730,11 @@ impl App {
                     copy_to_clipboard(&text);
                 }
                 self.copy_menu = None;
-                self.focus = Focus::Tree;
+                self.focus_tree_or_viewer();
             }
             KeyCode::Esc | KeyCode::Char('y') => {
                 self.copy_menu = None;
-                self.focus = Focus::Tree;
+                self.focus_tree_or_viewer();
             }
             _ => {}
         }

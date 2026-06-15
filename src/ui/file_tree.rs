@@ -28,6 +28,12 @@ pub struct FileTreeState {
     /// treated as clean. Directories are pre-populated with `Modified` when any
     /// descendant has changes (see `fs::git_status::collect`).
     pub git_status: HashMap<PathBuf, GitFileStatus>,
+    /// `true` once the tree has been aligned to the open file at least once via
+    /// [`reveal_path`]. Latches permanently so watcher-triggered rediscoveries
+    /// never re-steal the cursor back to the open file (#17) — even across a
+    /// transient empty state (all files deleted then recreated), which a
+    /// "nothing selected yet" check would misread as a fresh first discovery.
+    pub aligned: bool,
 }
 
 /// A single visible row in the flattened file-tree list.
@@ -44,13 +50,38 @@ pub struct FlatItem {
 }
 
 impl FileTreeState {
-    /// Replace the entry tree and rebuild the flat list, preserving selection.
+    /// Replace the entry tree and rebuild the flat list, preserving the
+    /// selection by path.
+    ///
+    /// The watcher fires `rebuild` on every filesystem change, so the cursor
+    /// must follow the *same item* across a rebuild rather than a fixed index —
+    /// otherwise an added/removed sibling row would shift the highlight under
+    /// the user (and on noisy filesystems re-running this every second would
+    /// make the tree unusable, see #17). When the previously selected path is
+    /// gone, the old index is clamped into range so the cursor stays near where
+    /// it was; an empty tree clears the selection. When there was no previous
+    /// selection (the first populate), the cursor lands on the first row —
+    /// callers that need the cursor to track a specific path on first populate
+    /// follow up with [`reveal_path`].
     pub fn rebuild(&mut self, entries: Vec<FileEntry>) {
+        let prev_path = self.selected_path().map(|p| p.to_path_buf());
+        let prev_idx = self.list_state.selected();
         self.entries = entries;
         self.flatten_visible();
-        if !self.flat_items.is_empty() && self.list_state.selected().is_none() {
-            self.list_state.select(Some(0));
+
+        if self.flat_items.is_empty() {
+            self.list_state.select(None);
+            return;
         }
+
+        // `flat_items` is non-empty here (guarded by the early return above), so
+        // `len() - 1` cannot underflow.
+        let restored = prev_path
+            .as_deref()
+            .and_then(|p| self.flat_items.iter().position(|item| item.path == p))
+            .or_else(|| prev_idx.map(|i| i.min(self.flat_items.len() - 1)))
+            .unwrap_or(0);
+        self.list_state.select(Some(restored));
     }
 
     /// Rebuild `flat_items` from the current `entries` and `expanded` set.
@@ -158,6 +189,9 @@ impl FileTreeState {
         self.flatten_visible();
         if let Some(idx) = self.flat_items.iter().position(|item| item.path == path) {
             self.list_state.select(Some(idx));
+            // Record that the tree has been aligned to a file at least once, so
+            // passive watcher rediscoveries stop forcing a realignment (#17).
+            self.aligned = true;
         }
     }
 }
@@ -372,5 +406,133 @@ mod tests {
 
         assert_eq!(state.flat_items.len(), len_after_first);
         assert_eq!(state.list_state.selected(), sel_after_first);
+    }
+
+    /// Build a flat list of N sibling files `/root/0.md`, `/root/1.md`, …
+    fn flat_files(n: usize) -> Vec<FileEntry> {
+        (0..n)
+            .map(|i| FileEntry {
+                path: PathBuf::from(format!("/root/{i}.md")),
+                name: format!("{i}.md"),
+                is_dir: false,
+                children: vec![],
+            })
+            .collect()
+    }
+
+    /// `rebuild` must preserve the selection by *path*, not by index: when a
+    /// sibling above the selected file is removed, the cursor follows the file.
+    #[test]
+    fn rebuild_follows_selected_path_when_siblings_shift() {
+        let mut state = FileTreeState::default();
+        state.rebuild(flat_files(3)); // 0.md, 1.md, 2.md
+        state.list_state.select(Some(2)); // select 2.md
+        assert_eq!(state.selected_path(), Some(Path::new("/root/2.md")));
+
+        // Drop 0.md — 2.md moves from index 2 to index 1.
+        state.rebuild(vec![
+            FileEntry {
+                path: PathBuf::from("/root/1.md"),
+                name: "1.md".into(),
+                is_dir: false,
+                children: vec![],
+            },
+            FileEntry {
+                path: PathBuf::from("/root/2.md"),
+                name: "2.md".into(),
+                is_dir: false,
+                children: vec![],
+            },
+        ]);
+
+        assert_eq!(
+            state.selected_path(),
+            Some(Path::new("/root/2.md")),
+            "selection must track the path, not the old index"
+        );
+        assert_eq!(state.list_state.selected(), Some(1));
+    }
+
+    /// When the selected file is deleted, the cursor clamps to the last row
+    /// rather than jumping to the top or panicking.
+    #[test]
+    fn rebuild_clamps_to_last_row_when_selected_path_gone() {
+        let mut state = FileTreeState::default();
+        state.rebuild(flat_files(3)); // 0.md, 1.md, 2.md
+        state.list_state.select(Some(2)); // select the last row, 2.md
+
+        // Rebuild without 2.md — the selected path is now gone.
+        state.rebuild(flat_files(2)); // 0.md, 1.md
+
+        assert_eq!(
+            state.list_state.selected(),
+            Some(1),
+            "cursor must clamp to the new last row, not reset to 0"
+        );
+        assert_eq!(state.selected_path(), Some(Path::new("/root/1.md")));
+    }
+
+    /// Rebuilding with no entries clears the selection entirely.
+    #[test]
+    fn rebuild_empty_entries_clears_selection() {
+        let mut state = FileTreeState::default();
+        state.rebuild(flat_files(2));
+        assert!(
+            state.list_state.selected().is_some(),
+            "precondition: a row is selected"
+        );
+
+        state.rebuild(vec![]);
+
+        assert_eq!(
+            state.list_state.selected(),
+            None,
+            "empty rebuild must clear the selection"
+        );
+        assert!(state.flat_items.is_empty());
+        assert_eq!(state.selected_path(), None);
+    }
+
+    /// A deep selection inside an expanded directory survives a `rebuild` with
+    /// the same entries — the `expanded` set is the mechanism that lets
+    /// selection-by-path find the nested row again after a watcher refresh.
+    #[test]
+    fn rebuild_preserves_expanded_and_deep_selection() {
+        let (mut state, deep_file) = make_test_tree();
+        state.reveal_path(&deep_file); // expand ancestors + select the nested file
+        assert_eq!(state.selected_path(), Some(deep_file.as_path()));
+        let expanded_before = state.expanded.clone();
+
+        // Re-run discovery with the identical tree (simulates a watcher event).
+        let (rebuilt, _) = make_test_tree();
+        state.rebuild(rebuilt.entries);
+
+        assert_eq!(
+            state.selected_path(),
+            Some(deep_file.as_path()),
+            "deep selection must survive a same-tree rebuild"
+        );
+        assert_eq!(
+            state.expanded, expanded_before,
+            "expanded directories must persist across rebuild"
+        );
+    }
+
+    /// `reveal_path` latches `aligned` only when it actually selects a row; a
+    /// reveal of an absent path must not flip the latch (so a later, real
+    /// reveal can still align the tree to the open file).
+    #[test]
+    fn reveal_path_sets_aligned_only_on_a_real_match() {
+        let (mut state, target) = make_test_tree();
+        assert!(!state.aligned, "fresh tree is not yet aligned");
+
+        state.reveal_path(Path::new("/nonexistent/x.md"));
+        assert!(
+            !state.aligned,
+            "reveal of an absent path must not latch aligned"
+        );
+
+        state.reveal_path(&target);
+        assert!(state.aligned, "reveal of a present path must latch aligned");
     }
 }
