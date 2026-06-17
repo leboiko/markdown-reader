@@ -5,6 +5,31 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.34.72] — 2026-06-17
+
+### Fixed — file-tree focus correctness (#16, #17)
+
+Two related file-tree focus bugs, shipped via #20.
+
+- **#17 — tree cursor no longer snaps back to the open file.** The
+  filesystem watcher fired `TreeDiscovered` on every change and the
+  handler unconditionally re-revealed the active tab's file, yanking
+  the user's selection back (~1×/sec on noisy filesystems such as
+  Chrostini, whose inotify emits spurious `IN_ACCESS` events).
+  `FileTreeState::rebuild` now preserves the selection by path across a
+  refresh, and `TreeDiscovered` only aligns the tree to the open file
+  on the first discovery. Intentional reveals (open, search jump, link
+  pick) keep calling `reveal_path` at their own sites.
+- **#16 — focus can no longer be stranded on a hidden file tree.**
+  Several handlers set `Focus::Tree` without checking `tree_hidden`.
+  Added `focus_tree_or_viewer()` and routed the 8 affected sites (Tab,
+  last-tab close, search-Esc, copy-menu Enter/Esc, FocusLeft,
+  ExitSearch, mouse tab-close) through it.
+
+Pinned by 10 regression tests (`watcher_rediscovery_preserves_user_tree_selection`,
+`tree_realigns_only_until_first_alignment`, `reveal_path_sets_aligned_only_on_a_real_match`,
+and the per-entry-point `*_respects_hidden_tree` set).
+
 ## [1.34.70] — 2026-05-14
 
 ### Added — `Auto` text-backend selector
