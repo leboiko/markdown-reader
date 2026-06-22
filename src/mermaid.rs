@@ -468,7 +468,7 @@ fn render_blocking(
 /// * `picker`     – terminal graphics picker (provides font cell pixel size).
 /// * `max_height` – upper bound in display lines (from `Config::mermaid_max_height`).
 fn compute_cell_height(img: &DynamicImage, picker: &Picker, max_height: u32) -> u32 {
-    let (_, cell_px_h) = picker.font_size();
+    let cell_px_h = picker.font_size().height;
     let px_h = img.height();
     if cell_px_h == 0 {
         return DEFAULT_MERMAID_HEIGHT;
