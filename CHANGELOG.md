@@ -5,6 +5,21 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.34.73] — 2026-06-22
+
+### Changed — dependency bump: ratatui-image 11 (#24)
+
+Upgraded `ratatui-image` 10.0.7 → 11.0.5 and picked up the latest
+ratatui 0.30.x patch releases via the lockfile (ratatui 0.30.1 →
+0.30.2, plus the companion core/crossterm/widgets/macros/termwiz
+crates). v11 requires ratatui `^0.30.1`, so no ratatui major bump
+was needed.
+
+The only source change v11 forced is in `compute_cell_height`:
+`Picker::font_size()` now returns a `FontSize` struct (`{ width,
+height }`) instead of a `(u16, u16)` tuple, so the per-cell pixel
+height is now read via `.height`. No user-visible behaviour change.
+
 ## [1.34.72] — 2026-06-17
 
 ### Fixed — file-tree focus correctness (#16, #17)
