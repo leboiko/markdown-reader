@@ -46,7 +46,7 @@ jobs:
         # (sandbox semantics, BSD vs GNU userspace).
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@v22
