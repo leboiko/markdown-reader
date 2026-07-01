@@ -31,6 +31,16 @@ ignore = [
     #   https://github.com/trishume/syntect/issues
     "RUSTSEC-2025-0141", # bincode 1.3.3 unmaintained (via syntect) — dev ceased upstream
     "RUSTSEC-2024-0320", # yaml-rust 0.4.5 unmaintained (via syntect)
+    # ttf-parser's author declared it unmaintained on 2026-06-30. It is a
+    # deep transitive dep of the mermaid SVG→raster pipeline
+    # (mermaid-rs-renderer → fontdb/usvg/resvg/rustybuzz → ttf-parser) and
+    # every version is flagged, so there is no upgrade escape. The whole
+    # resvg/usvg/fontdb/ttf-parser stack shares one upstream author; we
+    # can only drop this once that ecosystem migrates off ttf-parser.
+    # It is an unmaintained notice, not a security vulnerability. Revisit
+    # when resvg/usvg ship a release that no longer pulls ttf-parser:
+    #   https://github.com/harfbuzz/ttf-parser/issues/217
+    "RUSTSEC-2026-0192", # ttf-parser 0.25.1 unmaintained (via mermaid-rs-renderer/resvg)
 ]
 
 # ---- Licenses -----------------------------------------------------------------
