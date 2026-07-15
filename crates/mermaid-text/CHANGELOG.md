@@ -3,6 +3,22 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- **Multi-byte (non-ASCII) input is now handled safely** — byte offsets were
+  used where character offsets were expected in the parsers (#29):
+  - `strip_keyword_prefix` (`parser/common.rs`) sliced `line[..keyword.len()]`
+    at a byte index without a char-boundary check, **panicking** on multi-byte
+    lines in the sequence/state parsers (e.g. a Cyrillic `participant`, `loop`,
+    or `alt`/`else`).
+  - `try_consume_pipe_label` (`parser/flowchart.rs`) returned a byte offset
+    where the tokenizer expects a char count, so a multi-byte edge label
+    (`A[Start] -->|да| B[End]`) **silently corrupted** the following node —
+    the label kept a leaked bracket and node text was lost. Same fix applied to
+    the compact-arrow form (`-. label .->`, `== label ==>`).
+
 ## 0.56.0 — 2026-05-11 — Sequence-diagram polish basket (self-messages, stacked activations, box groups)
 
 ### Added

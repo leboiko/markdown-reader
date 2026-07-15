@@ -703,6 +703,24 @@ mod tests {
     use crate::sequence::MessageStyle;
 
     #[test]
+    fn non_ascii_lines_do_not_panic() {
+        // Regression: `strip_keyword_prefix` sliced `line[..keyword.len()]` at a
+        // byte index without a char-boundary check, so any multi-byte line whose
+        // byte at `keyword.len()` fell inside a character panicked. The sequence
+        // parser probes keywords of several lengths (`loop`=4, `actor`=5,
+        // `activate`=8, `deactivate`=10, `participant`=11), so a non-ASCII line
+        // very likely hit one. These are all valid diagrams and must parse (or
+        // error) without panicking.
+        for src in [
+            "sequenceDiagram\n    participant Оркестратор\n    Оркестратор->>Оркестратор: ok",
+            "sequenceDiagram\n    A->>B: x\n    loop до готовности\n        A->>B: y\n    end",
+            "sequenceDiagram\n    A->>B: x\n    alt если готов\n        A->>B: y\n    else иначе\n        A->>B: z\n    end",
+        ] {
+            let _ = parse(src); // must not panic (Ok or Err both fine)
+        }
+    }
+
+    #[test]
     fn parse_minimal_sequence() {
         let src = "sequenceDiagram\nA->>B: hi";
         let diag = parse(src).unwrap();

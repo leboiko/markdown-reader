@@ -585,7 +585,12 @@ fn try_consume_inline_compact_arrow(s: &str) -> Option<(String, usize)> {
     {
         let label = rest[..end].trim();
         if !label.is_empty() {
-            return Some((format!("-.->|{label}|"), 2 + end + 3));
+            // `2` (`-.`) + label chars + `3` (`.->`). `end` is a BYTE offset, so
+            // count chars — the tokenizer advances a `char` cursor by this value.
+            return Some((
+                format!("-.->|{label}|"),
+                2 + rest[..end].chars().count() + 3,
+            ));
         }
     }
     if let Some(rest) = s.strip_prefix("==")
@@ -594,7 +599,8 @@ fn try_consume_inline_compact_arrow(s: &str) -> Option<(String, usize)> {
     {
         let label = rest[..end].trim();
         if !label.is_empty() {
-            return Some((format!("==>|{label}|"), 2 + end + 3));
+            // `2` (`==`) + label chars + `3` (`==>`); count chars, not bytes.
+            return Some((format!("==>|{label}|"), 2 + rest[..end].chars().count() + 3));
         }
     }
     None
@@ -734,7 +740,10 @@ fn try_consume_pipe_label(s: &str) -> (String, usize) {
         && let Some(end) = inner.find('|')
     {
         let portion = &s[..end + 2]; // includes both pipes
-        return (portion.to_string(), end + 2);
+        // The tokenizer advances a `char` cursor by this count, so it must be a
+        // char count — `end` is a BYTE offset and over-advances for multi-byte
+        // labels, eating into the following node token.
+        return (portion.to_string(), portion.chars().count());
     }
     (String::new(), 0)
 }
@@ -1080,6 +1089,35 @@ fn parse_quoted_string(s: &str) -> Option<String> {
 mod tests {
     use super::*;
     use crate::types::{EdgeEndpoint, EdgeStyle, NodeShape, Rgb};
+
+    #[test]
+    fn non_ascii_pipe_label_does_not_leak_into_next_node() {
+        // Regression: `try_consume_pipe_label` documented a char count but
+        // returned a BYTE offset, and the tokenizer (which walks a `Vec<char>`)
+        // advanced the char cursor by it. For a multi-byte edge label the cursor
+        // over-advanced by `byte_len - char_len`, eating the start of the next
+        // node token — so `B[End]` arrived as `[End]` and the label kept the
+        // leaked bracket. Node ids/labels here are ASCII; only the edge label
+        // differs from the passing ASCII case.
+        let g = parse("graph LR\nA[Start] -->|да| B[End]").unwrap();
+        assert_eq!(g.edges[0].label.as_deref(), Some("да"));
+        assert!(g.has_node("B"), "target node B was lost");
+        assert_eq!(
+            g.node("B").unwrap().label,
+            "End",
+            "bracket leaked into the node label"
+        );
+    }
+
+    #[test]
+    fn non_ascii_compact_arrow_label_does_not_leak() {
+        // Same root cause in `try_consume_inline_compact_arrow`: `2 + end + 3`
+        // used the BYTE offset `end` (from `find(".->")`) as a char count.
+        let g = parse("graph LR\nA[Start] -. да .-> B[End]").unwrap();
+        assert_eq!(g.edges[0].label.as_deref(), Some("да"));
+        assert!(g.has_node("B"), "target node B was lost");
+        assert_eq!(g.node("B").unwrap().label, "End");
+    }
 
     #[test]
     fn parse_simple_lr() {

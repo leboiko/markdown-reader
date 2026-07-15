@@ -41,9 +41,16 @@ pub(crate) fn strip_inline_comment(line: &str) -> &str {
 /// per call). This canonical implementation is the ASCII-fast one.
 pub(crate) fn strip_keyword_prefix<'a>(line: &'a str, keyword: &str) -> Option<&'a str> {
     let len = keyword.len();
-    if line.len() > len
-        && line[..len].eq_ignore_ascii_case(keyword)
-        && line.as_bytes()[len].is_ascii_whitespace()
+    // `str::get` returns `None` (instead of panicking) when `len` is not a char
+    // boundary, so a multi-byte line whose byte at `len` falls inside a character
+    // is rejected rather than crashing. The trailing-whitespace requirement is
+    // preserved via `as_bytes().get(len)`, which also guards `len == line.len()`.
+    let head = line.get(..len)?;
+    if head.eq_ignore_ascii_case(keyword)
+        && line
+            .as_bytes()
+            .get(len)
+            .is_some_and(u8::is_ascii_whitespace)
     {
         Some(line[len..].trim())
     } else {
