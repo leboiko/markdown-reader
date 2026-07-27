@@ -45,19 +45,7 @@ fn editor_pos_to_byte(line_boundaries: &[usize], row: usize, col: usize) -> usiz
 /// Returns `(0, 0)` if the block has zero-length ranges (shouldn't happen after
 /// the post-render fixup pass, but is safe to call unconditionally).
 fn block_byte_range_of(block: &DocBlock) -> (usize, usize) {
-    match block {
-        DocBlock::Text {
-            source_byte_start,
-            source_byte_end,
-            ..
-        } => (*source_byte_start as usize, *source_byte_end as usize),
-        DocBlock::Mermaid {
-            source_byte_start,
-            source_byte_end,
-            ..
-        } => (*source_byte_start as usize, *source_byte_end as usize),
-        DocBlock::Table(t) => (t.source_byte_start as usize, t.source_byte_end as usize),
-    }
+    block.source_byte_range()
 }
 
 impl App {
@@ -242,6 +230,7 @@ impl App {
         // Find the placeholder tab that open_or_focus reserved (it has
         // current_path set but no content yet) and load the file into it.
         let palette = self.palette;
+        let math_mode = self.math_mode;
         let loaded = self
             .tabs
             .find_tab_by_path_mut(&path)
@@ -255,7 +244,8 @@ impl App {
                 .find_tab_by_path_mut(&path)
                 .expect("tab must exist after is_some() guard");
             let theme = self.theme;
-            tab.view.load(path.clone(), name, content, &palette, theme);
+            tab.view
+                .load(path.clone(), name, content, &palette, theme, math_mode);
         }
 
         // Apply a pending jump-to-source-line if one was registered for this path.
@@ -352,6 +342,7 @@ impl App {
     #[allow(clippy::needless_pass_by_value)]
     pub(super) fn apply_file_reloaded(&mut self, path: PathBuf, content: String) {
         let palette = self.palette;
+        let math_mode = self.math_mode;
         let theme = self.theme;
 
         for tab in self.tabs.iter_mut() {
@@ -372,8 +363,14 @@ impl App {
                 .to_string();
             let old_cursor = tab.view.cursor_line;
             let old_scroll = tab.view.scroll_offset;
-            tab.view
-                .load(path.clone(), name, content.clone(), &palette, theme);
+            tab.view.load(
+                path.clone(),
+                name,
+                content.clone(),
+                &palette,
+                theme,
+                math_mode,
+            );
             // Restore cursor and scroll if still within the (potentially shorter)
             // new document so the user's reading position is preserved on edits.
             let last_line = tab.view.total_lines.saturating_sub(1);
@@ -395,6 +392,21 @@ impl App {
             })
             .collect();
         self.mermaid_cache.retain(&alive);
+
+        // Same eviction for math: ids are content hashes, so a formula that
+        // survived the reload unchanged keeps its already-typeset image, and
+        // only genuinely removed formulas drop out of the cache.
+        let alive_math: std::collections::HashSet<crate::markdown::MathBlockId> = self
+            .tabs
+            .tabs
+            .iter()
+            .flat_map(|t| t.view.rendered.iter())
+            .filter_map(|b| match b {
+                crate::markdown::DocBlock::Math { id, .. } => Some(*id),
+                _ => None,
+            })
+            .collect();
+        self.math_cache.retain(&alive_math);
 
         // Close any open block-level modal if it was on the reloaded tab —
         // its cached state (table rows, mermaid block_id) is stale once the
@@ -548,6 +560,7 @@ impl App {
     #[allow(clippy::needless_pass_by_value)]
     pub(super) fn apply_file_saved(&mut self, path: PathBuf, saved_content: String) {
         let palette = self.palette;
+        let math_mode = self.math_mode;
         let theme = self.theme;
 
         // Find the tab for this path and update its editor baseline + view content.
@@ -563,8 +576,14 @@ impl App {
                 .to_string_lossy()
                 .to_string();
             let scroll = tab.view.scroll_offset;
-            tab.view
-                .load(path.clone(), name, saved_content.clone(), &palette, theme);
+            tab.view.load(
+                path.clone(),
+                name,
+                saved_content.clone(),
+                &palette,
+                theme,
+                math_mode,
+            );
             tab.view.scroll_offset = scroll.min(tab.view.total_lines.saturating_sub(1));
 
             if let Some(editor) = tab.editor.as_mut() {
@@ -790,6 +809,7 @@ impl App {
     /// (fullscreen edtui) side.  The hybrid side is a parallel update.
     pub(super) fn apply_hybrid_saved(&mut self, path: &std::path::Path, saved_content: &str) {
         let palette = self.palette;
+        let math_mode = self.math_mode;
         let theme = self.theme;
         let mut should_exit = false;
 
@@ -816,6 +836,7 @@ impl App {
                 saved_content.to_string(),
                 &palette,
                 theme,
+                math_mode,
             );
             tab.view.scroll_offset = scroll.min(tab.view.total_lines.saturating_sub(1));
             break;

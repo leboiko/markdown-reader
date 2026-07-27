@@ -1,5 +1,6 @@
 use crate::fs::git_status::GitFileStatus;
-use crate::markdown::MermaidBlockId;
+use crate::markdown::{MathBlockId, MermaidBlockId};
+use crate::math_image::MathEntry;
 use crate::mermaid::MermaidEntry;
 use crate::ui::search_modal::SearchResult;
 use crossterm::event::{KeyEvent, MouseEvent};
@@ -81,6 +82,12 @@ pub enum Action {
     ///
     /// Boxed to avoid inflating every `Action` variant by the size of `MermaidEntry`.
     MermaidReady(MermaidBlockId, Box<MermaidEntry>),
+
+    /// A background LaTeX math render completed; entry is ready to be stored.
+    ///
+    /// Boxed for the same reason as [`Action::MermaidReady`] — `MathEntry`
+    /// carries a `StatefulProtocol`, which is large.
+    MathReady(MathBlockId, Box<MathEntry>),
 
     /// Background content search completed; replace the search result list.
     ///

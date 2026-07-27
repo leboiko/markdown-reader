@@ -141,6 +141,17 @@ drawn on the left of the viewer content when enabled.
   (`α`, `π`, `σ`), operators (`∑`, `∫`, `∇`, `∞`), fractions (`a/b`),
   roots (`√(x)`), super/subscripts (`x²`, `xᵢ`). Display math renders
   in a bordered block labelled `math`. Zero external dependencies.
+- **Typeset math images (opt-in)** — set `math_mode = "image"` (or pick
+  it under **Math** in the `c` settings popup) and block math (`$$...$$`)
+  is typeset properly by [RaTeX](https://github.com/erweixin/RaTeX), a
+  pure-Rust KaTeX-compatible engine, then drawn inline as a real image.
+  Nested fractions, matrices, and limits stacked under `∑`/`∫` keep their
+  two-dimensional structure instead of flattening to `((a)/(b))/(c)`.
+  Fonts are compiled in — nothing to install. Falls back to the Unicode
+  block whenever graphics are unavailable (including inside tmux) or a
+  formula fails to parse, with the reason shown in the block footer.
+  Inline math stays Unicode in every mode: it has to sit on a text
+  baseline where a terminal image cannot go.
 - **Mermaid diagram rendering** — fenced ```` ```mermaid ```` blocks are
   rasterized in pure Rust (no Node, no Chromium) and displayed inline as
   real images using the Kitty graphics protocol, Sixel, iTerm2 inline

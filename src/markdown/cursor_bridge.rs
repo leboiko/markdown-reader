@@ -125,9 +125,9 @@ pub fn byte_to_visual(
 
             Some((visual_row, display_col))
         }
-        // Mermaid and Table blocks don't have wrapped-text layouts.
+        // Mermaid, Math and Table blocks don't have wrapped-text layouts.
         // Sub-phase 4 will handle their cursor positions separately.
-        DocBlock::Mermaid { .. } | DocBlock::Table(_) => None,
+        DocBlock::Mermaid { .. } | DocBlock::Math { .. } | DocBlock::Table(_) => None,
     }
 }
 
@@ -175,8 +175,8 @@ pub fn visual_to_byte(
                     let block_byte_start = block_byte_start(block) as usize;
                     Some(block_byte_start + byte_before + byte_col)
                 }
-                // Mermaid and Table: not backed by wrapped-text layouts.
-                DocBlock::Mermaid { .. } | DocBlock::Table(_) => None,
+                // Mermaid, Math and Table: not backed by wrapped-text layouts.
+                DocBlock::Mermaid { .. } | DocBlock::Math { .. } | DocBlock::Table(_) => None,
             };
         }
         offset += h;
@@ -450,6 +450,9 @@ fn block_byte_start(block: &DocBlock) -> u32 {
         } => *source_byte_start,
         DocBlock::Mermaid {
             source_byte_start, ..
+        }
+        | DocBlock::Math {
+            source_byte_start, ..
         } => *source_byte_start,
         DocBlock::Table(t) => t.source_byte_start,
     }
@@ -561,6 +564,7 @@ fn display_col_to_byte_col(line: &ratatui::text::Line<'static>, display_col: u16
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::MathMode;
     use crate::markdown::{DocBlock, update_text_layouts};
     use crate::theme::{Palette, Theme};
     use ratatui::text::{Line, Span, Text};
@@ -615,7 +619,7 @@ mod tests {
     fn sample_doc() -> (String, Vec<DocBlock>) {
         let md = "Para one.\n\n## Heading\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\n```mermaid\ngraph LR\nA-->B\n```\n\nFinal para.\n".to_string();
         let p = palette();
-        let blocks = crate::markdown::renderer::render_markdown(&md, &p, theme());
+        let blocks = crate::markdown::renderer::render_markdown(&md, &p, theme(), MathMode::Text);
         (md, blocks)
     }
 
@@ -635,15 +639,7 @@ mod tests {
             let idx = byte_offset_to_block(&blocks, byte);
             let b = &blocks[idx];
             let start = block_byte_start(b) as usize;
-            let end = match b {
-                DocBlock::Text {
-                    source_byte_end, ..
-                } => *source_byte_end as usize,
-                DocBlock::Mermaid {
-                    source_byte_end, ..
-                } => *source_byte_end as usize,
-                DocBlock::Table(t) => t.source_byte_end as usize,
-            };
+            let end = b.source_byte_range().1;
             assert!(
                 start <= byte && byte < end,
                 "byte {byte} not in block[{idx}] range [{start}, {end})"
@@ -797,15 +793,7 @@ mod tests {
 
         // Each consecutive pair must be adjacent.
         for i in 0..blocks.len().saturating_sub(1) {
-            let this_end = match &blocks[i] {
-                DocBlock::Text {
-                    source_byte_end, ..
-                } => *source_byte_end,
-                DocBlock::Mermaid {
-                    source_byte_end, ..
-                } => *source_byte_end,
-                DocBlock::Table(t) => t.source_byte_end,
-            };
+            let this_end = crate::cast::u32_sat(blocks[i].source_byte_range().1);
             let next_start = block_byte_start(&blocks[i + 1]);
             assert_eq!(
                 this_end,
@@ -816,15 +804,7 @@ mod tests {
         }
 
         // Last block must end at source.len().
-        let last_end = match blocks.last().unwrap() {
-            DocBlock::Text {
-                source_byte_end, ..
-            } => *source_byte_end,
-            DocBlock::Mermaid {
-                source_byte_end, ..
-            } => *source_byte_end,
-            DocBlock::Table(t) => t.source_byte_end,
-        };
+        let last_end = crate::cast::u32_sat(blocks.last().unwrap().source_byte_range().1);
         assert_eq!(
             last_end as usize,
             source.len(),
@@ -839,7 +819,7 @@ mod tests {
     fn byte_to_visual_returns_none_for_mermaid_block() {
         let md = "```mermaid\ngraph LR\nA-->B\n```\n";
         let p = palette();
-        let blocks = crate::markdown::renderer::render_markdown(md, &p, theme());
+        let blocks = crate::markdown::renderer::render_markdown(md, &p, theme(), MathMode::Text);
         let text_layouts = HashMap::new(); // empty — mermaid blocks have no layout
 
         // Find the mermaid block.
@@ -862,7 +842,7 @@ mod tests {
     fn byte_offset_to_block_single_block() {
         let md = "Hello world.\n";
         let p = palette();
-        let blocks = crate::markdown::renderer::render_markdown(md, &p, theme());
+        let blocks = crate::markdown::renderer::render_markdown(md, &p, theme(), MathMode::Text);
         // Every byte must resolve to block 0.
         for byte in 0..md.len() {
             assert_eq!(
@@ -879,7 +859,7 @@ mod tests {
     fn byte_to_visual_raw_start_of_block() {
         let md = "Hello world.\n";
         let p = palette();
-        let blocks = crate::markdown::renderer::render_markdown(md, &p, theme());
+        let blocks = crate::markdown::renderer::render_markdown(md, &p, theme(), MathMode::Text);
         assert!(!blocks.is_empty());
         let (row, col) = byte_to_visual_raw(&blocks[0], md, 0, 80, 0);
         assert_eq!(row, 0, "cursor at byte 0 must be on visual row 0");
@@ -892,7 +872,7 @@ mod tests {
     fn byte_to_visual_raw_mid_line_position() {
         let md = "Hello world.\n";
         let p = palette();
-        let blocks = crate::markdown::renderer::render_markdown(md, &p, theme());
+        let blocks = crate::markdown::renderer::render_markdown(md, &p, theme(), MathMode::Text);
         assert!(!blocks.is_empty());
         // "Hello " is 6 bytes; cursor at byte 6 should be at col 6, row 0.
         let (row, col) = byte_to_visual_raw(&blocks[0], md, 0, 80, 6);
@@ -908,7 +888,7 @@ mod tests {
         let word: String = "a".repeat(60);
         let md = format!("{word}\n");
         let p = palette();
-        let blocks = crate::markdown::renderer::render_markdown(&md, &p, theme());
+        let blocks = crate::markdown::renderer::render_markdown(&md, &p, theme(), MathMode::Text);
         assert!(!blocks.is_empty());
         // Byte 20 is on the second wrapped row at width 20.
         // The wrap algorithm packs 20-char words, so the 21st char starts row 1.

@@ -7,6 +7,7 @@ mod event;
 mod export;
 mod fs;
 mod markdown;
+mod math_image;
 mod mermaid;
 mod section_extract;
 mod state;

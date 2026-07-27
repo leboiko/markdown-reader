@@ -1,12 +1,13 @@
 use crate::action::Action;
 use crate::cast::u32_sat;
 use crate::config::{
-    Config, MermaidMode, MermaidTextBackend, SearchPreview, TreePosition, UpdatesConfig,
+    Config, MathMode, MermaidMode, MermaidTextBackend, SearchPreview, TreePosition, UpdatesConfig,
 };
 use crate::event::EventHandler;
 use crate::fs::discovery::FileEntry;
 use crate::fs::git_status;
 use crate::markdown::DocBlock;
+use crate::math_image::{MathCache, MathEntry};
 use crate::mermaid::{MermaidCache, MermaidEntry};
 use crate::state::{AppState, TabSession};
 use crate::theme::{Palette, Theme, Tokens};
@@ -194,6 +195,17 @@ pub fn collect_match_lines(
                 }
                 offset += block_height;
             }
+            // Math blocks show either an image (no searchable text) or the
+            // Unicode approximation. Search the LaTeX source in both cases: it
+            // is what the user typed, so `/frac` finding the formula they wrote
+            // is the least surprising behaviour, and unlike mermaid the source
+            // is one logical line so there is no height budget to respect.
+            DocBlock::Math { source, .. } => {
+                if source.to_lowercase().contains(query_lower) {
+                    matches.push(offset);
+                }
+                offset += block.height();
+            }
         }
     }
 
@@ -311,6 +323,7 @@ impl ConfigPopupState {
         ("Panels", 3),
         ("Search", 2),
         ("Mermaid", 6), // Mode: Auto / Text only / Image only — Backend: Auto / Sugiyama / Native
+        ("Math", 2),    // Block math: Unicode text / Typeset image
     ];
 
     /// Total number of rows across all sections.
@@ -401,6 +414,11 @@ pub struct App {
     /// User-configured layered-layout backend for text-mode flowchart and
     /// state diagrams.  See [`MermaidTextBackend`] for the trade-offs.
     pub mermaid_text_backend: MermaidTextBackend,
+    /// User-configured rendering mode for block-level LaTeX math.
+    pub math_mode: MathMode,
+    /// User-configured maximum height for image-rendered math blocks
+    /// (in display lines).
+    pub math_max_height: u32,
     /// Mirror of [`Config::use_hybrid_by_default`].
     ///
     /// When `true`, `i` opens hybrid mode and `I` opens the legacy fullscreen
@@ -438,6 +456,8 @@ pub struct App {
     pub viewer_area_rect: Option<ratatui::layout::Rect>,
     /// Cache of mermaid diagram render state, keyed by diagram hash.
     pub mermaid_cache: MermaidCache,
+    /// Cache of image-rendered math block state, keyed by formula hash.
+    pub math_cache: MathCache,
     /// Terminal graphics protocol picker; `None` when graphics are disabled.
     pub picker: Option<Picker>,
     /// State for the full-screen table modal; `None` when the modal is closed.
@@ -553,6 +573,8 @@ impl App {
             mermaid_mode: config.mermaid_mode,
             mermaid_max_height: config.mermaid_max_height,
             mermaid_text_backend: config.mermaid_text_backend,
+            math_mode: config.math_mode,
+            math_max_height: config.math_max_height,
             use_hybrid_by_default: config.use_hybrid_by_default,
             updates: config.updates,
             copy_menu: None,
@@ -569,6 +591,7 @@ impl App {
             tree_area_rect: None,
             viewer_area_rect: None,
             mermaid_cache: MermaidCache::new(),
+            math_cache: MathCache::new(),
             picker,
             table_modal: None,
             table_modal_rect: None,
@@ -657,8 +680,14 @@ impl App {
                     .tabs
                     .active_tab_mut()
                     .expect("active tab must exist after open_or_focus");
-                tab.view
-                    .load(path.clone(), name, content, &self.palette, self.theme);
+                tab.view.load(
+                    path.clone(),
+                    name,
+                    content,
+                    &self.palette,
+                    self.theme,
+                    self.math_mode,
+                );
                 let max_scroll = tab.view.total_lines.saturating_sub(1);
                 let clamped = scroll.min(max_scroll);
                 tab.view.scroll_offset = clamped;
@@ -743,6 +772,8 @@ impl App {
             mermaid_mode: self.mermaid_mode,
             mermaid_max_height: self.mermaid_max_height,
             mermaid_text_backend: self.mermaid_text_backend,
+            math_mode: self.math_mode,
+            math_max_height: self.math_max_height,
             use_hybrid_by_default: self.use_hybrid_by_default,
             updates: self.updates.clone(),
         };
@@ -807,10 +838,13 @@ impl App {
     /// Re-render every open tab with the active palette, preserving scroll offsets.
     fn rerender_all_tabs(&mut self) {
         let palette = self.palette;
-        self.tabs.rerender_all(&palette, self.theme);
+        self.tabs.rerender_all(&palette, self.theme, self.math_mode);
         // Mermaid images have the theme background baked into their pixels,
         // so they must re-render when the theme changes.
         self.mermaid_cache.clear();
+        // Math images bake the theme's *foreground* colour into their glyphs,
+        // so they are equally theme-dependent and must be re-typeset.
+        self.math_cache.clear();
     }
 
     // ── Event loop ───────────────────────────────────────────────────────────
@@ -1013,6 +1047,16 @@ impl App {
                     entry
                 };
                 self.mermaid_cache.insert(id, entry);
+            }
+            Action::MathReady(id, entry) => {
+                // Same staleness guard as `MermaidReady`: after a mode switch
+                // or theme change the cache is cleared and re-populated
+                // synchronously with `Unicode` entries, and an image that was
+                // already in flight must not overwrite the fresh state.
+                if !matches!(self.math_cache.get(id), Some(MathEntry::Pending)) {
+                    return;
+                }
+                self.math_cache.insert(id, *entry);
             }
             Action::SearchResults {
                 generation,

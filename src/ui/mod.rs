@@ -180,6 +180,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             search_preview: app.search_preview,
             mermaid_mode: app.mermaid_mode,
             mermaid_text_backend: app.mermaid_text_backend,
+            math_mode: app.math_mode,
             palette: &app.palette,
         };
         config_popup::render_config_popup(f, &params);

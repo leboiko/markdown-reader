@@ -622,6 +622,7 @@ fn enter_edit_mode_uses_cursor_for_source_line() {
         content,
         &palette,
         crate::theme::Theme::Default,
+        crate::config::MathMode::Text,
     );
 
     // Replace the rendered blocks with a hand-crafted Text block whose
@@ -842,6 +843,7 @@ fn d_key_moves_cursor_with_real_loaded_content() {
             content,
             &palette,
             Theme::Default,
+            crate::config::MathMode::Text,
         );
     }
     app.focus = Focus::Viewer;
@@ -1019,6 +1021,7 @@ fn reload_with_unchanged_content_preserves_cursor() {
             content.clone(),
             &palette,
             Theme::Default,
+            crate::config::MathMode::Text,
         );
         tab.view.cursor_line = 10;
         tab.view.scroll_offset = 5;
@@ -1064,6 +1067,7 @@ fn reload_with_changed_content_restores_cursor_when_in_range() {
             content_v1,
             &palette,
             Theme::Default,
+            crate::config::MathMode::Text,
         );
         tab.view.cursor_line = 10;
         tab.view.scroll_offset = 5;
@@ -1138,6 +1142,7 @@ fn make_rendered_app(content: &str) -> (App, PathBuf) {
             content.to_string(),
             &palette,
             Theme::Default,
+            crate::config::MathMode::Text,
         );
     }
     app.focus = Focus::Viewer;
@@ -1473,7 +1478,7 @@ fn open_link_picker_real_doc_repro() {
         return;
     };
     let palette = Palette::from_theme(Theme::Default);
-    let blocks = render_markdown(&src, &palette, Theme::Default);
+    let blocks = render_markdown(&src, &palette, Theme::Default, MathMode::Text);
 
     let mut app = App::new(PathBuf::from("."), None, None);
     app.tabs
@@ -1558,7 +1563,7 @@ See [BadFirst](#real) and [GoodSecond](#real).
 .
 ";
     let palette = Palette::from_theme(Theme::Default);
-    let blocks = render_markdown(src, &palette, Theme::Default);
+    let blocks = render_markdown(src, &palette, Theme::Default, MathMode::Text);
 
     let mut app = App::new(PathBuf::from("."), None, None);
     app.tabs
@@ -1612,7 +1617,7 @@ Final prose link: [Fig](#fig).
 .
 ";
     let palette = Palette::from_theme(Theme::Default);
-    let blocks = render_markdown(src, &palette, Theme::Default);
+    let blocks = render_markdown(src, &palette, Theme::Default, MathMode::Text);
 
     let mut app = App::new(PathBuf::from("."), None, None);
     app.tabs
@@ -1658,7 +1663,7 @@ Skim [System overview](#system-overview) first. End-of-doc has [appendix](#appen
 .
 ";
     let palette = Palette::from_theme(Theme::Default);
-    let blocks = render_markdown(src, &palette, Theme::Default);
+    let blocks = render_markdown(src, &palette, Theme::Default, MathMode::Text);
 
     let mut app = App::new(PathBuf::from("."), None, None);
     app.tabs
@@ -1717,7 +1722,7 @@ Finally [Cherry](#cherry).
 .
 ";
     let palette = Palette::from_theme(Theme::Default);
-    let blocks = render_markdown(src, &palette, Theme::Default);
+    let blocks = render_markdown(src, &palette, Theme::Default, MathMode::Text);
 
     let mut app = App::new(PathBuf::from("."), None, None);
     app.tabs
@@ -1979,6 +1984,7 @@ fn make_app_with_rendered_tab(source: &str) -> (App, PathBuf) {
             source.to_string(),
             &p,
             Theme::Default,
+            crate::config::MathMode::Text,
         );
         // Populate text layout cache at a 80-column width so byte_to_visual and
         // visual_to_byte can resolve positions in Text blocks.
@@ -2170,7 +2176,7 @@ fn hybrid_mode_does_not_alter_rendered_blocks() {
 
     // Render once without hybrid.
     let blocks_without_hybrid =
-        crate::markdown::renderer::render_markdown(source, &p, Theme::Default);
+        crate::markdown::renderer::render_markdown(source, &p, Theme::Default, MathMode::Text);
 
     // Render with hybrid entry (which must not re-render the blocks).
     let (mut app, _path) = make_app_with_rendered_tab(source);
@@ -2193,31 +2199,13 @@ fn hybrid_mode_does_not_alter_rendered_blocks() {
         .zip(blocks_without_hybrid.iter())
         .enumerate()
     {
-        let (hs, he) = match with_hybrid {
-            crate::markdown::DocBlock::Text {
-                source_byte_start,
-                source_byte_end,
-                ..
-            } => (*source_byte_start, *source_byte_end),
-            crate::markdown::DocBlock::Mermaid {
-                source_byte_start,
-                source_byte_end,
-                ..
-            } => (*source_byte_start, *source_byte_end),
-            crate::markdown::DocBlock::Table(t) => (t.source_byte_start, t.source_byte_end),
+        let (hs, he) = {
+            let (s, e) = with_hybrid.source_byte_range();
+            (s as u32, e as u32)
         };
-        let (ws, we) = match without_hybrid {
-            crate::markdown::DocBlock::Text {
-                source_byte_start,
-                source_byte_end,
-                ..
-            } => (*source_byte_start, *source_byte_end),
-            crate::markdown::DocBlock::Mermaid {
-                source_byte_start,
-                source_byte_end,
-                ..
-            } => (*source_byte_start, *source_byte_end),
-            crate::markdown::DocBlock::Table(t) => (t.source_byte_start, t.source_byte_end),
+        let (ws, we) = {
+            let (s, e) = without_hybrid.source_byte_range();
+            (s as u32, e as u32)
         };
         assert_eq!(
             (hs, he),
@@ -2238,7 +2226,7 @@ fn pressing_o_opens_outline_picker() {
 
     let src = "# First Heading\n\nSome text.\n\n## Second Heading\n\nMore text.\n";
     let palette = Palette::from_theme(Theme::Default);
-    let blocks = render_markdown(src, &palette, Theme::Default);
+    let blocks = render_markdown(src, &palette, Theme::Default, MathMode::Text);
 
     let mut app = App::new(PathBuf::from("."), None, None);
     app.tabs
@@ -2299,6 +2287,7 @@ async fn applying_theme_preserves_position_with_mermaid_blocks() {
             content.to_string(),
             &palette,
             Theme::Default,
+            crate::config::MathMode::Text,
         );
     }
     // Pretend the mermaid block had previously rendered to a 30-cell-tall
@@ -2435,6 +2424,7 @@ async fn applying_theme_preserves_position_across_draw_cycle() {
             content,
             &palette,
             Theme::Default,
+            crate::config::MathMode::Text,
         );
         update_text_layouts(&tab.view.rendered, &mut tab.view.text_layouts, layout_width);
         tab.view.layout_width = layout_width;
@@ -2513,6 +2503,7 @@ async fn applying_theme_preserves_viewer_cursor_and_scroll() {
             content,
             &palette,
             Theme::Default,
+            crate::config::MathMode::Text,
         );
         tab.view.cursor_line = 50;
         tab.view.scroll_offset = 35;

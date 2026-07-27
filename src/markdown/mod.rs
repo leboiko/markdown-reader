@@ -62,6 +62,15 @@ pub struct HeadingAnchor {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MermaidBlockId(pub u64);
 
+/// Opaque identifier for an image-rendered math block, derived from a hash of
+/// its LaTeX source.
+///
+/// Same contract as [`MermaidBlockId`]: stable while the formula's text is
+/// unchanged, so an edit elsewhere in the document does not invalidate an
+/// already-rasterised image.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MathBlockId(pub u64);
+
 /// Opaque stable identifier for a table block, derived from a hash of its content.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TableBlockId(pub u64);
@@ -173,6 +182,28 @@ pub enum DocBlock {
         /// Byte offset in the source string where this block ends (exclusive).
         source_byte_end: u32,
     },
+    /// A block-level LaTeX formula (`$$…$$`) reserved for image rendering.
+    ///
+    /// Only produced when `math_mode = "image"`. In the default `text` mode the
+    /// renderer keeps emitting the Unicode box inline in a [`DocBlock::Text`],
+    /// so the default rendering path is byte-for-byte unchanged.
+    Math {
+        id: MathBlockId,
+        /// Raw LaTeX source without the `$$` delimiters. Kept so the Unicode
+        /// fallback can be produced without re-parsing the document.
+        source: String,
+        /// Current reserved height in display lines. Written each frame from
+        /// the cache by `update_math_heights`, read by [`DocBlock::height`].
+        /// `Cell` allows interior mutation during the draw loop's shared
+        /// iteration, exactly as for [`DocBlock::Mermaid`].
+        cell_height: Cell<u32>,
+        /// 0-indexed source line where the opening `$$` appears.
+        source_line: u32,
+        /// Byte offset in the source string where this block begins.
+        source_byte_start: u32,
+        /// Byte offset in the source string where this block ends (exclusive).
+        source_byte_end: u32,
+    },
     /// A parsed markdown table rendered inline with fair-share column widths.
     Table(TableBlock),
 }
@@ -197,6 +228,11 @@ impl DocBlock {
                 *source_byte_end += delta;
             }
             DocBlock::Mermaid {
+                source_byte_start,
+                source_byte_end,
+                ..
+            }
+            | DocBlock::Math {
                 source_byte_start,
                 source_byte_end,
                 ..
@@ -231,8 +267,67 @@ impl DocBlock {
                 source_byte_start,
                 source_byte_end,
                 ..
+            }
+            | DocBlock::Math {
+                source_byte_start,
+                source_byte_end,
+                ..
             } => (*source_byte_start as usize, *source_byte_end as usize),
             DocBlock::Table(t) => (t.source_byte_start as usize, t.source_byte_end as usize),
+        }
+    }
+
+    /// Overwrite `source_byte_start` for any variant.
+    ///
+    /// Paired with [`DocBlock::set_source_byte_end`] and
+    /// [`DocBlock::anchor_source_line`], this lets the contiguity fixup pass in
+    /// `render_markdown` treat every block uniformly. Without them the pass
+    /// needed one match arm per variant per step — five near-identical matches
+    /// that every new block type had to be threaded through by hand.
+    pub fn set_source_byte_start(&mut self, value: u32) {
+        match self {
+            DocBlock::Text {
+                source_byte_start, ..
+            }
+            | DocBlock::Mermaid {
+                source_byte_start, ..
+            }
+            | DocBlock::Math {
+                source_byte_start, ..
+            } => *source_byte_start = value,
+            DocBlock::Table(t) => t.source_byte_start = value,
+        }
+    }
+
+    /// Overwrite `source_byte_end` for any variant.
+    pub fn set_source_byte_end(&mut self, value: u32) {
+        match self {
+            DocBlock::Text {
+                source_byte_end, ..
+            }
+            | DocBlock::Mermaid {
+                source_byte_end, ..
+            }
+            | DocBlock::Math {
+                source_byte_end, ..
+            } => *source_byte_end = value,
+            DocBlock::Table(t) => t.source_byte_end = value,
+        }
+    }
+
+    /// The 0-indexed source line this block is anchored at, if it has one.
+    ///
+    /// `Text` blocks report their first rendered row's source line; the other
+    /// variants report the line their opening construct sits on (the ` ```mermaid `
+    /// fence, the `$$`, the table's header row). `None` means the block has no
+    /// rendered rows at all, which the fixup pass treats as "past EOF".
+    pub fn anchor_source_line(&self) -> Option<u32> {
+        match self {
+            DocBlock::Text { source_lines, .. } => source_lines.first().copied(),
+            DocBlock::Mermaid { source_line, .. } | DocBlock::Math { source_line, .. } => {
+                Some(*source_line)
+            }
+            DocBlock::Table(t) => Some(t.source_line),
         }
     }
 
@@ -246,7 +341,9 @@ impl DocBlock {
     pub fn height(&self) -> u32 {
         match self {
             DocBlock::Text { wrapped_height, .. } => wrapped_height.get(),
-            DocBlock::Mermaid { cell_height, .. } => cell_height.get(),
+            DocBlock::Mermaid { cell_height, .. } | DocBlock::Math { cell_height, .. } => {
+                cell_height.get()
+            }
             DocBlock::Table(t) => t.rendered_height,
         }
     }
@@ -362,6 +459,38 @@ pub fn update_mermaid_heights(
         } = block
         {
             let new_h = cache.height(*id, source, max_height);
+            if new_h != cell_height.get() {
+                cell_height.set(new_h);
+                changed = true;
+            }
+        }
+    }
+    changed
+}
+
+/// Synchronise the `cell_height` of every `Math` block in `blocks` with the
+/// current cache — the math counterpart of [`update_mermaid_heights`], with the
+/// same "only recompute when something moved" contract.
+///
+/// # Arguments
+///
+/// * `blocks`     – rendered document blocks for the active tab.
+/// * `cache`      – math render cache.
+/// * `max_height` – upper bound in display lines (from `Config::math_max_height`).
+///
+/// Returns `true` when at least one block's height changed.
+pub fn update_math_heights(
+    blocks: &[DocBlock],
+    cache: &crate::math_image::MathCache,
+    max_height: u32,
+) -> bool {
+    let mut changed = false;
+    for block in blocks {
+        if let DocBlock::Math {
+            id, cell_height, ..
+        } = block
+        {
+            let new_h = cache.height(*id, max_height);
             if new_h != cell_height.get() {
                 cell_height.set(new_h);
                 changed = true;
@@ -513,6 +642,9 @@ pub fn source_line_at(
                         *source_line + 1 + content_offset
                     }
                 }
+                // A math block renders as a single image (or a fallback box);
+                // every row of it maps back to the `$$` line that opened it.
+                DocBlock::Math { source_line, .. } => *source_line,
                 DocBlock::Table(t) => {
                     let layout = table_layouts.get(&t.id);
                     physical_row_source(t, local_visual, layout)
@@ -636,6 +768,16 @@ pub fn logical_line_at_source(
                     best = Some(offset);
                 }
             }
+            DocBlock::Math { source_line, .. } => {
+                // The whole block collapses to its opening `$$` line, so an
+                // exact hit lands on the block's first row.
+                if *source_line == target_source {
+                    return Some(offset);
+                }
+                if *source_line <= target_source {
+                    best = Some(offset);
+                }
+            }
             DocBlock::Table(t) => {
                 for (row_idx, &s) in t.row_source_lines.iter().enumerate() {
                     let rendered_row = if row_idx == 0 {
@@ -711,6 +853,7 @@ pub fn cell_to_string(spans: &[Span<'static>]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::MathMode;
     use crate::markdown::renderer::render_markdown;
     use crate::theme::{Palette, Theme};
 
@@ -767,7 +910,7 @@ mod tests {
     #[test]
     fn link_info_internal_anchor() {
         let md = "[Installation](#installation)\n";
-        let blocks = render_markdown(md, &palette(), theme());
+        let blocks = render_markdown(md, &palette(), theme(), MathMode::Text);
         let link = match &blocks[0] {
             DocBlock::Text { links, .. } => links.first().expect("link expected"),
             _ => panic!("expected Text block"),
@@ -783,7 +926,7 @@ mod tests {
     #[test]
     fn link_info_external_url_preserved() {
         let md = "[Rust](https://rust-lang.org)\n";
-        let blocks = render_markdown(md, &palette(), theme());
+        let blocks = render_markdown(md, &palette(), theme(), MathMode::Text);
         let link = match &blocks[0] {
             DocBlock::Text { links, .. } => links.first().expect("link expected"),
             _ => panic!("expected Text block"),
@@ -794,7 +937,7 @@ mod tests {
     #[test]
     fn heading_anchor_collected() {
         let md = "# Installation Guide\n\nsome text\n";
-        let blocks = render_markdown(md, &palette(), theme());
+        let blocks = render_markdown(md, &palette(), theme(), MathMode::Text);
         let anchor = match &blocks[0] {
             DocBlock::Text {
                 heading_anchors, ..
@@ -812,7 +955,7 @@ mod tests {
     #[test]
     fn heading_with_inline_code_produces_correct_anchor() {
         let md = "# `kg.nodes`\n\nsome text\n";
-        let blocks = render_markdown(md, &palette(), theme());
+        let blocks = render_markdown(md, &palette(), theme(), MathMode::Text);
         let anchor = match &blocks[0] {
             DocBlock::Text {
                 heading_anchors, ..
@@ -827,7 +970,7 @@ mod tests {
     #[test]
     fn heading_mixing_text_and_inline_code_includes_both_in_anchor() {
         let md = "# Use the `Foo` API\n\nsome text\n";
-        let blocks = render_markdown(md, &palette(), theme());
+        let blocks = render_markdown(md, &palette(), theme(), MathMode::Text);
         let anchor = match &blocks[0] {
             DocBlock::Text {
                 heading_anchors, ..
@@ -843,7 +986,7 @@ mod tests {
     #[test]
     fn heading_with_underscores_preserves_underscores_in_anchor() {
         let md = "# `kg.node_stats`\n\nsome text\n";
-        let blocks = render_markdown(md, &palette(), theme());
+        let blocks = render_markdown(md, &palette(), theme(), MathMode::Text);
         let anchor = match &blocks[0] {
             DocBlock::Text {
                 heading_anchors, ..
@@ -859,7 +1002,7 @@ mod tests {
     #[test]
     fn heading_with_multi_code_and_slash_produces_correct_anchor() {
         let md = "# `kg.node_stats` / `kg.predicate_stats`\n\nsome text\n";
-        let blocks = render_markdown(md, &palette(), theme());
+        let blocks = render_markdown(md, &palette(), theme(), MathMode::Text);
         let anchor = match &blocks[0] {
             DocBlock::Text {
                 heading_anchors, ..
@@ -936,7 +1079,7 @@ mod tests {
             "# Title\n\n{long_para}\n\n- [Section A](#section-a)\n- [Section B](#section-b)\n\n## Section A\n\nText.\n\n## Section B\n\nMore.\n",
         );
 
-        let blocks = render_markdown(&md, &palette(), theme());
+        let blocks = render_markdown(&md, &palette(), theme(), MathMode::Text);
 
         // Populate the text layout cache at width 80 so visual row mapping
         // is wrap-aware.
@@ -1007,7 +1150,7 @@ mod tests {
             "Final text.\n",
         );
 
-        let blocks = render_markdown(md, &palette(), theme());
+        let blocks = render_markdown(md, &palette(), theme(), MathMode::Text);
 
         let recorded = absolute_anchor_positions(&blocks);
         let actual = actual_heading_lines(&blocks);

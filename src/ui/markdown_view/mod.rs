@@ -6,6 +6,7 @@
 mod draw;
 mod gutter;
 mod highlight;
+mod math_draw;
 mod mermaid_draw;
 mod state;
 mod tests;

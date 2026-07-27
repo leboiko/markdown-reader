@@ -432,6 +432,7 @@ pub fn reparse_and_splice_block(
     block_index: usize,
     palette: &Palette,
     theme: Theme,
+    math_mode: crate::config::MathMode,
 ) {
     // Guard: the index might be out of range if a prior splice changed the
     // block list length.  This should not happen in normal usage (the cursor
@@ -444,7 +445,7 @@ pub fn reparse_and_splice_block(
     let end = end.min(hybrid.source.len());
     let start = start.min(end);
     let slice = &hybrid.source[start..end];
-    let replacement = render_block_from_slice(slice, start, palette, theme);
+    let replacement = render_block_from_slice(slice, start, palette, theme, math_mode);
     view.splice_blocks(block_index..block_index + 1, replacement);
 }
 
@@ -465,8 +466,9 @@ pub fn full_reparse(
     view: &mut MarkdownViewState,
     palette: &Palette,
     theme: Theme,
+    math_mode: crate::config::MathMode,
 ) {
-    let blocks = render_markdown(&hybrid.source, palette, theme);
+    let blocks = render_markdown(&hybrid.source, palette, theme, math_mode);
     // Recompute total_lines and positions; clear stale layout caches so the
     // next draw recalculates wrapped heights at the current terminal width.
     view.total_lines = blocks.iter().map(DocBlock::height).sum();
@@ -933,48 +935,14 @@ fn apply_delta(value: usize, delta: isize) -> usize {
 
 /// Extract `(source_byte_start, source_byte_end)` from any `DocBlock` variant.
 fn block_byte_range(block: &DocBlock) -> (usize, usize) {
-    match block {
-        DocBlock::Text {
-            source_byte_start,
-            source_byte_end,
-            ..
-        } => (*source_byte_start as usize, *source_byte_end as usize),
-        DocBlock::Mermaid {
-            source_byte_start,
-            source_byte_end,
-            ..
-        } => (*source_byte_start as usize, *source_byte_end as usize),
-        DocBlock::Table(t) => (t.source_byte_start as usize, t.source_byte_end as usize),
-    }
+    block.source_byte_range()
 }
 
 /// Write new `(source_byte_start, source_byte_end)` values into a `DocBlock`.
 fn set_block_byte_range(block: &mut DocBlock, start: usize, end: usize) {
     // Safe casts: source files are well under 4 GiB.
-    let start32 = start as u32;
-    let end32 = end as u32;
-    match block {
-        DocBlock::Text {
-            source_byte_start,
-            source_byte_end,
-            ..
-        } => {
-            *source_byte_start = start32;
-            *source_byte_end = end32;
-        }
-        DocBlock::Mermaid {
-            source_byte_start,
-            source_byte_end,
-            ..
-        } => {
-            *source_byte_start = start32;
-            *source_byte_end = end32;
-        }
-        DocBlock::Table(t) => {
-            t.source_byte_start = start32;
-            t.source_byte_end = end32;
-        }
-    }
+    block.set_source_byte_start(start as u32);
+    block.set_source_byte_end(end as u32);
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -982,6 +950,7 @@ fn set_block_byte_range(block: &mut DocBlock, start: usize, end: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::MathMode;
     use crate::markdown::renderer::render_markdown;
     use crate::theme::{Palette, Theme};
 
@@ -996,7 +965,7 @@ mod tests {
     /// Render a source document into blocks and wrap it in a `HybridState`.
     fn setup(source: &str) -> (HybridState, Vec<DocBlock>) {
         let state = HybridState::from_source(source);
-        let blocks = render_markdown(source, &palette(), theme());
+        let blocks = render_markdown(source, &palette(), theme(), MathMode::Text);
         (state, blocks)
     }
 
@@ -1587,7 +1556,7 @@ mod tests {
         }
 
         // Simulate cursor leaving block 0 → re-parse it.
-        reparse_and_splice_block(&state, &mut view, 0, &palette(), theme());
+        reparse_and_splice_block(&state, &mut view, 0, &palette(), theme(), MathMode::Text);
 
         // The re-parsed block must have a different TextBlockId because the
         // content hash is derived from the rendered spans — different source →
@@ -1632,7 +1601,7 @@ mod tests {
         }
 
         // Simulate cursor leave on block 0.
-        reparse_and_splice_block(&state, &mut view, 0, &palette(), theme());
+        reparse_and_splice_block(&state, &mut view, 0, &palette(), theme(), MathMode::Text);
 
         // The document now contains a mermaid block, so total block count must
         // be at least 3 (intro text, mermaid, outro text).
@@ -1714,7 +1683,7 @@ mod tests {
         state.apply_edit(&mut view.rendered, 0, 0, "New intro.\n\n");
         // Source is now longer and has an extra paragraph.
 
-        full_reparse(&state, &mut view, &palette(), theme());
+        full_reparse(&state, &mut view, &palette(), theme(), MathMode::Text);
 
         // After full reparse the block list must contain at least one more block
         // (the new paragraph).
@@ -1888,7 +1857,8 @@ mod tests {
         // On cursor-leave without editing, the source bytes are unchanged, so
         // render_markdown produces a block with the same `source` field and
         // therefore the same id.
-        let blocks2 = crate::markdown::renderer::render_markdown(DOC_3, &palette(), theme());
+        let blocks2 =
+            crate::markdown::renderer::render_markdown(DOC_3, &palette(), theme(), MathMode::Text);
         let mermaid_idx2 = find_mermaid_block(&blocks2);
         let id_after = match &blocks2[mermaid_idx2] {
             DocBlock::Mermaid { id, .. } => *id,
@@ -1919,7 +1889,12 @@ mod tests {
 
         // Parse a modified document: diagram content changed ("A-->B" → "A-->C").
         let modified = DOC_3.replace("A-->B", "A-->C");
-        let blocks2 = crate::markdown::renderer::render_markdown(&modified, &palette(), theme());
+        let blocks2 = crate::markdown::renderer::render_markdown(
+            &modified,
+            &palette(),
+            theme(),
+            MathMode::Text,
+        );
         let mermaid_idx2 = find_mermaid_block(&blocks2);
         let new_id = match &blocks2[mermaid_idx2] {
             DocBlock::Mermaid { id, .. } => *id,
@@ -2127,7 +2102,14 @@ mod tests {
         // call since `view` was consumed by the earlier `view_with_blocks(blocks)`.
         let (state2, blocks2) = setup(DOC_WITH_TABLE);
         let mut view2 = view_with_blocks(blocks2);
-        reparse_and_splice_block(&state2, &mut view2, table_idx, &palette(), theme());
+        reparse_and_splice_block(
+            &state2,
+            &mut view2,
+            table_idx,
+            &palette(),
+            theme(),
+            MathMode::Text,
+        );
         // No assertion needed — absence of panic is the contract.
     }
 
