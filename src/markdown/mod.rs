@@ -5,7 +5,31 @@ pub mod renderer;
 
 use std::cell::Cell;
 
+use pulldown_cmark::Options;
 use ratatui::text::{Span, Text};
+
+/// The pulldown-cmark option set every parser in the app is built with.
+///
+/// There are four independent parse sites — the TUI renderer, the HTML
+/// exporter, and both link scanners in `checklinks`. They must agree, or the
+/// same document is interpreted differently depending on which one reads it
+/// (the frontmatter of #36 is exactly that class of bug: enabling metadata
+/// blocks in the viewer alone would leave `--export-html` and `--check-links`
+/// still treating YAML as markdown).
+///
+/// `ENABLE_YAML_STYLE_METADATA_BLOCKS` / `ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS`
+/// make a leading `---`/`+++` delimited block parse as document metadata
+/// rather than as a thematic break followed by markdown. Only a block at the
+/// very start of the document qualifies, so a mid-document `---` still renders
+/// as a horizontal rule.
+pub fn markdown_options() -> Options {
+    Options::ENABLE_TABLES
+        | Options::ENABLE_STRIKETHROUGH
+        | Options::ENABLE_TASKLISTS
+        | Options::ENABLE_MATH
+        | Options::ENABLE_YAML_STYLE_METADATA_BLOCKS
+        | Options::ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS
+}
 
 /// Position and metadata of a hyperlink within a rendered text block.
 ///

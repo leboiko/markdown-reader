@@ -35,6 +35,33 @@ fn heading_text(line: &str) -> &str {
     without_hashes.trim()
 }
 
+/// Index of the first line *after* a leading `---`/`+++` frontmatter block.
+///
+/// Returns `0` when the document has no frontmatter, so callers can always
+/// start scanning at the returned index.
+///
+/// Frontmatter is not markdown, so its contents must not be scanned for
+/// headings — a YAML comment (`# draft note`) or a value containing a `#`
+/// would otherwise be matched by `--section` as an H1 (#36). The rule mirrors
+/// pulldown-cmark's metadata-block parsing: the delimiter must be the very
+/// first line, and an unterminated block is not frontmatter at all.
+fn frontmatter_end(lines: &[&str]) -> usize {
+    let Some(&first) = lines.first() else {
+        return 0;
+    };
+    let delimiter = match first.trim_end() {
+        "---" => "---",
+        "+++" => "+++",
+        _ => return 0,
+    };
+    lines[1..]
+        .iter()
+        .position(|line| line.trim_end() == delimiter)
+        // `position` is relative to `lines[1..]`; +1 to re-base, +1 to land on
+        // the line after the closing delimiter.
+        .map_or(0, |rel| rel + 2)
+}
+
 /// Find the first heading whose text contains `name` (case-insensitive
 /// substring match) and return the heading + its body as a `String`.
 ///
@@ -53,6 +80,11 @@ fn heading_text(line: &str) -> &str {
 /// If the section extends to the end of the file, all remaining lines are
 /// included.
 ///
+/// # Frontmatter
+///
+/// A leading `---`/`+++` metadata block is skipped before the search begins,
+/// so `#`-prefixed lines inside it are never mistaken for headings.
+///
 /// # Arguments
 ///
 /// * `source` – full markdown source string.
@@ -68,11 +100,12 @@ pub fn extract_section(source: &str, name: &str) -> Option<String> {
     let lines: Vec<&str> = source.lines().collect();
     let n = lines.len();
 
-    // Find the first matching heading.
+    // Find the first matching heading, skipping any frontmatter block.
     let mut start_idx: Option<usize> = None;
     let mut section_level: usize = 0;
 
-    for (i, &line) in lines.iter().enumerate() {
+    let body_start = frontmatter_end(&lines);
+    for (i, &line) in lines.iter().enumerate().skip(body_start) {
         if let Some(level) = heading_level(line) {
             let text_lower = heading_text(line).to_lowercase();
             if text_lower.contains(&name_lower) {
@@ -204,5 +237,53 @@ mod tests {
         let doc = "## Section\n\n### Sub-sub\n\nbody\n\n## Next\n";
         let result = extract_section(doc, "Section").expect("should find Section");
         assert_eq!(result, "## Section\n\n### Sub-sub\n\nbody\n\n");
+    }
+
+    // ── Frontmatter (#36) ──────────────────────────────────────────────────────
+
+    /// A YAML comment inside frontmatter looks exactly like an H1 to a
+    /// line-based scanner. It must not be matched, and — critically — must not
+    /// shadow the real heading of the same name further down the document.
+    #[test]
+    fn yaml_comment_in_frontmatter_is_not_a_heading() {
+        let doc = "---\n# Notes about the draft\ntitle: My Note\n---\n\n# Notes\n\nreal body\n";
+        let result = extract_section(doc, "Notes").expect("should find the real `# Notes`");
+        assert_eq!(result, "# Notes\n\nreal body\n");
+    }
+
+    /// The same for TOML `+++` frontmatter, where `#` is also the comment
+    /// marker.
+    #[test]
+    fn toml_comment_in_frontmatter_is_not_a_heading() {
+        let doc = "+++\n# Config section\ntitle = \"x\"\n+++\n\n# Config\n\nreal body\n";
+        let result = extract_section(doc, "Config").expect("should find the real `# Config`");
+        assert_eq!(result, "# Config\n\nreal body\n");
+    }
+
+    /// Frontmatter that never closes is not frontmatter — the document must be
+    /// scanned from line 0 so its headings remain findable.
+    #[test]
+    fn unterminated_frontmatter_does_not_hide_the_document() {
+        let doc = "---\ntitle: My Note\n\n# Heading\n\nbody\n";
+        let result = extract_section(doc, "Heading").expect("should find `# Heading`");
+        assert_eq!(result, "# Heading\n\nbody\n");
+    }
+
+    /// A `---` that is not on the first line is a thematic break, not a
+    /// frontmatter delimiter, and must not cause any lines to be skipped.
+    #[test]
+    fn mid_document_dashes_do_not_start_frontmatter() {
+        let doc = "# Top\n\n---\n\n# Later\n\nbody\n";
+        let result = extract_section(doc, "Top").expect("should find `# Top`");
+        assert_eq!(result, "# Top\n\n---\n\n");
+    }
+
+    /// Documents without frontmatter must be unaffected: the scan still starts
+    /// at line 0.
+    #[test]
+    fn heading_on_first_line_still_matches() {
+        let doc = "# Top\n\nbody\n";
+        let result = extract_section(doc, "Top").expect("should find `# Top`");
+        assert_eq!(result, "# Top\n\nbody\n");
     }
 }

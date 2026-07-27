@@ -18,9 +18,9 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use ignore::WalkBuilder;
-use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 
-use crate::markdown::heading_to_anchor;
+use crate::markdown::{heading_to_anchor, markdown_options};
 
 // ── Public surface ────────────────────────────────────────────────────────────
 
@@ -412,12 +412,7 @@ fn parse_anchors_from_file(path: &Path) -> HashSet<String> {
 /// disambiguation must handle it themselves (GitHub disambiguates with `-1`,
 /// `-2`, etc., but for link validation we accept any occurrence as valid).
 fn parse_anchors(content: &str) -> HashSet<String> {
-    let opts = Options::ENABLE_TABLES
-        | Options::ENABLE_STRIKETHROUGH
-        | Options::ENABLE_TASKLISTS
-        | Options::ENABLE_MATH;
-
-    let parser = Parser::new_ext(content, opts);
+    let parser = Parser::new_ext(content, markdown_options());
     let mut anchors = HashSet::new();
     let mut in_heading = false;
     let mut heading_text = String::new();
@@ -507,18 +502,13 @@ struct RawLink {
 /// pulldown-cmark resolves reference-style links (`[text][label]` +
 /// `[label]: url`) automatically, so no special handling is required here.
 fn extract_links(content: &str) -> Vec<RawLink> {
-    let opts = Options::ENABLE_TABLES
-        | Options::ENABLE_STRIKETHROUGH
-        | Options::ENABLE_TASKLISTS
-        | Options::ENABLE_MATH;
-
     // Build a byte-offset → line-number map so we can convert the span start
     // offsets that pulldown-cmark gives us into 1-based line numbers.
     let line_starts = build_line_starts(content);
 
     // `into_offset_iter()` wraps each event with its byte range so we can
     // derive source line numbers without a separate byte-scan pass.
-    let parser = Parser::new_ext(content, opts).into_offset_iter();
+    let parser = Parser::new_ext(content, markdown_options()).into_offset_iter();
 
     let mut links = Vec::new();
     let mut current_link: Option<(String, u32)> = None;
@@ -775,6 +765,56 @@ mod tests {
         let (_dir, root) = make_temp_dir(&[("a.md", "[link](./b.md)\n"), ("b.md", "# B file\n")]);
         let report = check_dir(&root, &CheckOpts::default());
         assert_eq!(report.broken_count, 0, "expected no broken links");
+    }
+
+    // ── Frontmatter (#36) ─────────────────────────────────────────────────────
+
+    /// A `[…](…)`-shaped YAML value is not a markdown link — it is a string.
+    /// Reporting it as a broken link is a false positive that makes
+    /// `--check-links` unusable on an Obsidian vault.
+    #[test]
+    fn link_shaped_frontmatter_value_is_not_checked() {
+        let (_dir, root) = make_temp_dir(&[(
+            "doc.md",
+            "---\nsource: \"[ref](./does-not-exist.md)\"\n---\n\n# Title\n",
+        )]);
+        let report = check_dir(&root, &CheckOpts::default());
+        assert_eq!(
+            report.broken_count, 0,
+            "frontmatter is not markdown; its values must not be scanned for links: {:#?}",
+            report.files,
+        );
+    }
+
+    /// A `#`-prefixed line inside frontmatter must not register as a heading,
+    /// or it would silently validate anchors that do not exist in the rendered
+    /// document.
+    #[test]
+    fn frontmatter_comment_does_not_provide_an_anchor() {
+        let (_dir, root) = make_temp_dir(&[(
+            "doc.md",
+            "---\n# Ghost Section\ntitle: x\n---\n\n# Real\n\n[link](#ghost-section)\n",
+        )]);
+        let report = check_dir(&root, &CheckOpts::default());
+        assert_eq!(
+            report.broken_count, 1,
+            "`#ghost-section` only exists inside frontmatter, so the anchor is broken: {:#?}",
+            report.files,
+        );
+        assert_eq!(report.files[0].broken[0].raw_target, "#ghost-section");
+    }
+
+    /// Real links in the body of a document with frontmatter must still be
+    /// checked — the metadata block must not swallow the rest of the file.
+    #[test]
+    fn links_after_frontmatter_are_still_checked() {
+        let (_dir, root) = make_temp_dir(&[(
+            "doc.md",
+            "---\ntitle: My Note\n---\n\n# Title\n\n[gone](./nonexistent.md)\n",
+        )]);
+        let report = check_dir(&root, &CheckOpts::default());
+        assert_eq!(report.broken_count, 1, "body links must still be validated");
+        assert_eq!(report.files[0].broken[0].raw_target, "./nonexistent.md");
     }
 
     #[test]

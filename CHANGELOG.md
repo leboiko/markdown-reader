@@ -5,6 +5,47 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.34.77] — 2026-08-31
+
+### Fixed — YAML / TOML frontmatter is no longer parsed as markdown (#36)
+
+A leading `---` (Obsidian, Jekyll, backlog.md) or `+++` (Hugo, Zola)
+frontmatter block was fed straight into the markdown parser. The delimiters
+became thematic-break rules and the metadata became markdown, so a YAML
+sequence followed by another key rendered wrong: with
+
+```yaml
+tags:
+  - alpha
+  - beta
+status: draft
+```
+
+`status: draft` was swallowed into the `beta` list item, because markdown
+needs a blank line to close a list and YAML does not. Reported by
+@hhoeflin (#36).
+
+Frontmatter is now recognised as document metadata and rendered as its own
+syntax-highlighted box, labelled `frontmatter` in the top border. Only a
+block at the very start of the file qualifies — a mid-document `---` is
+still a thematic break.
+
+The option set is now shared by every parser in the app, so the same
+document is read the same way everywhere:
+
+- **Viewer** — labelled `frontmatter` box, highlighted as YAML or TOML.
+- **`--export-html`** — a `<section class="frontmatter">` with a caption,
+  instead of an `<hr>` plus a mangled `<ul>`.
+- **`--check-links`** — frontmatter is skipped, so a `[…](…)`-shaped YAML
+  *value* is no longer reported as a broken link, and a `#`-prefixed line
+  inside frontmatter no longer supplies a phantom heading anchor.
+- **`--section`** — a `#` comment inside frontmatter is no longer matched
+  as an H1.
+
+Source-line mapping is preserved across the block, so hybrid edit mode and
+the outline picker still land on the right rows in a document with
+frontmatter.
+
 ## [1.34.76] — 2026-08-29
 
 ### Fixed — mermaid-text self-loop and back-edge routing (#42)
