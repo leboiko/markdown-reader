@@ -3,6 +3,19 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.57.1 — 2026-08-29 — Self-loop and back-edge routing (#42)
+
+### Fixed
+
+- Rectangle flowchart self-loops now leave and return through distinct ports
+  instead of collapsing into a one-cell dangling stub.
+- Multiple feedback edges targeting the same rectangle keep every arrow tip,
+  preserve node borders, and connect their source junctions to the routed
+  perimeter path in both Unicode and ASCII output.
+
+Reported by @jserv in #42. Regression coverage pins the exact edge counts and
+connector topology so dropping an edge cannot make the tests pass.
+
 ## 0.57.0 — 2026-07-21 — Opt-in hard `max_width` budget (#32)
 
 ### Added

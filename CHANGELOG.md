@@ -5,6 +5,18 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.34.76] — 2026-08-29
+
+### Fixed — mermaid-text self-loop and back-edge routing (#42)
+
+Bumps the bundled `mermaid-text` to 0.57.1. Rectangle flowchart self-loops now
+render as complete leave-and-return routes, and multiple feedback edges retain
+all arrow tips and source connectors without damaging node borders. Reported
+by @jserv in #42.
+
+Also updates the lockfile-only dev-test dependency `h2` to the patched 0.4.19
+release for RUSTSEC-2026-0258.
+
 ## [1.34.75] — 2026-07-21
 
 ### Changed — bundle mermaid-text 0.57.0

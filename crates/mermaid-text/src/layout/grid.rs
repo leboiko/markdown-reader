@@ -363,6 +363,20 @@ impl Grid {
         self.cells[row][col] = DIR_TO_CHAR[self.directions[row][col] as usize];
     }
 
+    /// Replace a route cell's direction mask with the exact set derived from
+    /// the final routed paths. Protected zero-mask cells (for example another
+    /// edge's arrow tip) remain untouched.
+    pub(crate) fn replace_dirs(&mut self, col: usize, row: usize, bits: u8) {
+        if row >= self.height || col >= self.width {
+            return;
+        }
+        if self.protected[row][col] && self.directions[row][col] == 0 {
+            return;
+        }
+        self.directions[row][col] = bits;
+        self.cells[row][col] = DIR_TO_CHAR[bits as usize];
+    }
+
     /// Record direction bits at `(col, row)` *without* writing the glyph or
     /// honouring protection. Used by [`crate::render::unicode`]'s subgraph
     /// border drawer to seed the bit map at border-line cells: subsequent
