@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed — mermaid-text self-loop and back-edge routing (#42)
 
-Bumps the bundled `mermaid-text` to 0.57.1. Rectangle flowchart self-loops now
+Bumps the bundled `mermaid-text` to 0.57.1. LR rectangle flowchart self-loops now
 render as complete leave-and-return routes, and multiple feedback edges retain
 all arrow tips and source connectors without damaging node borders. Reported
 by @jserv in #42.

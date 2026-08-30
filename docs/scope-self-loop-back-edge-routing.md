@@ -1,6 +1,6 @@
 # Scope: self-loop and back-edge routing (#42)
 
-Status: focused implementation complete; validation and review in progress.
+Status: focused implementation, review fixes, and validation complete.
 
 ## Observable failures
 
@@ -34,10 +34,11 @@ output. That exceeded the snapshot ceiling, so the generated snapshot changes
 and generalized behavior were reverted.
 
 The retained fix is limited to the issue's rectangle flowchart envelope. It
-uses distinct self-loop ports, spreads rectangle back-edge fan-in along the
-actual attachment side, preserves routed endpoints during corridor nudging,
-and reconstructs shared source junctions from the final path directions.
-Existing rounded state-diagram rendering remains byte-identical.
+uses distinct ports for the reported LR self-loop, spreads rectangle back-edge
+fan-in along the actual attachment side, preserves routed endpoints during
+corridor nudging, and reconstructs shared source junctions from the final path
+directions. Existing rounded state-diagram and reverse-direction self-loop
+rendering remains byte-identical.
 
 ## Validation gate
 

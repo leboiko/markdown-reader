@@ -61,3 +61,17 @@ implementation first and confirm it fails when the source stamp is absent.
 - Test reliability: local audit confirmed the six issue edges are counted and
   ASCII is pinned to Unicode conversion; the source-connectivity weakness is
   captured above.
+
+## Resolution
+
+Both findings were resolved in the dedicated review-fix worktree:
+
+- The new distinct-port self-loop path is now gated to the reported LR
+  rectangle case. RL and BT retain their legacy routing and have Unicode and
+  ASCII regressions proving all rectangle borders remain intact.
+- The LR fixture now pins the `├` / `+` source junction and its routed neighbor.
+  Temporarily removing the exact source stamp makes the strengthened Unicode
+  test fail on the detached `│ Retry │┐` output.
+
+The final PR remains at the hard ceiling of 250 changed production-code lines
+and reclassifies zero existing snapshots.

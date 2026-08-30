@@ -124,6 +124,51 @@ fn assert_back_edges_have_complete_endpoints(
     }
 }
 
+fn assert_self_loop_source_join(output: &str, junction: char) {
+    let line = output
+        .lines()
+        .find(|line| line.contains("Retry"))
+        .expect("Retry node should be rendered");
+    let chars: Vec<char> = line.chars().collect();
+    let label_end = line
+        .find("Retry")
+        .map(|byte| line[..byte + "Retry".len()].chars().count())
+        .expect("label byte index should map to a character column");
+    let junction_col = chars[label_end..]
+        .iter()
+        .position(|&glyph| glyph == junction)
+        .map(|offset| label_end + offset)
+        .unwrap_or_else(|| panic!("Retry must expose a self-loop source junction:\n{output}"));
+    assert!(
+        chars
+            .get(junction_col + 1)
+            .is_some_and(|glyph| !glyph.is_whitespace()),
+        "Retry's source junction must connect to the loop route:\n{output}"
+    );
+}
+
+fn assert_reverse_self_loop_preserves_box(
+    output: &str,
+    corner: char,
+    expected_corners: usize,
+    border: char,
+) {
+    let label_line = output
+        .lines()
+        .find(|line| line.contains("Retry"))
+        .expect("Retry node should be rendered")
+        .trim();
+    assert!(
+        label_line.starts_with(border) && label_line.ends_with(border),
+        "reverse self-loop must preserve both side borders:\n{output}"
+    );
+    assert_eq!(
+        output.chars().filter(|&glyph| glyph == corner).count(),
+        expected_corners,
+        "reverse self-loop must not split a horizontal box border:\n{output}"
+    );
+}
+
 #[test]
 fn unicode_self_loop_leaves_and_returns_to_distinct_ports() {
     let output = render(SELF_LOOP).expect("fixture should render");
@@ -133,6 +178,7 @@ fn unicode_self_loop_leaves_and_returns_to_distinct_ports() {
         1,
         "{output}"
     );
+    assert_self_loop_source_join(&output, '├');
     assert_no_exposed_connector_arms(&output);
 }
 
@@ -148,10 +194,28 @@ fn ascii_self_loop_leaves_and_returns_to_distinct_ports() {
         1,
         "{output}"
     );
+    assert_self_loop_source_join(&output, '+');
     assert!(
         output.lines().skip(3).any(|line| line.contains('-')),
         "ASCII self-loop must contain a horizontal return leg:\n{output}"
     );
+}
+
+#[test]
+fn unicode_reverse_self_loops_preserve_rectangle_borders() {
+    for direction in ["RL", "BT"] {
+        let output = render(&format!("flowchart {direction}\nA[Retry] --> A\n"))
+            .expect("fixture should render");
+        assert_reverse_self_loop_preserves_box(&output, '┌', 1, '│');
+    }
+}
+
+#[test]
+fn ascii_reverse_self_loops_preserve_rectangle_borders() {
+    for direction in ["RL", "BT"] {
+        let output = render_ascii(&format!("flowchart {direction}\nA[Retry] --> A\n"));
+        assert_reverse_self_loop_preserves_box(&output, '+', 4, '|');
+    }
 }
 
 #[test]

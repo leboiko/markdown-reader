@@ -111,7 +111,7 @@ mermaid-text --width 80 my_diagram.mmd
 | Bidirectional `<-->` | yes |
 | Circle endpoint `--o` | yes |
 | Cross endpoint `--x` | yes |
-| Rectangle self-loops and feedback/back edges | yes |
+| LR rectangle self-loops and rectangle feedback/back edges | yes |
 | Edge labels `\|label\|` and `-- label -->` | yes |
 | Subgraphs (`subgraph … end`) | yes |
 | Nested subgraphs | yes |

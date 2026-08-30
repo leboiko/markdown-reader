@@ -1007,6 +1007,7 @@ fn render_inner(
             .copied()
             .unwrap_or(graph.direction);
         let self_loop = edge.from == edge.to
+            && dir == Direction::LeftToRight
             && graph
                 .node(&edge.from)
                 .is_some_and(|node| node.shape == NodeShape::Rectangle);
@@ -1515,6 +1516,7 @@ fn compute_spread_attaches(
             // entry. Using back-edge points for both ends collapses the loop
             // to a one-cell stub because both points share a centre port.
             if edge.from == edge.to
+                && dir == Direction::LeftToRight
                 && graph
                     .node(&edge.from)
                     .is_some_and(|node| node.shape == NodeShape::Rectangle)

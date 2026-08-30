@@ -7,7 +7,7 @@ This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ### Fixed
 
-- Rectangle flowchart self-loops now leave and return through distinct ports
+- LR rectangle flowchart self-loops now leave and return through distinct ports
   instead of collapsing into a one-cell dangling stub.
 - Multiple feedback edges targeting the same rectangle keep every arrow tip,
   preserve node borders, and connect their source junctions to the routed
