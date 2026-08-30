@@ -538,7 +538,7 @@ fn svg_to_image(svg: &str, bg_rgb: (u8, u8, u8)) -> Result<DynamicImage, String>
 
 fn demultiply_alpha(data: &[u8], width: u32, height: u32) -> Result<RgbaImage, String> {
     let mut out = Vec::with_capacity(data.len());
-    for pixel in data.chunks_exact(4) {
+    for pixel in data.as_chunks::<4>().0 {
         let (r, g, b, a) = (pixel[0], pixel[1], pixel[2], pixel[3]);
         if a == 0 {
             out.extend_from_slice(&[0, 0, 0, 0]);

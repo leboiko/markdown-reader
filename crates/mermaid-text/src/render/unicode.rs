@@ -11,7 +11,10 @@ use unicode_width::UnicodeWidthStr;
 use crate::{
     layout::{
         Grid, SubgraphBounds,
-        grid::{Attach, BAR_THICKNESS, EdgeLineStyle, arrow, endpoint},
+        grid::{
+            Attach, BAR_THICKNESS, DIR_DOWN, DIR_LEFT, DIR_RIGHT, DIR_UP, EdgeLineStyle, arrow,
+            endpoint,
+        },
         layered::GridPos,
         router,
     },
@@ -316,6 +319,81 @@ fn has_rounded_bottom_border(shape: NodeShape) -> bool {
             | NodeShape::Note
             | NodeShape::DoubleCircle
     )
+}
+
+fn routed_direction_bits_at(paths: &[Option<Vec<(usize, usize)>>], col: usize, row: usize) -> u8 {
+    let mut bits = 0;
+    for path in paths.iter().flatten() {
+        for (idx, &(path_col, path_row)) in path.iter().enumerate() {
+            if path_col != col || path_row != row {
+                continue;
+            }
+            for &(next_col, next_row) in path
+                .get(idx.wrapping_sub(1))
+                .into_iter()
+                .chain(path.get(idx + 1))
+            {
+                bits |= if next_col < col {
+                    DIR_LEFT
+                } else if next_col > col {
+                    DIR_RIGHT
+                } else if next_row < row {
+                    DIR_UP
+                } else if next_row > row {
+                    DIR_DOWN
+                } else {
+                    0
+                };
+            }
+        }
+    }
+    bits
+}
+
+struct BackEdgeSourceJoin {
+    border: (usize, usize),
+    expected_border: char,
+    junction: char,
+    path: Attach,
+    anchor_bits: u8,
+    skip_border_stamp: bool,
+}
+
+fn exact_back_edge_source_join(
+    source: Attach,
+    self_loop: bool,
+    dir: Direction,
+) -> BackEdgeSourceJoin {
+    let (border, expected_border, junction, anchor_bits) = match (self_loop, dir) {
+        (true, Direction::LeftToRight) => (
+            (source.col.saturating_sub(1), source.row),
+            '│',
+            '├',
+            DIR_LEFT,
+        ),
+        (true, Direction::RightToLeft) => ((source.col + 1, source.row), '│', '┤', DIR_RIGHT),
+        (true, Direction::TopToBottom) => {
+            ((source.col, source.row.saturating_sub(1)), '─', '┬', DIR_UP)
+        }
+        (true, Direction::BottomToTop) => ((source.col, source.row + 1), '─', '┴', DIR_DOWN),
+        (false, Direction::LeftToRight | Direction::RightToLeft) => {
+            ((source.col, source.row.saturating_sub(1)), '─', '┬', DIR_UP)
+        }
+        (false, Direction::TopToBottom | Direction::BottomToTop) => (
+            (source.col.saturating_sub(1), source.row),
+            '│',
+            '├',
+            DIR_LEFT,
+        ),
+    };
+    BackEdgeSourceJoin {
+        border,
+        expected_border,
+        junction,
+        path: source,
+        anchor_bits,
+        skip_border_stamp: false,
+    }
 }
 
 /// Recognise a synthesised inner `[*]` marker that was inserted by the
@@ -894,11 +972,54 @@ fn render_inner(
     // node has a rounded bottom border — in that case stamping `┬` onto the
     // bottom border row would pierce the `╰──╯` arc (B12).  The `┴` on the
     // path row (from `back_edge_path_joins`) already makes the connection.
+    // Count fan-in as well so rectangle-node back edges preserve spread tips.
+    let mut back_destination_counts: HashMap<&str, usize> = HashMap::new();
+    for (edge_idx, edge) in graph.edges.iter().enumerate() {
+        if edge_is_back_flags[edge_idx] {
+            *back_destination_counts.entry(edge.to.as_str()).or_default() += 1;
+        }
+    }
+    let repairs_multi_back_edges = |edge: &crate::types::Edge| {
+        back_destination_counts
+            .get(edge.to.as_str())
+            .copied()
+            .unwrap_or(0)
+            > 1
+            && graph
+                .node(&edge.from)
+                .is_some_and(|node| node.shape == NodeShape::Rectangle)
+            && graph
+                .node(&edge.to)
+                .is_some_and(|node| node.shape == NodeShape::Rectangle)
+    };
+    let preserve_back_edge_endpoints = graph.edges.iter().any(repairs_multi_back_edges);
+
     let mut back_edge_border_joins: Vec<(usize, usize, bool, bool, Direction)> = Vec::new();
     // First-path-cell joins (source end only — destination end is the arrow tip).
     let mut back_edge_path_joins: Vec<(usize, usize, Direction)> = Vec::new();
+    let mut exact_back_edge_source_joins = Vec::new();
     for (edge_idx, edge) in graph.edges.iter().enumerate() {
         if !edge_is_back_flags[edge_idx] {
+            continue;
+        }
+        let dir = edge_effective_dirs
+            .get(edge_idx)
+            .copied()
+            .unwrap_or(graph.direction);
+        let self_loop = edge.from == edge.to
+            && dir == Direction::LeftToRight
+            && graph
+                .node(&edge.from)
+                .is_some_and(|node| node.shape == NodeShape::Rectangle);
+        if self_loop || repairs_multi_back_edges(edge) {
+            if let Some(Some((src, _))) = attach_points.get(edge_idx) {
+                exact_back_edge_source_joins
+                    .push(exact_back_edge_source_join(*src, self_loop, dir));
+            }
+            continue;
+        }
+        if edge.from == edge.to {
+            // Non-rectangle self-loops retain the legacy state-diagram layout.
             continue;
         }
         if let (Some((fp, fg)), Some((tp, tg))) = (
@@ -917,19 +1038,6 @@ fn render_inner(
                 &externally_attached_markers,
             ),
         ) {
-            // For self-loops the source and destination are the same node, so
-            // `sb == db`. The router places `▴` at the entry cell (which equals
-            // `sb`) and protects it. Stamping `┬` on top of that arrowhead via
-            // `grid.set()` (unconditional) would erase the arrowhead, so we skip
-            // junction stamping entirely for self-loops. The arrow tip already
-            // makes the connection visually clear.
-            if edge.from == edge.to {
-                continue;
-            }
-            let dir = edge_effective_dirs
-                .get(edge_idx)
-                .copied()
-                .unwrap_or(graph.direction);
             let (sb, sp) = back_edge_border_cells(fp, fg, dir);
             let (db, _) = back_edge_border_cells(tp, tg, dir);
             // B12 guard: for LR/RL, the source border row is the bottom of the
@@ -979,7 +1087,7 @@ fn render_inner(
         &edge_is_back_flags,
         &edge_has_label,
         &node_rects,
-        enable_endpoint_corner_nudge,
+        (preserve_back_edge_endpoints, enable_endpoint_corner_nudge),
         |edge_idx| {
             let dir = edge_effective_dirs
                 .get(edge_idx)
@@ -1227,6 +1335,23 @@ fn render_inner(
         grid.set(*col, *row, glyph);
     }
 
+    // Rectangle self-loops and multi-back-edge fan-in need the exact routed
+    // directions because their adjacent source cells can be shared junctions.
+    for join in &exact_back_edge_source_joins {
+        if !join.skip_border_stamp && grid.get(join.border.0, join.border.1) == join.expected_border
+        {
+            grid.set(join.border.0, join.border.1, join.junction);
+        }
+        let route_bits = routed_direction_bits_at(&paths, join.path.col, join.path.row);
+        let joined_bits = route_bits | join.anchor_bits;
+        let joined_bits = if joined_bits == DIR_UP | DIR_DOWN | DIR_RIGHT {
+            DIR_UP | DIR_LEFT | DIR_RIGHT
+        } else {
+            joined_bits
+        };
+        grid.replace_dirs(join.path.col, join.path.row, joined_bits);
+    }
+
     // Pass 2b: Write all edge labels after node boxes so that node box
     // drawing (which uses `set()` unconditionally) cannot overwrite labels.
     // Labels are protected so that node labels in pass 3 cannot erase them.
@@ -1386,10 +1511,20 @@ fn compute_spread_attaches(
                 .get(idx)
                 .copied()
                 .unwrap_or(graph.direction);
-            // Self-loops and true back-edges both use the perpendicular-side
-            // attach points. Self-loops have `from_pos == to_pos` so
-            // `is_back_edge` returns false for them; check explicitly first.
-            if edge.from == edge.to || is_back_edge(from_pos, to_pos, dir) {
+            // A self-loop must use two distinct sides: leave through the
+            // normal flow-direction exit, then return through the back-edge
+            // entry. Using back-edge points for both ends collapses the loop
+            // to a one-cell stub because both points share a centre port.
+            if edge.from == edge.to
+                && dir == Direction::LeftToRight
+                && graph
+                    .node(&edge.from)
+                    .is_some_and(|node| node.shape == NodeShape::Rectangle)
+            {
+                let src = exit_point(from_pos, from_geom, dir);
+                let dst = entry_point_back_edge(to_pos, to_geom, dir);
+                Some((src, dst))
+            } else if edge.from == edge.to || is_back_edge(from_pos, to_pos, dir) {
                 let src = exit_point_back_edge(from_pos, from_geom, dir);
                 let dst = entry_point_back_edge(to_pos, to_geom, dir);
                 Some((src, dst))
@@ -1487,14 +1622,45 @@ fn compute_spread_attaches(
         ) else {
             continue;
         };
-        let interior_clamp_for_lr = destination_interior_clamp_allowed(graph, indices);
-        let reorder_for_lr_fanout = destination_reordering_allowed(graph, indices);
+        let side_attached_rectangles = indices.iter().all(|&idx| {
+            let edge = &graph.edges[idx];
+            let dir = edge_effective_dirs[idx];
+            let is_back = edge.from == edge.to
+                || match (
+                    endpoint_pos(
+                        &edge.from,
+                        positions,
+                        sg_bounds,
+                        externally_attached_markers,
+                    ),
+                    endpoint_pos(&edge.to, positions, sg_bounds, externally_attached_markers),
+                ) {
+                    (Some(from), Some(to)) => is_back_edge(from, to, dir),
+                    _ => false,
+                };
+            is_back
+                && graph
+                    .node(&edge.from)
+                    .is_some_and(|node| node.shape == NodeShape::Rectangle)
+                && graph
+                    .node(&edge.to)
+                    .is_some_and(|node| node.shape == NodeShape::Rectangle)
+        });
+        let spread_dir = if side_attached_rectangles {
+            perpendicular_direction(edge_effective_dirs[indices[0]])
+        } else {
+            graph.direction
+        };
+        let interior_clamp_for_lr =
+            spread_dir == graph.direction && destination_interior_clamp_allowed(graph, indices);
+        let reorder_for_lr_fanout =
+            spread_dir == graph.direction && destination_reordering_allowed(graph, indices);
         spread_destinations(
             &mut pairs,
             indices,
             to_pos,
             to_geom,
-            graph.direction,
+            spread_dir,
             interior_clamp_for_lr,
             reorder_for_lr_fanout,
         );

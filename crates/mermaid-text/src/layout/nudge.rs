@@ -96,11 +96,18 @@ pub(crate) fn run(
     edge_is_back: &[bool],
     edge_has_label: &[bool],
     node_boxes: &[(usize, usize, usize, usize)],
-    enable_endpoint_corner_nudge: bool,
+    options: (bool, bool),
     tip_for: impl Fn(usize) -> char,
 ) {
+    let (preserve_back_edge_endpoints, enable_endpoint_corner_nudge) = options;
     let segments = collect_segments(paths);
-    let shifts = plan_parallel_merges(&segments, paths, grid, edge_is_back);
+    let shifts = plan_parallel_merges(
+        &segments,
+        paths,
+        grid,
+        edge_is_back,
+        preserve_back_edge_endpoints,
+    );
     apply_shifts(grid, paths, shifts, &tip_for);
     evict_foreign_halo_runs(grid, paths, edge_has_label, node_boxes, &tip_for);
     if enable_endpoint_corner_nudge {
@@ -185,6 +192,7 @@ fn plan_parallel_merges(
     paths: &[Option<Vec<(usize, usize)>>],
     grid: &Grid,
     edge_is_back: &[bool],
+    preserve_endpoints: bool,
 ) -> Vec<Shift> {
     let mut shifts = Vec::new();
     let horizontals: Vec<&Segment> = segments
@@ -192,6 +200,16 @@ fn plan_parallel_merges(
         .filter(|s| edge_is_back.get(s.edge_idx).copied().unwrap_or(false))
         .filter(|s| s.axis == Axis::Horizontal)
         .filter(|s| s.range.1 - s.range.0 + 1 >= MIN_SEGMENT_LEN_FOR_NUDGE)
+        // Moving a segment that contains the first or last waypoint moves the
+        // edge endpoint itself. Only interior corridors may be merged.
+        .filter(|s| {
+            if !preserve_endpoints {
+                return true;
+            }
+            paths[s.edge_idx]
+                .as_ref()
+                .is_some_and(|path| s.path_idx_range.0 > 0 && s.path_idx_range.1 + 1 < path.len())
+        })
         .collect();
 
     let mut already_shifted: std::collections::HashSet<usize> = std::collections::HashSet::new();

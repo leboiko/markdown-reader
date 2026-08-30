@@ -904,7 +904,7 @@ impl MdRenderer {
                     .push(self.current_table_row_source_line);
             }
             TagEnd::TableCell => {
-                let cell_spans: CellSpans = self.current_spans.drain(..).collect();
+                let cell_spans: CellSpans = std::mem::take(&mut self.current_spans);
                 self.table_row.push(cell_spans);
             }
             _ => {}
