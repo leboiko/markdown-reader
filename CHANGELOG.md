@@ -15,6 +15,8 @@ being split into ghost nodes or truncated edges. Quoted shaped labels no longer
 draw their structural quote marks, and Mermaid's decimal `#34;` entity renders
 as `"`. Unicode and ASCII regressions pin the exact parsed nodes, labels, and
 edges, including consecutive labeled edges so a greedy parser cannot pass.
+Balanced quotes protect structural characters, malformed/comment lines cannot
+consume later valid statements, and pipe-rich labels are scanned linearly.
 
 The same embedded-pipe defect was found and fixed in block-diagram edge labels.
 Reported by @jserv in #40.

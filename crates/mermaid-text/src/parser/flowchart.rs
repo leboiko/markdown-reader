@@ -93,42 +93,53 @@ pub fn parse(input: &str) -> Result<Graph, Error> {
 /// characters inside shaped labels, where they are label content rather than
 /// statement separators.
 fn split_statements(input: &str) -> Vec<String> {
-    let chars: Vec<char> = input.chars().collect();
     let mut statements = Vec::new();
     let mut current = String::new();
     let mut depth = DelimiterDepth::default();
     let mut in_quotes = false;
 
-    for (i, &ch) in chars.iter().enumerate() {
-        if ch == '"' {
-            if in_quotes {
-                in_quotes = false;
-            } else if chars[i + 1..].contains(&'"') {
-                // An unmatched quote is ordinary label text. Treating it as
-                // structural would hide the closing shape and every later edge.
-                in_quotes = true;
-            }
-        }
+    for ch in input.chars() {
+        update_quote_state(
+            ch,
+            current.trim_end().chars().next_back(),
+            depth,
+            &mut in_quotes,
+        );
         if !in_quotes {
             depth.observe(ch);
         }
 
-        if matches!(ch, ';' | '\n' | '\r') && !depth.is_nested() && !in_quotes {
-            let statement = current.trim();
-            if !statement.is_empty() {
-                statements.push(statement.to_string());
-            }
+        let boundary = matches!(ch, ';' | '\n' | '\r');
+        if boundary && current.trim_start().starts_with("%%") {
             current.clear();
+            depth = DelimiterDepth::default();
+            in_quotes = false;
+        } else if boundary && !depth.is_nested() && !in_quotes {
+            push_statement(&mut statements, &mut current);
         } else if ch != '\r' {
             current.push(ch);
         }
     }
 
+    if depth.is_nested() || in_quotes {
+        for fragment in current.split([';', '\n', '\r']) {
+            let fragment = fragment.trim();
+            if !fragment.is_empty() && !fragment.starts_with("%%") {
+                statements.push(fragment.to_string());
+            }
+        }
+    } else {
+        push_statement(&mut statements, &mut current);
+    }
+    statements
+}
+
+fn push_statement(statements: &mut Vec<String>, current: &mut String) {
     let statement = current.trim();
     if !statement.is_empty() {
         statements.push(statement.to_string());
     }
-    statements
+    current.clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -463,11 +474,13 @@ fn tokenise_chain(stmt: &str) -> Vec<String> {
     let mut i = 0;
     let mut current = String::new();
     let mut depth = DelimiterDepth::default();
+    let mut in_quotes = false;
 
     while i < len {
         let ch = chars[i];
 
         let is_potential_arrow_start = !depth.is_nested()
+            && !in_quotes
             && (ch == '-' || ch == '=' || ch == '<')
             && !current.trim().is_empty();
 
@@ -482,8 +495,16 @@ fn tokenise_chain(stmt: &str) -> Vec<String> {
             }
         }
 
+        update_quote_state(
+            ch,
+            current.trim_end().chars().next_back(),
+            depth,
+            &mut in_quotes,
+        );
         current.push(ch);
-        depth.observe(ch);
+        if !in_quotes {
+            depth.observe(ch);
+        }
         i += 1;
     }
 
@@ -521,13 +542,27 @@ impl DelimiterDepth {
     }
 }
 
+fn update_quote_state(
+    ch: char,
+    previous: Option<char>,
+    depth: DelimiterDepth,
+    in_quotes: &mut bool,
+) {
+    if ch == '"'
+        && (*in_quotes || !depth.is_nested() || matches!(previous, Some('[' | '(' | '{' | '>')))
+    {
+        *in_quotes = !*in_quotes;
+    }
+}
+
 fn split_grouped_node_token(token: &str) -> Vec<String> {
     let mut parts = Vec::new();
     let mut current = String::new();
     let mut depth = DelimiterDepth::default();
+    let mut in_quotes = false;
 
     for ch in token.chars() {
-        if ch == '&' && !depth.is_nested() {
+        if ch == '&' && !depth.is_nested() && !in_quotes {
             let part = current.trim();
             if part.is_empty() {
                 return vec![token.trim().to_string()];
@@ -536,8 +571,16 @@ fn split_grouped_node_token(token: &str) -> Vec<String> {
             current.clear();
             continue;
         }
+        update_quote_state(
+            ch,
+            current.trim_end().chars().next_back(),
+            depth,
+            &mut in_quotes,
+        );
         current.push(ch);
-        depth.observe(ch);
+        if !in_quotes {
+            depth.observe(ch);
+        }
     }
 
     let tail = current.trim();
@@ -763,12 +806,7 @@ fn try_consume_labeled_dash_arrow(s: &str) -> Option<String> {
 /// Try to consume a `|label|` suffix. Returns `(consumed_string, char_count)`.
 fn try_consume_pipe_label(s: &str) -> (String, usize) {
     if let Some(inner) = s.strip_prefix('|') {
-        let pipes = inner.match_indices('|').collect::<Vec<_>>();
-        let end = pipes
-            .iter()
-            .find(|(idx, _)| !target_has_pipe_before_next_edge(&inner[*idx + 1..]))
-            .or_else(|| pipes.last())
-            .map(|(idx, _)| *idx);
+        let end = find_pipe_label_end(inner);
         let Some(end) = end else {
             return (String::new(), 0);
         };
@@ -781,28 +819,45 @@ fn try_consume_pipe_label(s: &str) -> (String, usize) {
     (String::new(), 0)
 }
 
-/// A candidate closing pipe is valid only when the following target operand
-/// contains no other top-level pipe before its next edge (or end of input).
-fn target_has_pipe_before_next_edge(target: &str) -> bool {
-    let chars: Vec<char> = target.chars().collect();
+fn find_pipe_label_end(inner: &str) -> Option<usize> {
+    let mut chars = inner.char_indices().peekable();
+    let mut candidate = None;
+    let mut target_has_content = false;
     let mut depth = DelimiterDepth::default();
+    let mut in_quotes = false;
+    let mut last_non_space = None;
 
-    for (i, &ch) in chars.iter().enumerate() {
-        if !depth.is_nested() {
+    while let Some((index, ch)) = chars.next() {
+        if candidate.is_some() && !depth.is_nested() && !in_quotes {
             if ch == '|' {
-                return true;
+                candidate = Some(index);
+                target_has_content = false;
+                last_non_space = None;
+                continue;
             }
-            let next = chars.get(i + 1).copied();
+            let next = chars.peek().map(|(_, ch)| *ch);
             if matches!(
                 (ch, next),
                 ('-', Some('-' | '.')) | ('=', Some('=')) | ('<', Some('-'))
-            ) {
-                return false;
+            ) && target_has_content
+            {
+                return candidate;
             }
         }
-        depth.observe(ch);
+        if candidate.is_none() && ch == '|' {
+            candidate = Some(index);
+            continue;
+        }
+        update_quote_state(ch, last_non_space, depth, &mut in_quotes);
+        if candidate.is_some() && !ch.is_whitespace() {
+            target_has_content = true;
+            last_non_space = Some(ch);
+        }
+        if candidate.is_some() && !in_quotes {
+            depth.observe(ch);
+        }
     }
-    false
+    candidate.filter(|_| target_has_content)
 }
 
 /// Extract a label string from an arrow token, if present.

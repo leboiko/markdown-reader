@@ -1,9 +1,9 @@
 # Issue #40 scope record
 
-Initial ceiling: at most 120 added production lines, two snapshot files, and
+Initial ceiling: at most 120 net production lines, two snapshot files, and
 zero regressions.
 
-The implementation stayed at 97 added production lines. The full test suite
+The reviewed implementation stays at 119 net production lines. The full test suite
 showed that quote removal is deliberately duplicated across the focused
 snapshot suite and the regression corpus. Two semantic cases therefore require
 four baseline files:

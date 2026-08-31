@@ -14,6 +14,8 @@ This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - An unmatched literal quote no longer hides the rest of an edge chain.
 - Embedded pipes survive in flowchart and block-diagram edge labels without
   merging consecutive labeled edges.
+- Balanced quoted labels protect structural characters; malformed labels and
+  comments cannot suppress later statements; pipe-rich inputs scan linearly.
 
 Reported by @jserv in #40. Exact graph-model assertions and Unicode/ASCII
 render checks cover every compatibility case from the issue.
