@@ -61,7 +61,9 @@ pub fn draw_math_block(
         // No entry yet — `ensure_queued` runs on the same frame, so this is a
         // single-frame state in practice.
         None => render_mermaid_placeholder(f, rect, "math", p),
-        Some(MathEntry::Pending) => render_mermaid_placeholder(f, rect, "typesetting\u{2026}", p),
+        Some(MathEntry::Pending { .. }) => {
+            render_mermaid_placeholder(f, rect, "typesetting\u{2026}", p);
+        }
         Some(MathEntry::Ready { protocol, .. }) => {
             if params.fully_visible {
                 use ratatui_image::{Resize, StatefulImage};

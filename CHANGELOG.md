@@ -40,6 +40,7 @@ worse, with the reason shown in the block's footer alongside the raw LaTeX:
 - terminal has no graphics protocol, or we are inside tmux
 - the formula does not parse (the footer names the offending command)
 - the formula lays out to nothing
+- the natural raster would exceed the safe pixel budget
 
 Inline math (`$…$`) stays Unicode in both modes — it has to sit on a text
 baseline inside a wrapped paragraph, where a terminal image cannot be
@@ -49,7 +50,10 @@ Also configurable: `math_max_height` (default 20) bounds how many display
 lines an image-rendered formula may occupy.
 
 New dependencies: `ratex-parser`, `ratex-layout`, `ratex-types`, and
-`ratex-render` (with `embed-fonts`), all MIT.
+`ratex-render` (with `embed-fonts`), all MIT. The integration uses RaTeX
+0.1.14's parser/layout depth guards, bounds raster allocations before PNG
+creation, and tags background requests so an older theme render cannot replace
+a newer result for the same formula.
 
 ## [1.34.77] — 2026-08-31
 

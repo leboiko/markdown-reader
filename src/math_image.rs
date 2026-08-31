@@ -68,6 +68,14 @@ const MATH_FONT_SIZE_PX: f32 = 48.0;
 /// image (and therefore never touch the adjacent text row).
 const MATH_PADDING_PX: f32 = 6.0;
 
+/// Largest width or height accepted by the rasteriser. Terminal graphics are
+/// displayed at far smaller sizes; this is a defensive allocation ceiling for
+/// pathological input, not a user-visible layout limit.
+const MAX_MATH_RASTER_DIMENSION_PX: f64 = 8_192.0;
+
+/// Maximum RGBA canvas area (64 MiB before encoder overhead).
+const MAX_MATH_RASTER_PIXELS: f64 = 16_777_216.0;
+
 /// Reason text shown in the footer when graphics are unavailable inside tmux.
 ///
 /// tmux multiplexes the terminal's output stream and does not reliably pass
@@ -77,7 +85,10 @@ const TMUX_DISABLED_REASON: &str = "tmux — graphics disabled";
 /// The state of one math block in the render cache.
 pub enum MathEntry {
     /// A background render has been spawned; no image yet.
-    Pending,
+    Pending {
+        /// Monotonic cache-local identity for this exact render request.
+        request_id: u64,
+    },
     /// The formula was typeset and encoded for the terminal's graphics protocol.
     ///
     /// Boxed because `StatefulProtocol` is large (>256 bytes) and clippy warns
@@ -126,6 +137,10 @@ pub struct MathRenderConfig<'a> {
 /// Per-app cache mapping math block ids to their render state.
 pub struct MathCache {
     entries: HashMap<MathBlockId, MathEntry>,
+    /// Identity assigned to the next background render. It is deliberately not
+    /// reset by `clear`, so an in-flight pre-refresh completion cannot match a
+    /// replacement request for the same formula.
+    next_request_id: u64,
     /// Heights captured the last time each id had a real entry.
     ///
     /// Survives [`MathCache::clear`] so that during a cache refresh (theme
@@ -140,6 +155,7 @@ impl MathCache {
     pub fn new() -> Self {
         Self {
             entries: HashMap::new(),
+            next_request_id: 1,
             last_known_heights: HashMap::new(),
         }
     }
@@ -175,7 +191,7 @@ impl MathCache {
             Some(entry @ MathEntry::Unicode { .. }) => {
                 entry_height(entry).unwrap_or(DEFAULT_MATH_HEIGHT)
             }
-            Some(MathEntry::Pending) => self
+            Some(MathEntry::Pending { .. }) => self
                 .last_known_heights
                 .get(&id)
                 .copied()
@@ -200,6 +216,18 @@ impl MathCache {
     /// document do not pin their images in memory forever.
     pub fn retain(&mut self, alive: &std::collections::HashSet<MathBlockId>) {
         self.entries.retain(|id, _| alive.contains(id));
+        self.last_known_heights.retain(|id, _| alive.contains(id));
+    }
+
+    /// Replace `id` with a pending entry and return this request's identity.
+    ///
+    /// `pub(crate)` lets the event-loop regression test model two completions
+    /// without spawning real raster tasks.
+    pub(crate) fn begin_request(&mut self, id: MathBlockId) -> u64 {
+        let request_id = self.next_request_id;
+        self.next_request_id = self.next_request_id.wrapping_add(1);
+        self.entries.insert(id, MathEntry::Pending { request_id });
+        request_id
     }
 
     /// Ensure `id` has an entry, spawning a background render if appropriate.
@@ -247,7 +275,7 @@ impl MathCache {
             return false;
         };
 
-        self.entries.insert(id, MathEntry::Pending);
+        let request_id = self.begin_request(id);
 
         let source = source.to_string();
         let picker = picker.clone();
@@ -270,7 +298,11 @@ impl MathCache {
                 // the viewer would have shown anyway.
                 Err(e) => unicode_entry(&source, &e),
             };
-            let _ = tx.send(crate::action::Action::MathReady(id, Box::new(entry)));
+            let _ = tx.send(crate::action::Action::MathReady(
+                id,
+                request_id,
+                Box::new(entry),
+            ));
         });
 
         true
@@ -297,7 +329,7 @@ fn entry_height(entry: &MathEntry) -> Option<u32> {
                 .max(1)
                 .saturating_add(UNICODE_BOX_CHROME_ROWS),
         ),
-        MathEntry::Pending => None,
+        MathEntry::Pending { .. } => None,
     }
 }
 
@@ -369,7 +401,38 @@ fn render_png(source: &str, fg_rgb: (u8, u8, u8)) -> Result<Vec<u8>, String> {
         device_pixel_ratio: 1.0,
     };
 
+    ensure_safe_raster_size(
+        display_list.width,
+        display_list.height + display_list.depth,
+        &render_opts,
+    )?;
+
     render_to_png(&display_list, &render_opts).map_err(|e| format!("rasterise: {e}"))
+}
+
+/// Reject a RaTeX canvas before `tiny-skia` allocates its RGBA backing buffer.
+fn ensure_safe_raster_size(
+    width_em: f64,
+    height_em: f64,
+    options: &ratex_render::RenderOptions,
+) -> Result<(), String> {
+    let scale = f64::from(options.font_size) * f64::from(options.device_pixel_ratio);
+    let padding = 2.0 * f64::from(options.padding) * f64::from(options.device_pixel_ratio);
+    let width_px = width_em * scale + padding;
+    let height_px = height_em * scale + padding;
+    let pixels = width_px * height_px;
+
+    if !width_px.is_finite()
+        || !height_px.is_finite()
+        || width_px > MAX_MATH_RASTER_DIMENSION_PX
+        || height_px > MAX_MATH_RASTER_DIMENSION_PX
+        || pixels > MAX_MATH_RASTER_PIXELS
+    {
+        return Err(format!(
+            "formula image exceeds safe raster limit ({width_px:.0}x{height_px:.0}px)"
+        ));
+    }
+    Ok(())
 }
 
 /// Convert sRGB bytes and an alpha to RaTeX's normalised float colour.
@@ -496,6 +559,20 @@ mod tests {
         }
     }
 
+    /// Terminal-height clamping happens after rasterisation, so the PNG path
+    /// itself must reject a formula whose natural width would allocate an
+    /// excessive pixel buffer. This deliberately uses a flat expression: it
+    /// is cheap to parse but wide enough to expose the allocation gap.
+    #[test]
+    fn excessively_wide_formula_is_rejected_before_rasterisation() {
+        let source = "x".repeat(1_000);
+        let err = render_png(&source, FG).expect_err("oversized raster must be rejected");
+        assert!(
+            err.contains("safe raster limit"),
+            "expected an explicit raster-limit error, got: {err}",
+        );
+    }
+
     /// The glyph colour must actually reach the pixels. Rendering the same
     /// formula in two different colours has to produce different bytes —
     /// otherwise theme-matching is silently a no-op.
@@ -600,7 +677,7 @@ mod tests {
         cache.clear();
         assert_eq!(cache.height(id, 50), 12, "cleared cache lost the height");
 
-        cache.insert(id, MathEntry::Pending);
+        cache.insert(id, MathEntry::Pending { request_id: 1 });
         assert_eq!(cache.height(id, 50), 12, "pending entry lost the height");
     }
 
@@ -612,13 +689,24 @@ mod tests {
         let kept = MathBlockId(1);
         let dropped = MathBlockId(2);
         cache.insert(kept, unicode_entry("x", "t"));
-        cache.insert(dropped, unicode_entry("y", "t"));
+        cache.insert(
+            dropped,
+            MathEntry::Ready {
+                protocol: Box::new(dummy_protocol()),
+                cell_height: 12,
+            },
+        );
 
         let alive: std::collections::HashSet<MathBlockId> = std::iter::once(kept).collect();
         cache.retain(&alive);
 
         assert!(cache.get(kept).is_some(), "surviving formula was dropped");
         assert!(cache.get(dropped).is_none(), "stale formula was retained");
+        assert_eq!(
+            cache.height(dropped, 50),
+            DEFAULT_MATH_HEIGHT,
+            "eviction retained stale height bookkeeping",
+        );
     }
 
     /// End-to-end through the CPU path a background task runs: LaTeX in, a

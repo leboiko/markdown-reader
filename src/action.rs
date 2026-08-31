@@ -86,8 +86,10 @@ pub enum Action {
     /// A background LaTeX math render completed; entry is ready to be stored.
     ///
     /// Boxed for the same reason as [`Action::MermaidReady`] — `MathEntry`
-    /// carries a `StatefulProtocol`, which is large.
-    MathReady(MathBlockId, Box<MathEntry>),
+    /// carries a `StatefulProtocol`, which is large. The request id prevents a
+    /// completion queued before a cache refresh from replacing a newer render
+    /// of the same formula.
+    MathReady(MathBlockId, u64, Box<MathEntry>),
 
     /// Background content search completed; replace the search result list.
     ///

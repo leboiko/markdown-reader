@@ -46,10 +46,10 @@ mermaid-text = { version = "0.57.1", path = "crates/mermaid-text" }
 ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
 semver = "1.0.28"
 serde_json = "1"
-ratex-parser = "0.1.13"
-ratex-layout = "0.1.13"
-ratex-types = "0.1.13"
-ratex-render = { version = "0.1.13", features = ["embed-fonts"] }
+ratex-parser = "0.1.14"
+ratex-layout = "0.1.14"
+ratex-types = "0.1.14"
+ratex-render = { version = "0.1.14", features = ["embed-fonts"] }
 
 [dev-dependencies]
 insta = "1"

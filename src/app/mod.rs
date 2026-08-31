@@ -1048,12 +1048,17 @@ impl App {
                 };
                 self.mermaid_cache.insert(id, entry);
             }
-            Action::MathReady(id, entry) => {
+            Action::MathReady(id, request_id, entry) => {
                 // Same staleness guard as `MermaidReady`: after a mode switch
                 // or theme change the cache is cleared and re-populated
                 // synchronously with `Unicode` entries, and an image that was
                 // already in flight must not overwrite the fresh state.
-                if !matches!(self.math_cache.get(id), Some(MathEntry::Pending)) {
+                if !matches!(
+                    self.math_cache.get(id),
+                    Some(MathEntry::Pending {
+                        request_id: current,
+                    }) if *current == request_id
+                ) {
                     return;
                 }
                 self.math_cache.insert(id, *entry);
