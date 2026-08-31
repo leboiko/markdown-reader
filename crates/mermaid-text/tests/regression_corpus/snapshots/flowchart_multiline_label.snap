@@ -2,16 +2,16 @@
 source: crates/mermaid-text/tests/regression_corpus.rs
 expression: natural
 ---
-  ┌─────────────┐
-  │  "Line one  │
-  │  Line two   │
-  │ Line three" │
-  └─────────────┘
+  ┌────────────┐
+  │  Line one  │
+  │  Line two  │
+  │ Line three │
+  └────────────┘
          │
          │
          │
          │
-         │
-      ┌──▾──┐
-      │ End │
-      └─────┘
+        ┌┘
+     ┌──▾──┐
+     │ End │
+     └─────┘

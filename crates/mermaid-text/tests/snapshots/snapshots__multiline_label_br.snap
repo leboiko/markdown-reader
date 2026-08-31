@@ -1,18 +1,17 @@
 ---
 source: crates/mermaid-text/tests/snapshots.rs
-assertion_line: 197
 expression: out
 ---
-  ┌─────────────┐
-  │  "Line one  │
-  │  Line two   │
-  │ Line three" │
-  └─────────────┘
+  ┌────────────┐
+  │  Line one  │
+  │  Line two  │
+  │ Line three │
+  └────────────┘
          │
          │
          │
          │
-         │
-      ┌──▾──┐
-      │ End │
-      └─────┘
+        ┌┘
+     ┌──▾──┐
+     │ End │
+     └─────┘
