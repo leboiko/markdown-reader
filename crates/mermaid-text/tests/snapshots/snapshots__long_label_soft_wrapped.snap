@@ -1,17 +1,16 @@
 ---
 source: crates/mermaid-text/tests/snapshots.rs
-assertion_line: 208
 expression: out
 ---
-  ┌────────────────────────────────────────┐
-  │ "This is a very long label that should │
-  │    be soft-wrapped by the renderer"    │
-  └────────────────────────────────────────┘
-                       │
-                       │
-                       │
-                       │
-                       │
-                   ┌───▾──┐
-                   │ Done │
-                   └──────┘
+  ┌───────────────────────────────────────┐
+  │ This is a very long label that should │
+  │    be soft-wrapped by the renderer    │
+  └───────────────────────────────────────┘
+                      │
+                      │
+                      │
+                      │
+                      │
+                  ┌───▾──┐
+                  │ Done │
+                  └──────┘

@@ -182,8 +182,9 @@ fn try_parse_edge(line: &str) -> Result<Option<BlockEdge>, Error> {
 
     // Check for optional `|label| target` form.
     let (label, target_str) = if let Some(rest) = after_arrow.strip_prefix('|') {
-        // Look for the closing `|`.
-        if let Some(close) = rest.find('|') {
+        // This grammar has one edge per line, so the final pipe closes the
+        // label and any earlier pipes are label content.
+        if let Some(close) = rest.rfind('|') {
             let lbl = rest[..close].trim().to_string();
             let target_part = rest[close + 1..].trim().to_string();
             (Some(lbl), target_part)
@@ -451,6 +452,16 @@ mod tests {
         let diag = parse(&src).unwrap();
         assert_eq!(diag.edges.len(), 1);
         assert_eq!(diag.edges[0].label, Some("calls".to_string()));
+    }
+
+    #[test]
+    fn parses_pipe_inside_edge_label() {
+        let src = format!("{HEADER}    A B\n    A -->|one|two| B");
+        let diag = parse(&src).unwrap();
+        assert_eq!(diag.edges.len(), 1);
+        assert_eq!(diag.edges[0].source, "A");
+        assert_eq!(diag.edges[0].target, "B");
+        assert_eq!(diag.edges[0].label.as_deref(), Some("one|two"));
     }
 
     // --- comment and blank line handling -------------------------------------

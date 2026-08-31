@@ -60,15 +60,11 @@ use crate::{
 /// assert_eq!(graph.edges.len(), 1);
 /// ```
 pub fn parse(input: &str) -> Result<Graph, Error> {
-    // Normalise: replace newlines with semicolons, then split on ';'.
-    // This means both `graph LR; A-->B` and multi-line input are handled
-    // identically — the first non-blank, non-comment statement is the header.
-    let normalised = input.replace('\n', ";").replace('\r', "");
-
-    let statements: Vec<&str> = normalised
-        .split(';')
-        .map(str::trim)
-        .filter(|s| !s.is_empty() && !s.starts_with("%%"))
+    let statements = split_statements(input);
+    let statements: Vec<&str> = statements
+        .iter()
+        .map(String::as_str)
+        .filter(|s| !s.starts_with("%%"))
         .collect();
 
     let mut iter = statements.iter().copied();
@@ -91,6 +87,59 @@ pub fn parse(input: &str) -> Result<Graph, Error> {
     apply_pending_classes(&mut graph, &pending_classes);
 
     Ok(graph)
+}
+
+/// Split only at top-level newlines and semicolons. Mermaid permits both
+/// characters inside shaped labels, where they are label content rather than
+/// statement separators.
+fn split_statements(input: &str) -> Vec<String> {
+    let mut statements = Vec::new();
+    let mut current = String::new();
+    let mut depth = DelimiterDepth::default();
+    let mut in_quotes = false;
+
+    for ch in input.chars() {
+        update_quote_state(
+            ch,
+            current.trim_end().chars().next_back(),
+            depth,
+            &mut in_quotes,
+        );
+        if !in_quotes {
+            depth.observe(ch);
+        }
+
+        let boundary = matches!(ch, ';' | '\n' | '\r');
+        if boundary && current.trim_start().starts_with("%%") {
+            current.clear();
+            depth = DelimiterDepth::default();
+            in_quotes = false;
+        } else if boundary && !depth.is_nested() && !in_quotes {
+            push_statement(&mut statements, &mut current);
+        } else if ch != '\r' {
+            current.push(ch);
+        }
+    }
+
+    if depth.is_nested() || in_quotes {
+        for fragment in current.split([';', '\n', '\r']) {
+            let fragment = fragment.trim();
+            if !fragment.is_empty() && !fragment.starts_with("%%") {
+                statements.push(fragment.to_string());
+            }
+        }
+    } else {
+        push_statement(&mut statements, &mut current);
+    }
+    statements
+}
+
+fn push_statement(statements: &mut Vec<String>, current: &mut String) {
+    let statement = current.trim();
+    if !statement.is_empty() {
+        statements.push(statement.to_string());
+    }
+    current.clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -446,10 +495,15 @@ fn tokenise_chain(stmt: &str) -> Vec<String> {
             }
         }
 
+        update_quote_state(
+            ch,
+            current.trim_end().chars().next_back(),
+            depth,
+            &mut in_quotes,
+        );
         current.push(ch);
-        depth.observe(ch, in_quotes);
-        if ch == '"' {
-            in_quotes = !in_quotes;
+        if !in_quotes {
+            depth.observe(ch);
         }
         i += 1;
     }
@@ -475,10 +529,7 @@ impl DelimiterDepth {
         self.square > 0 || self.round > 0 || self.curly > 0
     }
 
-    fn observe(&mut self, ch: char, in_quotes: bool) {
-        if in_quotes && ch != '"' {
-            return;
-        }
+    fn observe(&mut self, ch: char) {
         match ch {
             '[' => self.square += 1,
             ']' => self.square = self.square.saturating_sub(1),
@@ -488,6 +539,19 @@ impl DelimiterDepth {
             '}' => self.curly = self.curly.saturating_sub(1),
             _ => {}
         }
+    }
+}
+
+fn update_quote_state(
+    ch: char,
+    previous: Option<char>,
+    depth: DelimiterDepth,
+    in_quotes: &mut bool,
+) {
+    if ch == '"'
+        && (*in_quotes || !depth.is_nested() || matches!(previous, Some('[' | '(' | '{' | '>')))
+    {
+        *in_quotes = !*in_quotes;
     }
 }
 
@@ -507,10 +571,15 @@ fn split_grouped_node_token(token: &str) -> Vec<String> {
             current.clear();
             continue;
         }
+        update_quote_state(
+            ch,
+            current.trim_end().chars().next_back(),
+            depth,
+            &mut in_quotes,
+        );
         current.push(ch);
-        depth.observe(ch, in_quotes);
-        if ch == '"' {
-            in_quotes = !in_quotes;
+        if !in_quotes {
+            depth.observe(ch);
         }
     }
 
@@ -736,9 +805,11 @@ fn try_consume_labeled_dash_arrow(s: &str) -> Option<String> {
 
 /// Try to consume a `|label|` suffix. Returns `(consumed_string, char_count)`.
 fn try_consume_pipe_label(s: &str) -> (String, usize) {
-    if let Some(inner) = s.strip_prefix('|')
-        && let Some(end) = inner.find('|')
-    {
+    if let Some(inner) = s.strip_prefix('|') {
+        let end = find_pipe_label_end(inner);
+        let Some(end) = end else {
+            return (String::new(), 0);
+        };
         let portion = &s[..end + 2]; // includes both pipes
         // The caller advances a *char* cursor by this value, so return a char
         // count — `end + 2` is a byte offset and over-advances by
@@ -748,15 +819,56 @@ fn try_consume_pipe_label(s: &str) -> (String, usize) {
     (String::new(), 0)
 }
 
+fn find_pipe_label_end(inner: &str) -> Option<usize> {
+    let mut chars = inner.char_indices().peekable();
+    let mut candidate = None;
+    let mut target_has_content = false;
+    let mut depth = DelimiterDepth::default();
+    let mut in_quotes = false;
+    let mut last_non_space = None;
+
+    while let Some((index, ch)) = chars.next() {
+        if candidate.is_some() && !depth.is_nested() && !in_quotes {
+            if ch == '|' {
+                candidate = Some(index);
+                target_has_content = false;
+                last_non_space = None;
+                continue;
+            }
+            let next = chars.peek().map(|(_, ch)| *ch);
+            if matches!(
+                (ch, next),
+                ('-', Some('-' | '.')) | ('=', Some('=')) | ('<', Some('-'))
+            ) && target_has_content
+            {
+                return candidate;
+            }
+        }
+        if candidate.is_none() && ch == '|' {
+            candidate = Some(index);
+            continue;
+        }
+        update_quote_state(ch, last_non_space, depth, &mut in_quotes);
+        if candidate.is_some() && !ch.is_whitespace() {
+            target_has_content = true;
+            last_non_space = Some(ch);
+        }
+        if candidate.is_some() && !in_quotes {
+            depth.observe(ch);
+        }
+    }
+    candidate.filter(|_| target_has_content)
+}
+
 /// Extract a label string from an arrow token, if present.
 ///
 /// Handles `-->|label|`, `-- label -->`, etc.
 fn extract_arrow_label(arrow: &str) -> Option<String> {
     // Pipe-style: -->|label| or -.->|label|
     let raw = if let Some(start) = arrow.find('|')
-        && let Some(end) = arrow[start + 1..].find('|')
+        && let Some(end) = arrow.rfind('|').filter(|end| *end > start)
     {
-        Some(arrow[start + 1..start + 1 + end].trim())
+        Some(arrow[start + 1..end].trim())
     } else if arrow.starts_with("-- ")
         && let Some(end) = arrow.rfind("-->")
     {
@@ -929,9 +1041,15 @@ const LABEL_WRAP_THRESHOLD: usize = 40;
 /// own row inside the node box, widening the box vertically instead of
 /// horizontally.
 fn normalize_label(s: &str) -> String {
+    let s = s
+        .strip_prefix('"')
+        .and_then(|inner| inner.strip_suffix('"'))
+        .unwrap_or(s);
+    let decoded_entities = s.replace("#34;", "\"");
+
     // Step 1: replace HTML <br> variants with `\n`. Lower-case first; the
     // upper-case variants are the only other common spellings on the wild.
-    let with_breaks = s
+    let with_breaks = decoded_entities
         .replace("<br/>", "\n")
         .replace("<br>", "\n")
         .replace("<br />", "\n")

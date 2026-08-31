@@ -5,6 +5,22 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.35.1] — 2026-08-31
+
+### Fixed — Mermaid quoted and delimiter-containing labels (#40)
+
+The bundled `mermaid-text` is now 0.57.2. Flowchart labels retain semicolons,
+literal newlines, unmatched quote characters, and embedded pipes instead of
+being split into ghost nodes or truncated edges. Quoted shaped labels no longer
+draw their structural quote marks, and Mermaid's decimal `#34;` entity renders
+as `"`. Unicode and ASCII regressions pin the exact parsed nodes, labels, and
+edges, including consecutive labeled edges so a greedy parser cannot pass.
+Balanced quotes protect structural characters, malformed/comment lines cannot
+consume later valid statements, and pipe-rich labels are scanned linearly.
+
+The same embedded-pipe defect was found and fixed in block-diagram edge labels.
+Reported by @jserv in #40.
+
 ## [1.35.0] — 2026-08-31
 
 ### Added — high-fidelity typeset math via RaTeX (#35)

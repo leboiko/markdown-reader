@@ -3,6 +3,23 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.57.2 — 2026-08-31 — Delimiter-aware flowchart labels (#40)
+
+### Fixed
+
+- Flowchart statement splitting now respects shaped-label boundaries, so
+  semicolons and literal newlines remain label content.
+- Quoted shaped labels drop their structural outer quotes and decode Mermaid's
+  decimal `#34;` quote entity.
+- An unmatched literal quote no longer hides the rest of an edge chain.
+- Embedded pipes survive in flowchart and block-diagram edge labels without
+  merging consecutive labeled edges.
+- Balanced quoted labels protect structural characters; malformed labels and
+  comments cannot suppress later statements; pipe-rich inputs scan linearly.
+
+Reported by @jserv in #40. Exact graph-model assertions and Unicode/ASCII
+render checks cover every compatibility case from the issue.
+
 ## 0.57.1 — 2026-08-29 — Self-loop and back-edge routing (#42)
 
 ### Fixed
