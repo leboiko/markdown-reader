@@ -6,7 +6,7 @@
 //! LaTeX math is converted to Unicode, and fenced code blocks are
 //! syntax-highlighted with inline `<span style="…">` attributes via `syntect`.
 
-use pulldown_cmark::{CodeBlockKind, CowStr, Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, CowStr, Event, MetadataBlockKind, Parser, Tag, TagEnd};
 use syntect::easy::HighlightLines;
 use syntect::html::{
     IncludeBackground, append_highlighted_html_for_styled_line, start_highlighted_html_snippet,
@@ -14,6 +14,7 @@ use syntect::html::{
 use syntect::util::LinesWithEndings;
 
 use crate::markdown::highlight::{SYNTAX_SET, THEME_SET};
+use crate::markdown::markdown_options;
 use crate::markdown::math::latex_to_unicode;
 use crate::theme::Theme;
 
@@ -81,6 +82,29 @@ pre.mermaid-text {
     color: #24292f;
     white-space: pre;
 }
+
+/* Document frontmatter: set apart from the body, and labelled, so it reads as
+   metadata rather than as content. Mirrors the " frontmatter " caption the TUI
+   draws into the block's top border. */
+section.frontmatter {
+    border: 1px solid #d0d7de;
+    border-radius: 6px;
+    margin-bottom: 1.5rem;
+    overflow: hidden;
+}
+section.frontmatter::before {
+    content: "frontmatter";
+    display: block;
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 75%;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: #57606a;
+    background: #f6f8fa;
+    border-bottom: 1px solid #d0d7de;
+    padding: 0.3em 1rem;
+}
+section.frontmatter pre { margin-bottom: 0; border-radius: 0; }
 
 table {
     border-collapse: collapse;
@@ -175,16 +199,19 @@ pub fn render_to_html(content: &str, title: &str, theme: Theme) -> String {
 ///   output from the `mermaid-text` crate.
 /// - Other fenced/indented code blocks → syntect-highlighted `<pre>` blocks.
 /// - `InlineMath` / `DisplayMath` events → Unicode via `latex_to_unicode`.
+/// - `MetadataBlock` (leading `---`/`+++` frontmatter) → a labelled
+///   `<section class="frontmatter">` holding a highlighted YAML/TOML block.
 ///
 /// Everything else is handled by feeding events back to pulldown-cmark's own
 /// `push_html` writer one event at a time.
+///
+/// Note that events are fed to `push_html` **individually**, each with a fresh
+/// writer. pulldown-cmark's writer suppresses metadata-block bodies via an
+/// `in_non_writing_block` flag that only survives within a single call, so
+/// frontmatter must be intercepted here — leaving it to `push_html` would dump
+/// the raw YAML into the document as a paragraph.
 fn render_body(content: &str, theme: Theme) -> String {
-    let opts = Options::ENABLE_TABLES
-        | Options::ENABLE_STRIKETHROUGH
-        | Options::ENABLE_TASKLISTS
-        | Options::ENABLE_MATH;
-
-    let events: Vec<Event<'_>> = Parser::new_ext(content, opts).collect();
+    let events: Vec<Event<'_>> = Parser::new_ext(content, markdown_options()).collect();
     let mut out = String::with_capacity(content.len() * 2);
     let mut i = 0;
 
@@ -196,30 +223,25 @@ fn render_body(content: &str, theme: Theme) -> String {
                     CodeBlockKind::Fenced(info) => lang_token(info),
                     CodeBlockKind::Indented => None,
                 };
-                // Collect the Text events that form the code body.
-                i += 1;
-                let mut code = String::new();
-                while i < events.len() {
-                    match &events[i] {
-                        Event::Text(t) => {
-                            code.push_str(t);
-                            i += 1;
-                        }
-                        Event::End(TagEnd::CodeBlock) => {
-                            i += 1;
-                            break;
-                        }
-                        _ => {
-                            i += 1;
-                        }
-                    }
-                }
+                let code = take_verbatim_body(&events, &mut i);
 
                 if lang == Some("mermaid") {
                     out.push_str(&render_mermaid_block(&code));
                 } else {
                     out.push_str(&render_code_block(&code, lang, theme));
                 }
+            }
+
+            // ── Frontmatter: leading `---` (YAML) or `+++` (TOML) ────────────
+            Event::Start(Tag::MetadataBlock(kind)) => {
+                let lang = match kind {
+                    MetadataBlockKind::YamlStyle => "yaml",
+                    MetadataBlockKind::PlusesStyle => "toml",
+                };
+                let meta = take_verbatim_body(&events, &mut i);
+                out.push_str(r#"<section class="frontmatter">"#);
+                out.push_str(&render_code_block(&meta, Some(lang), theme));
+                out.push_str("</section>\n");
             }
 
             // ── Inline math: $…$ ─────────────────────────────────────────────
@@ -252,6 +274,30 @@ fn render_body(content: &str, theme: Theme) -> String {
     }
 
     out
+}
+
+/// Consume the `Event::Text` payload of a verbatim block — a code block or a
+/// frontmatter metadata block — and return it joined.
+///
+/// `*i` must point at the block's opening `Event::Start`; on return it points
+/// just past the matching end tag (or at `events.len()` for an unterminated
+/// block, which pulldown-cmark can emit at EOF).
+fn take_verbatim_body(events: &[Event<'_>], i: &mut usize) -> String {
+    let mut body = String::new();
+    // Step over the opening tag.
+    *i += 1;
+    while *i < events.len() {
+        match &events[*i] {
+            Event::Text(t) => body.push_str(t),
+            Event::End(TagEnd::CodeBlock | TagEnd::MetadataBlock(_)) => {
+                *i += 1;
+                break;
+            }
+            _ => {}
+        }
+        *i += 1;
+    }
+    body
 }
 
 // ── Mermaid rendering ─────────────────────────────────────────────────────────
@@ -470,6 +516,82 @@ mod tests {
         assert!(
             html.contains(r#"<pre class="mermaid-text""#),
             "should still emit mermaid-text pre on parse error: {html}"
+        );
+    }
+
+    // ── Frontmatter (#36) ─────────────────────────────────────────────────────
+
+    /// Same document as the bug report: before the fix the exporter emitted
+    /// `<hr />`, a `<p>` holding `title:`/`tags:`, and a `<ul>` whose last
+    /// `<li>` swallowed `status: draft`.
+    const FRONTMATTER_DOC: &str =
+        "---\ntitle: My Note\ntags:\n  - alpha\n  - beta\nstatus: draft\n---\n\n# Heading\n";
+
+    #[test]
+    fn frontmatter_renders_as_a_labelled_section() {
+        let html = render_to_html(FRONTMATTER_DOC, "t", Theme::Default);
+        assert!(
+            html.contains(r#"<section class="frontmatter">"#),
+            "expected a frontmatter section: {html}"
+        );
+        assert!(
+            html.contains("section.frontmatter::before"),
+            "stylesheet must label the frontmatter section: {html}"
+        );
+    }
+
+    /// The frontmatter must not be reinterpreted as markdown. Each assertion
+    /// pins one artefact the old parse produced.
+    #[test]
+    fn frontmatter_is_not_parsed_as_markdown() {
+        let html = render_to_html(FRONTMATTER_DOC, "t", Theme::Default);
+        // Isolate the body: the inline stylesheet legitimately mentions `hr`
+        // and `ul`, so scanning the whole document would self-match.
+        let body = html
+            .split_once("<body>")
+            .expect("document must have a body")
+            .1;
+
+        assert!(
+            !body.contains("<hr />"),
+            "frontmatter delimiters must not render as thematic breaks: {body}"
+        );
+        assert!(
+            !body.contains("<ul>"),
+            "YAML sequence must not render as a markdown list: {body}"
+        );
+        assert!(
+            !body.contains("<p>title: My Note"),
+            "frontmatter must not render as a paragraph: {body}"
+        );
+    }
+
+    /// Content preservation: dropping the block entirely would satisfy the
+    /// "not parsed as markdown" test above, so pin every key explicitly.
+    #[test]
+    fn frontmatter_content_survives_export() {
+        let html = render_to_html(FRONTMATTER_DOC, "t", Theme::Default);
+        for needle in ["title", "My Note", "alpha", "beta", "status", "draft"] {
+            assert!(
+                html.contains(needle),
+                "frontmatter value {needle:?} was dropped from the export: {html}"
+            );
+        }
+        // The body after the frontmatter still renders normally.
+        assert!(
+            html.contains("<h1>Heading</h1>"),
+            "body heading missing after frontmatter: {html}"
+        );
+    }
+
+    /// A `---` in the middle of a document is still a thematic break.
+    #[test]
+    fn mid_document_rule_still_exports_as_hr() {
+        let html = render_to_html("# Title\n\ntext\n\n---\n\nmore\n", "t", Theme::Default);
+        let body = html.split_once("<body>").expect("body").1;
+        assert!(
+            body.contains("<hr />"),
+            "mid-document `---` must still be a thematic break: {body}"
         );
     }
 }

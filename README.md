@@ -129,6 +129,13 @@ drawn on the left of the viewer content when enabled.
   [syntect](https://crates.io/crates/syntect) with a pure-Rust regex backend
   (no C dependencies, no build-time grammars). Colors follow the active UI
   theme.
+- **YAML / TOML frontmatter** — a leading `---` (Obsidian, Jekyll,
+  backlog.md) or `+++` (Hugo, Zola) metadata block is recognised as
+  metadata rather than markdown, and rendered as its own syntax-highlighted
+  box labelled `frontmatter`. Its contents are never re-interpreted as
+  markdown, so a YAML list followed by another key no longer collapses onto
+  one line. `--check-links` skips it, and `--section` will not mistake a
+  `#`-prefixed comment inside it for a heading.
 - **LaTeX math rendering** — inline math (`$...$`) and display math
   (`$$...$$`) are converted to Unicode approximations: Greek letters
   (`α`, `π`, `σ`), operators (`∑`, `∫`, `∇`, `∞`), fractions (`a/b`),
@@ -355,6 +362,7 @@ The exported document includes:
   connection needed; the diagram renders via the same `mermaid-text` engine
   used by the TUI viewer
 - LaTeX math (`$…$` and `$$…$$`) converted to Unicode
+- YAML/TOML frontmatter as a labelled, highlighted `<section class="frontmatter">`
 
 The output is a single `.html` file you can open in any browser or send to
 someone who doesn't have `markdown-reader` installed.

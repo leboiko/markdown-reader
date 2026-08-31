@@ -3,7 +3,7 @@ use std::hash::{Hash, Hasher};
 
 use std::ops::Range;
 
-use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, MetadataBlockKind, Options, Parser, Tag, TagEnd};
 use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span, Text},
@@ -13,10 +13,15 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::markdown::{
     CellSpans, DocBlock, HeadingAnchor, LinkInfo, MermaidBlockId, TableBlock, TableBlockId,
-    TextBlockId, cell_to_string, heading_to_anchor, highlight::highlight_code,
+    TextBlockId, cell_to_string, heading_to_anchor, highlight::highlight_code, markdown_options,
 };
 use crate::mermaid::DEFAULT_MERMAID_HEIGHT;
 use crate::theme::{Palette, Theme, Tokens};
+
+/// Label drawn into the top border of a rendered frontmatter block, so a
+/// reader can tell document metadata from an ordinary fenced YAML/TOML block
+/// at a glance. Includes its surrounding spaces — see `top_border`.
+const FRONTMATTER_LABEL: &str = " frontmatter ";
 
 /// Render a markdown string into a sequence of [`DocBlock`] values.
 ///
@@ -40,10 +45,19 @@ use crate::theme::{Palette, Theme, Tokens};
 /// * `theme` – the active UI theme; used to select the matching syntect
 ///   highlighting theme for fenced code blocks.
 pub fn render_markdown(content: &str, palette: &Palette, theme: Theme) -> Vec<DocBlock> {
-    let opts = Options::ENABLE_TABLES
-        | Options::ENABLE_STRIKETHROUGH
-        | Options::ENABLE_TASKLISTS
-        | Options::ENABLE_MATH;
+    render_with_options(content, palette, theme, markdown_options())
+}
+
+/// [`render_markdown`] with an explicit pulldown-cmark option set.
+///
+/// Only [`render_block_from_slice`] needs to deviate from
+/// [`crate::markdown::markdown_options`] — see its docs for why.
+fn render_with_options(
+    content: &str,
+    palette: &Palette,
+    theme: Theme,
+    opts: Options,
+) -> Vec<DocBlock> {
     let parser = Parser::new_ext(content, opts);
     // Derive tokens from the theme once; the renderer stores them so that
     // `render_code_block` can read from semantic slots (e.g. `tokens.surface.raised`)
@@ -75,6 +89,14 @@ pub fn render_markdown(content: &str, palette: &Palette, theme: Theme) -> Vec<Do
 /// re-parse just that slice and splice the result back into `MarkdownViewState`.
 /// Sub-phase 6 wires the splice; this sub-phase (3) only exposes the operation.
 ///
+/// # Frontmatter
+///
+/// Metadata-block parsing is enabled only when the slice starts at byte 0.
+/// Whether a leading `---` opens frontmatter or is a thematic break depends on
+/// its position in the whole document, which the slice alone cannot show — so
+/// without this guard a mid-document rule could re-parse into a frontmatter
+/// box on cursor-leave.
+///
 /// # Arguments
 ///
 /// * `slice`             — raw markdown source of the block being re-parsed.
@@ -87,7 +109,14 @@ pub fn render_block_from_slice(
     palette: &crate::theme::Palette,
     theme: crate::theme::Theme,
 ) -> Vec<crate::markdown::DocBlock> {
-    let mut blocks = render_markdown(slice, palette, theme);
+    let mut opts = markdown_options();
+    if byte_offset_in_doc != 0 {
+        opts.remove(
+            Options::ENABLE_YAML_STYLE_METADATA_BLOCKS
+                | Options::ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS,
+        );
+    }
+    let mut blocks = render_with_options(slice, palette, theme, opts);
     // Shift every block's byte range from slice-local to absolute document
     // offsets so the caller can splice them into the full block list without
     // any further arithmetic.
@@ -665,25 +694,25 @@ impl MdRenderer {
                 self.push_style(Style::default().fg(self.tokens.list.block_quote_fg));
             }
             Tag::CodeBlock(kind) => {
-                self.in_code_block = true;
-                self.code_block_lang = match &kind {
+                let lang = match &kind {
                     CodeBlockKind::Fenced(lang) => {
                         let s = lang.trim().to_lowercase();
                         if s.is_empty() { None } else { Some(s) }
                     }
                     CodeBlockKind::Indented => None,
                 };
-                self.code_block_content.clear();
-                // Record the fence's byte offset and resolve its source line.
-                self.code_block_fence_offset = Some(span.start);
-                self.code_block_start_line = byte_offset_to_line(span.start, &self.line_boundaries);
-                // Only flush if there are pending inline spans — an unconditional
-                // flush_line() would push an empty line into self.lines, which then
-                // creates a spurious empty DocBlock::Text when the preceding element
-                // already called flush_text_block() (per-element granularity).
-                if !self.current_spans.is_empty() {
-                    self.flush_line();
-                }
+                self.open_verbatim_block(lang, span);
+            }
+            // Leading `---`/`+++` frontmatter. Accumulated exactly like a
+            // fenced code block — the delimiters are not part of the event
+            // stream, so `code_block_content` holds only the metadata body —
+            // and highlighted with the syntax matching the delimiter style.
+            Tag::MetadataBlock(kind) => {
+                let lang = match kind {
+                    MetadataBlockKind::YamlStyle => "yaml",
+                    MetadataBlockKind::PlusesStyle => "toml",
+                };
+                self.open_verbatim_block(Some(lang.to_string()), span);
             }
             Tag::List(start) => {
                 self.list_depth += 1;
@@ -835,13 +864,25 @@ impl MdRenderer {
                 if is_mermaid {
                     self.emit_mermaid_block();
                 } else {
-                    self.render_code_block();
+                    self.render_code_block(None);
                     // Flush so each fenced code block is its own DocBlock::Text.
                     // `render_code_block` already appended the trailing blank line
                     // (visual separator), so the blank is part of this block.
                     // Mermaid already calls flush_text_block inside emit_mermaid_block.
                     self.flush_text_block();
                 }
+                self.in_code_block = false;
+                self.code_block_lang = None;
+            }
+            TagEnd::MetadataBlock(_) => {
+                // `span.end` is the byte just past the closing delimiter, so the
+                // next block's source anchor is the line after it — same
+                // reasoning as `TagEnd::CodeBlock` above.
+                let closing_line =
+                    byte_offset_to_line(span.end.saturating_sub(1), &self.line_boundaries);
+                self.current_source_line = closing_line.saturating_add(1);
+                self.render_code_block(Some(FRONTMATTER_LABEL));
+                self.flush_text_block();
                 self.in_code_block = false;
                 self.code_block_lang = None;
             }
@@ -911,6 +952,28 @@ impl MdRenderer {
         }
     }
 
+    /// Begin accumulating a verbatim (non-markdown) block: a fenced/indented
+    /// code block or a frontmatter metadata block.
+    ///
+    /// Both feed their body through `Event::Text` and both are closed by
+    /// `render_code_block`, so they share this entry point rather than
+    /// duplicating the bookkeeping. `span` is the opening tag's byte range.
+    fn open_verbatim_block(&mut self, lang: Option<String>, span: &Range<usize>) {
+        self.in_code_block = true;
+        self.code_block_lang = lang;
+        self.code_block_content.clear();
+        // Record the fence's byte offset and resolve its source line.
+        self.code_block_fence_offset = Some(span.start);
+        self.code_block_start_line = byte_offset_to_line(span.start, &self.line_boundaries);
+        // Only flush if there are pending inline spans — an unconditional
+        // flush_line() would push an empty line into self.lines, which then
+        // creates a spurious empty DocBlock::Text when the preceding element
+        // already called flush_text_block() (per-element granularity).
+        if !self.current_spans.is_empty() {
+            self.flush_line();
+        }
+    }
+
     fn handle_text(&mut self, text: &str) {
         if self.in_code_block {
             for line in text.split('\n') {
@@ -952,7 +1015,13 @@ impl MdRenderer {
         self.push_blank_line();
     }
 
-    fn render_code_block(&mut self) {
+    /// Render the accumulated verbatim block as a syntax-highlighted box.
+    ///
+    /// `label`, when present, is drawn into the top border (e.g.
+    /// [`FRONTMATTER_LABEL`]) so the box announces what it holds. It must
+    /// include its own surrounding spaces and be ASCII — the border arithmetic
+    /// counts bytes.
+    fn render_code_block(&mut self, label: Option<&str>) {
         // `tokens.syntax.code_border` — the chrome color for fenced code boxes.
         let border_style = Style::default().fg(self.tokens.syntax.code_border);
 
@@ -968,7 +1037,11 @@ impl MdRenderer {
             .map(|l| UnicodeWidthStr::width(l.as_str()))
             .max()
             .unwrap_or(0)
-            .max(20);
+            .max(20)
+            // A label is drawn inside the top border, so the box has to be at
+            // least wide enough to hold it or the top and bottom borders would
+            // disagree on width.
+            .max(label.map_or(0, str::len));
         let inner_width = max_width + 1;
 
         // Join lines with newlines so syntect sees a complete source text.
@@ -988,11 +1061,31 @@ impl MdRenderer {
         // Blank line before the box — maps to whatever was current before the block.
         self.push_blank_line();
 
-        // Top border maps to the fence line.
-        self.lines.push(Line::from(Span::styled(
-            format!("╭{}╮", "─".repeat(inner_width + 1)),
-            border_style,
-        )));
+        // Top border maps to the fence line. With a label the rule is split
+        // around it; the total width is identical either way so the top and
+        // bottom borders always line up.
+        self.lines.push(match label {
+            None => Line::from(Span::styled(
+                format!("╭{}╮", "─".repeat(inner_width + 1)),
+                border_style,
+            )),
+            Some(label) => Line::from(vec![
+                Span::styled("╭".to_string(), border_style),
+                Span::styled(
+                    label.to_string(),
+                    Style::default()
+                        .fg(self.tokens.syntax.inline_code)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!(
+                        "{}╮",
+                        "─".repeat((inner_width + 1).saturating_sub(label.len()))
+                    ),
+                    border_style,
+                ),
+            ]),
+        });
         self.current_source_lines.push(code_start_line);
 
         // One rendered line per source line.
@@ -2361,5 +2454,281 @@ mod tests {
                 "expected '{item}' in list block; content: {all_content:?}",
             );
         }
+    }
+
+    // ── YAML / TOML frontmatter (#36) ────────────────────────────────────────
+
+    /// Document used by the frontmatter tests. Deliberately contains the exact
+    /// shape from the bug report: a YAML sequence (`tags:`) followed by another
+    /// key (`status:`). Markdown needs a blank line to end a list, YAML does
+    /// not — so parsing this as markdown swallows `status: draft` into the
+    /// `beta` list item.
+    const FRONTMATTER_DOC: &str = "\
+---
+title: My Note
+tags:
+  - alpha
+  - beta
+status: draft
+---
+
+# Heading
+
+Body text.
+";
+
+    /// Flatten every rendered line of every `Text` block into one string per
+    /// line, in document order.
+    fn rendered_lines(md: &str) -> Vec<String> {
+        render_markdown(md, &default_palette(), Theme::Default)
+            .iter()
+            .filter_map(|b| match b {
+                DocBlock::Text { text, .. } => Some(text),
+                _ => None,
+            })
+            .flat_map(|t| t.lines.iter())
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    /// The reported bug (#36): a YAML key following a sequence must never be
+    /// glued onto the last sequence item.
+    ///
+    /// The assertion is positional, not a substring sweep: it finds the line
+    /// carrying `beta` and requires `status:` to live on a *different* line.
+    /// A renderer that dropped the frontmatter entirely would fail the
+    /// companion `frontmatter_content_is_preserved` test, so the pair together
+    /// pins both "not mangled" and "not silently swallowed".
+    #[test]
+    fn frontmatter_key_after_sequence_is_not_glued_to_list_item() {
+        let lines = rendered_lines(FRONTMATTER_DOC);
+
+        let beta_idx = lines
+            .iter()
+            .position(|l| l.contains("beta"))
+            .unwrap_or_else(|| panic!("no rendered line contains 'beta'; lines: {lines:#?}"));
+
+        assert!(
+            !lines[beta_idx].contains("status:"),
+            "YAML key 'status:' was glued onto the 'beta' sequence item — \
+             frontmatter is being parsed as markdown. Line was: {:?}\nAll lines: {lines:#?}",
+            lines[beta_idx],
+        );
+    }
+
+    /// Frontmatter must be *rendered*, not dropped: every key from the block
+    /// has to survive into the output, and the block has to be labelled so a
+    /// reader can tell document metadata from body content.
+    #[test]
+    fn frontmatter_content_is_preserved_and_labelled() {
+        let lines = rendered_lines(FRONTMATTER_DOC);
+        let joined = lines.join("\n");
+
+        for needle in [
+            "title: My Note",
+            "tags:",
+            "- alpha",
+            "- beta",
+            "status: draft",
+        ] {
+            assert!(
+                joined.contains(needle),
+                "frontmatter line {needle:?} missing from render; lines: {lines:#?}",
+            );
+        }
+        assert!(
+            joined.contains(FRONTMATTER_LABEL.trim()),
+            "frontmatter block is not labelled {:?}; lines: {lines:#?}",
+            FRONTMATTER_LABEL.trim(),
+        );
+    }
+
+    /// Frontmatter must not leak markdown chrome. Before the fix the opening
+    /// and closing `---` fences were parsed as thematic breaks and rendered as
+    /// 60-character rules, and `- alpha` became a bulleted list item.
+    #[test]
+    fn frontmatter_does_not_render_markdown_chrome() {
+        let lines = rendered_lines(FRONTMATTER_DOC);
+
+        assert!(
+            !lines.iter().any(|l| l.contains(&"─".repeat(60))),
+            "frontmatter fences rendered as thematic-break rules; lines: {lines:#?}",
+        );
+        assert!(
+            !lines.iter().any(|l| l.contains("• alpha")),
+            "YAML sequence rendered as a markdown bullet list; lines: {lines:#?}",
+        );
+    }
+
+    /// Source-line bookkeeping across a frontmatter block, in both directions:
+    /// the box's own borders must straddle the delimiters (source lines 0 and
+    /// 6 of `FRONTMATTER_DOC`), and the heading after it must still resolve to
+    /// source line 8.
+    ///
+    /// Hybrid edit mode and the outline picker both navigate by these numbers,
+    /// so a frontmatter block that mis-counts its lines would drop the editor
+    /// cursor on the wrong row for the rest of the document.
+    #[test]
+    fn frontmatter_source_lines_straddle_delimiters_and_body_is_unshifted() {
+        let blocks = render_markdown(FRONTMATTER_DOC, &default_palette(), Theme::Default);
+
+        // ── The frontmatter box itself ───────────────────────────────────────
+        let (fm_lines, fm_source_lines) = blocks
+            .iter()
+            .find_map(|b| match b {
+                DocBlock::Text {
+                    text, source_lines, ..
+                } if text.lines.iter().any(|l| {
+                    l.spans
+                        .iter()
+                        .any(|s| s.content.contains(FRONTMATTER_LABEL.trim()))
+                }) =>
+                {
+                    Some((&text.lines, source_lines))
+                }
+                _ => None,
+            })
+            .expect("expected a labelled frontmatter block");
+
+        let top = fm_lines
+            .iter()
+            .position(|l| l.spans.iter().any(|s| s.content.starts_with('╭')))
+            .expect("frontmatter box has no top border");
+        let bottom = fm_lines
+            .iter()
+            .position(|l| l.spans.iter().any(|s| s.content.starts_with('╰')))
+            .expect("frontmatter box has no bottom border");
+
+        assert_eq!(
+            fm_source_lines[top], 0,
+            "top border must map to the opening `---` (source line 0); \
+             source_lines: {fm_source_lines:?}",
+        );
+        assert_eq!(
+            fm_source_lines[bottom], 6,
+            "bottom border must map to the closing `---` (source line 6); \
+             source_lines: {fm_source_lines:?}",
+        );
+
+        // ── The body after it ────────────────────────────────────────────────
+        let (anchor, block_source_lines) = blocks
+            .iter()
+            .find_map(|b| match b {
+                DocBlock::Text {
+                    heading_anchors,
+                    source_lines,
+                    ..
+                } => heading_anchors.first().map(|a| (a, source_lines)),
+                _ => None,
+            })
+            .expect("expected a heading anchor for '# Heading'");
+
+        assert_eq!(anchor.anchor, "heading");
+        assert_eq!(
+            block_source_lines[anchor.line as usize], 8,
+            "'# Heading' is on source line 8 (0-indexed); source_lines: {block_source_lines:?}",
+        );
+    }
+
+    /// TOML-style `+++` frontmatter (Hugo, Zola) gets the same treatment.
+    #[test]
+    fn pluses_delimited_frontmatter_is_recognised() {
+        let md = "+++\ntitle = \"My Note\"\ntags = [\"alpha\"]\n+++\n\n# Heading\n";
+        let lines = rendered_lines(md);
+        let joined = lines.join("\n");
+
+        assert!(
+            joined.contains("title = \"My Note\""),
+            "TOML frontmatter content missing; lines: {lines:#?}",
+        );
+        assert!(
+            joined.contains(FRONTMATTER_LABEL.trim()),
+            "TOML frontmatter block is not labelled; lines: {lines:#?}",
+        );
+    }
+
+    /// A `---` thematic break that is *not* at the top of the document must
+    /// still render as a rule. Only a leading delimiter opens frontmatter.
+    #[test]
+    fn mid_document_thematic_break_is_untouched() {
+        let md = "# Title\n\ntext\n\n---\n\nmore text\n";
+        let lines = rendered_lines(md);
+
+        assert!(
+            lines.iter().any(|l| l.contains(&"─".repeat(60))),
+            "a mid-document `---` must still render as a thematic break; lines: {lines:#?}",
+        );
+    }
+
+    /// Hybrid mode re-parses one block's slice in isolation on cursor-leave.
+    /// Whether a `---` opens frontmatter depends on its position in the
+    /// *document*, which a slice cannot see — so the position has to be passed
+    /// in. This pins the contract in both directions: the same bytes are
+    /// frontmatter at offset 0 and a thematic break anywhere else.
+    #[test]
+    fn mid_document_slice_reparse_does_not_invent_frontmatter() {
+        let slice = "---\ntitle: x\ntags:\n  - a\n---\n";
+
+        let mid = render_block_from_slice(slice, 42, &default_palette(), Theme::Default);
+        let mid_text: String = mid
+            .iter()
+            .filter_map(|b| match b {
+                DocBlock::Text { text, .. } => Some(text),
+                _ => None,
+            })
+            .flat_map(|t| t.lines.iter())
+            .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
+            .collect();
+
+        assert!(
+            !mid_text.contains(FRONTMATTER_LABEL.trim()),
+            "a slice at byte 42 was re-parsed as frontmatter: {mid_text:?}",
+        );
+        assert!(
+            mid_text.contains(&"─".repeat(60)),
+            "a mid-document `---` must re-parse as a thematic break: {mid_text:?}",
+        );
+
+        // The same slice at byte 0 *is* the top of the document, so there it
+        // legitimately parses as frontmatter — this is what makes the guard a
+        // position check rather than a blanket disable.
+        let top = render_block_from_slice(slice, 0, &default_palette(), Theme::Default);
+        let top_text: String = top
+            .iter()
+            .filter_map(|b| match b {
+                DocBlock::Text { text, .. } => Some(text),
+                _ => None,
+            })
+            .flat_map(|t| t.lines.iter())
+            .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
+            .collect();
+        assert!(
+            top_text.contains(FRONTMATTER_LABEL.trim()),
+            "a slice at byte 0 must still parse frontmatter: {top_text:?}",
+        );
+    }
+
+    /// An unterminated leading `---` must not swallow the whole document.
+    /// pulldown-cmark only opens a metadata block when it can be closed, so
+    /// this falls back to thematic-break + markdown parsing.
+    #[test]
+    fn unterminated_frontmatter_does_not_swallow_document() {
+        let md = "---\ntitle: My Note\n\n# Heading\n\nBody text.\n";
+        let lines = rendered_lines(md);
+        let joined = lines.join("\n");
+
+        assert!(
+            joined.contains("Heading"),
+            "document body was swallowed by an unterminated frontmatter fence; lines: {lines:#?}",
+        );
+        assert!(
+            joined.contains("Body text."),
+            "document body was swallowed by an unterminated frontmatter fence; lines: {lines:#?}",
+        );
     }
 }
