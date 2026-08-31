@@ -63,6 +63,7 @@ mod unit {
             "hello\nworld\n".to_string(),
             &palette,
             Theme::Default,
+            crate::config::MathMode::Text,
         );
         assert_eq!(view.visual_mode, None, "load() must clear visual_mode");
     }
@@ -867,6 +868,7 @@ mod unit {
             "hello\nworld\n".to_string(),
             &palette,
             Theme::Default,
+            crate::config::MathMode::Text,
         );
         assert!(
             view.text_layouts.is_empty(),

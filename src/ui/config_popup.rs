@@ -7,7 +7,9 @@ use ratatui::{
 };
 
 use crate::app::ConfigPopupState;
-use crate::config::{Config, MermaidMode, MermaidTextBackend, SearchPreview, TreePosition};
+use crate::config::{
+    Config, MathMode, MermaidMode, MermaidTextBackend, SearchPreview, TreePosition,
+};
 use crate::theme::{Palette, Theme};
 
 /// Parameters for [`render_config_popup`].
@@ -31,6 +33,8 @@ pub struct ConfigPopupParams<'a> {
     pub mermaid_mode: MermaidMode,
     /// Active layered-layout backend for text-mode flowchart and state diagrams.
     pub mermaid_text_backend: MermaidTextBackend,
+    /// Active block-math rendering mode.
+    pub math_mode: MathMode,
     /// Active colour palette.
     pub palette: &'a Palette,
 }
@@ -76,6 +80,7 @@ fn build_lines<'a>(params: &ConfigPopupParams<'_>) -> Vec<Line<'a>> {
         search_preview,
         mermaid_mode,
         mermaid_text_backend,
+        math_mode,
         palette,
     } = params;
     let theme = *theme;
@@ -85,6 +90,7 @@ fn build_lines<'a>(params: &ConfigPopupParams<'_>) -> Vec<Line<'a>> {
     let search_preview = *search_preview;
     let mermaid_mode = *mermaid_mode;
     let mermaid_text_backend = *mermaid_text_backend;
+    let math_mode = *math_mode;
 
     let section_style = Style::new()
         .fg(palette.accent_alt)
@@ -274,6 +280,30 @@ fn build_lines<'a>(params: &ConfigPopupParams<'_>) -> Vec<Line<'a>> {
         text_style,
         dim_style,
     ));
+    row += 1;
+
+    // --- Math section ---
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("  ", text_style),
+        Span::styled(ConfigPopupState::SECTIONS[5].0, section_style),
+    ]));
+    for mode in [MathMode::Text, MathMode::Image] {
+        lines.push(option_line(
+            row == state.cursor,
+            math_mode == mode,
+            Config::math_mode_label(mode),
+            cursor_style,
+            active_style,
+            text_style,
+            dim_style,
+        ));
+        row += 1;
+    }
+    // Silence the "value assigned is never read" warning on the final bump;
+    // `row` is kept incremented so a future section can be appended without
+    // re-deriving the offset.
+    let _ = row;
 
     lines.push(Line::from(""));
 

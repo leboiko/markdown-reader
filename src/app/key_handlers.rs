@@ -59,14 +59,18 @@ impl App {
         // [mermaid_start + 3]    → Mermaid: text backend Auto
         // [mermaid_start + 4]    → Mermaid: text backend Sugiyama
         // [mermaid_start + 5]    → Mermaid: text backend Native
+        // [math_start]           → Math: Unicode text
+        // [math_start + 1]       → Math: typeset image
         const MARKDOWN_ROWS: usize = 1; // "Show line numbers"
         const PANELS_ROWS: usize = 3; // "Show file tree", "Tree left", "Tree right"
         const SEARCH_ROWS: usize = 2; // "Full line preview", "Snippet preview"
+        const MERMAID_ROWS: usize = 6; // 3 modes + 3 text backends
         let theme_count = Theme::ALL.len();
         let markdown_start = theme_count;
         let panels_start = markdown_start + MARKDOWN_ROWS;
         let search_start = panels_start + PANELS_ROWS;
         let mermaid_start = search_start + SEARCH_ROWS;
+        let math_start = mermaid_start + MERMAID_ROWS;
 
         if cursor < theme_count {
             let theme = Theme::ALL[cursor];
@@ -133,7 +137,28 @@ impl App {
             self.mermaid_text_backend = crate::config::MermaidTextBackend::Native;
             self.mermaid_cache.clear();
             self.persist_config();
+        } else if cursor == math_start {
+            self.set_math_mode(crate::config::MathMode::Text);
+        } else if cursor == math_start + 1 {
+            self.set_math_mode(crate::config::MathMode::Image);
         }
+    }
+
+    /// Switch block-math rendering mode and rebuild every open document.
+    ///
+    /// Unlike the mermaid mode switch, this cannot stop at clearing the cache:
+    /// the mode decides whether a formula is a `DocBlock::Math` at all, so the
+    /// block list itself has to be rebuilt. Re-rendering every tab is what
+    /// makes the change visible in background tabs too.
+    fn set_math_mode(&mut self, mode: crate::config::MathMode) {
+        if self.math_mode == mode {
+            return;
+        }
+        self.math_mode = mode;
+        self.math_cache.clear();
+        let palette = self.palette;
+        self.tabs.rerender_all(&palette, self.theme, mode);
+        self.persist_config();
     }
 
     // ── Tree ─────────────────────────────────────────────────────────────────
@@ -947,6 +972,7 @@ impl App {
         let view_height = self.tabs.view_height as usize;
         let palette = self.palette;
         let theme = self.theme;
+        let math_mode = self.math_mode;
 
         let Some(tab) = self.tabs.active_tab_mut() else {
             return;
@@ -1052,6 +1078,7 @@ impl App {
                             prev_idx,
                             &palette,
                             theme,
+                            math_mode,
                         );
                     }
                     // After splicing the block list may have grown/shrunk;
@@ -1074,6 +1101,7 @@ impl App {
         palette: crate::theme::Palette,
         theme: crate::theme::Theme,
     ) {
+        let math_mode = self.math_mode;
         match cmd {
             "w" => {
                 // Full re-parse before save to eliminate any incremental drift,
@@ -1081,7 +1109,13 @@ impl App {
                 if let Some(tab) = self.tabs.active_tab_mut()
                     && let Some(h) = tab.hybrid.as_mut()
                 {
-                    crate::ui::hybrid_editor::full_reparse(h, &mut tab.view, &palette, theme);
+                    crate::ui::hybrid_editor::full_reparse(
+                        h,
+                        &mut tab.view,
+                        &palette,
+                        theme,
+                        math_mode,
+                    );
                     h.status_message = Some("saving…".to_string());
                 }
                 self.save_hybrid_content(false);
@@ -1090,7 +1124,13 @@ impl App {
                 if let Some(tab) = self.tabs.active_tab_mut()
                     && let Some(h) = tab.hybrid.as_mut()
                 {
-                    crate::ui::hybrid_editor::full_reparse(h, &mut tab.view, &palette, theme);
+                    crate::ui::hybrid_editor::full_reparse(
+                        h,
+                        &mut tab.view,
+                        &palette,
+                        theme,
+                        math_mode,
+                    );
                     h.close_after_save = true;
                 }
                 self.save_hybrid_content(true);

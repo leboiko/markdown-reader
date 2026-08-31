@@ -244,6 +244,8 @@ impl MarkdownViewState {
     /// * `palette` – color palette for the active UI theme.
     /// * `theme` – the active UI theme; forwarded to the markdown renderer
     ///   to select the matching syntect highlighting theme for fenced code blocks.
+    /// * `math_mode` – forwarded to the renderer; decides whether block math
+    ///   becomes a `DocBlock::Math` or stays an inline Unicode box.
     pub fn load(
         &mut self,
         path: PathBuf,
@@ -251,8 +253,10 @@ impl MarkdownViewState {
         content: String,
         palette: &Palette,
         theme: crate::theme::Theme,
+        math_mode: crate::config::MathMode,
     ) {
-        let blocks = crate::markdown::renderer::render_markdown(&content, palette, theme);
+        let blocks =
+            crate::markdown::renderer::render_markdown(&content, palette, theme, math_mode);
         self.total_lines = blocks.iter().map(crate::markdown::DocBlock::height).sum();
         self.rendered = blocks;
         // Recompute positions with an empty text_layouts cache (layout width 0 —
@@ -372,7 +376,7 @@ impl MarkdownViewState {
                 let local_visual = (self.cursor_line - offset) as usize;
                 return match block {
                     DocBlock::Text { id, .. } => Some((*id, local_visual)),
-                    DocBlock::Mermaid { .. } | DocBlock::Table(_) => None,
+                    DocBlock::Mermaid { .. } | DocBlock::Math { .. } | DocBlock::Table(_) => None,
                 };
             }
             offset += h;

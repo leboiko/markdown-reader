@@ -265,7 +265,14 @@ impl Tabs {
     /// * `palette` – color palette for the active UI theme.
     /// * `theme` – the active UI theme; forwarded to the markdown renderer so
     ///   fenced code blocks are highlighted with a matching syntect theme.
-    pub fn rerender_all(&mut self, palette: &Palette, theme: crate::theme::Theme) {
+    /// * `math_mode` – forwarded to the renderer so a mode switch re-shapes
+    ///   every open tab's block list, not just the active one.
+    pub fn rerender_all(
+        &mut self,
+        palette: &Palette,
+        theme: crate::theme::Theme,
+        math_mode: crate::config::MathMode,
+    ) {
         for tab in &mut self.tabs {
             if let Some(path) = tab.view.current_path.clone() {
                 let content = tab.view.content.clone();
@@ -273,7 +280,8 @@ impl Tabs {
                 let scroll = tab.view.scroll_offset;
                 let cursor_line = tab.view.cursor_line;
                 let cursor_col = tab.view.cursor_col;
-                tab.view.load(path, name, content, palette, theme);
+                tab.view
+                    .load(path, name, content, palette, theme, math_mode);
                 let max_line = tab.view.total_lines.saturating_sub(1);
                 tab.view.scroll_offset = scroll.min(max_line);
                 tab.view.cursor_line = cursor_line.min(max_line);

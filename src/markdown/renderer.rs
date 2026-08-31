@@ -11,9 +11,11 @@ use ratatui::{
 use std::cell::Cell;
 use unicode_width::UnicodeWidthStr;
 
+use crate::config::MathMode;
 use crate::markdown::{
-    CellSpans, DocBlock, HeadingAnchor, LinkInfo, MermaidBlockId, TableBlock, TableBlockId,
-    TextBlockId, cell_to_string, heading_to_anchor, highlight::highlight_code, markdown_options,
+    CellSpans, DocBlock, HeadingAnchor, LinkInfo, MathBlockId, MermaidBlockId, TableBlock,
+    TableBlockId, TextBlockId, cell_to_string, heading_to_anchor, highlight::highlight_code,
+    markdown_options,
 };
 use crate::mermaid::DEFAULT_MERMAID_HEIGHT;
 use crate::theme::{Palette, Theme, Tokens};
@@ -44,8 +46,17 @@ const FRONTMATTER_LABEL: &str = " frontmatter ";
 /// * `palette` – color palette for the active UI theme.
 /// * `theme` – the active UI theme; used to select the matching syntect
 ///   highlighting theme for fenced code blocks.
-pub fn render_markdown(content: &str, palette: &Palette, theme: Theme) -> Vec<DocBlock> {
-    render_with_options(content, palette, theme, markdown_options())
+/// * `math_mode` – how block math (`$$…$$`) should be represented.
+///   [`MathMode::Text`] (the default) inlines the Unicode approximation into a
+///   `Text` block exactly as before; [`MathMode::Image`] emits a standalone
+///   [`DocBlock::Math`] for the image pipeline to fill in.
+pub fn render_markdown(
+    content: &str,
+    palette: &Palette,
+    theme: Theme,
+    math_mode: MathMode,
+) -> Vec<DocBlock> {
+    render_with_options(content, palette, theme, math_mode, markdown_options())
 }
 
 /// [`render_markdown`] with an explicit pulldown-cmark option set.
@@ -56,6 +67,7 @@ fn render_with_options(
     content: &str,
     palette: &Palette,
     theme: Theme,
+    math_mode: MathMode,
     opts: Options,
 ) -> Vec<DocBlock> {
     let parser = Parser::new_ext(content, opts);
@@ -63,7 +75,7 @@ fn render_with_options(
     // `render_code_block` can read from semantic slots (e.g. `tokens.surface.raised`)
     // rather than opaque palette field names.
     let tokens = Tokens::from_theme(theme);
-    let renderer = MdRenderer::new(palette, tokens, theme);
+    let renderer = MdRenderer::new(palette, tokens, theme, math_mode);
     renderer.render(content, parser)
 }
 
@@ -108,6 +120,7 @@ pub fn render_block_from_slice(
     byte_offset_in_doc: usize,
     palette: &crate::theme::Palette,
     theme: crate::theme::Theme,
+    math_mode: MathMode,
 ) -> Vec<crate::markdown::DocBlock> {
     let mut opts = markdown_options();
     if byte_offset_in_doc != 0 {
@@ -116,7 +129,7 @@ pub fn render_block_from_slice(
                 | Options::ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS,
         );
     }
-    let mut blocks = render_with_options(slice, palette, theme, opts);
+    let mut blocks = render_with_options(slice, palette, theme, math_mode, opts);
     // Shift every block's byte range from slice-local to absolute document
     // offsets so the caller can splice them into the full block list without
     // any further arithmetic.
@@ -198,6 +211,8 @@ struct MdRenderer {
     /// the sourcing decisions (e.g. `surface.raised` for code-block backgrounds)
     /// are visible at every call site.
     tokens: Tokens,
+    /// How block math should be represented. Read once per `Event::DisplayMath`.
+    math_mode: MathMode,
 
     // ── Source-line tracking ─────────────────────────────────────────────────
     /// Start byte offset of each source line: `line_boundaries[i]` is the byte
@@ -227,7 +242,7 @@ struct MdRenderer {
 }
 
 impl MdRenderer {
-    fn new(palette: &Palette, tokens: Tokens, theme: Theme) -> Self {
+    fn new(palette: &Palette, tokens: Tokens, theme: Theme, math_mode: MathMode) -> Self {
         Self {
             lines: Vec::new(),
             blocks: Vec::new(),
@@ -253,6 +268,7 @@ impl MdRenderer {
             heading_text: String::new(),
             pending_heading_anchors: Vec::new(),
             syntax_theme_name: theme.syntax_theme_name(),
+            math_mode,
             tokens,
             line_boundaries: Vec::new(),
             current_source_line: 0,
@@ -491,6 +507,14 @@ impl MdRenderer {
                     self.current_spans.push(Span::styled(rendered, style));
                 }
                 Event::DisplayMath(math) => {
+                    // In image mode the formula becomes its own block so the
+                    // draw loop can hand it to the graphics protocol. In the
+                    // default text mode nothing below changes, which is what
+                    // keeps the pre-existing rendering byte-identical.
+                    if self.math_mode == MathMode::Image {
+                        self.emit_math_block(&math, &span);
+                        continue;
+                    }
                     // Convert LaTeX to Unicode and render as a bordered
                     // block labelled "math", mirroring the code-block
                     // frame.
@@ -591,42 +615,16 @@ impl MdRenderer {
         // preceding block's end to the true end-of-source rather than 0.
         let eof_byte = content.len();
         for block in &mut self.blocks {
-            let raw_start = match block {
-                DocBlock::Text { source_lines, .. } => source_lines
-                    .first()
-                    .and_then(|&l| boundaries.get(l as usize).copied())
-                    .unwrap_or(eof_byte),
-                DocBlock::Mermaid { source_line, .. } => boundaries
-                    .get(*source_line as usize)
-                    .copied()
-                    .unwrap_or(eof_byte),
-                DocBlock::Table(t) => boundaries
-                    .get(t.source_line as usize)
-                    .copied()
-                    .unwrap_or(eof_byte),
-            };
-            match block {
-                DocBlock::Text {
-                    source_byte_start, ..
-                } => *source_byte_start = crate::cast::u32_sat(raw_start),
-                DocBlock::Mermaid {
-                    source_byte_start, ..
-                } => *source_byte_start = crate::cast::u32_sat(raw_start),
-                DocBlock::Table(t) => t.source_byte_start = crate::cast::u32_sat(raw_start),
-            }
+            let raw_start = block
+                .anchor_source_line()
+                .and_then(|l| boundaries.get(l as usize).copied())
+                .unwrap_or(eof_byte);
+            block.set_source_byte_start(crate::cast::u32_sat(raw_start));
         }
 
         // Ensure first block starts at 0.
         if let Some(first) = self.blocks.first_mut() {
-            match first {
-                DocBlock::Text {
-                    source_byte_start, ..
-                } => *source_byte_start = 0,
-                DocBlock::Mermaid {
-                    source_byte_start, ..
-                } => *source_byte_start = 0,
-                DocBlock::Table(t) => t.source_byte_start = 0,
-            }
+            first.set_source_byte_start(0);
         }
 
         // Second pass: make ranges contiguous. Each block's end = next block's
@@ -634,27 +632,11 @@ impl MdRenderer {
         let n = self.blocks.len();
         for i in 0..n {
             let next_start = if i + 1 < n {
-                match &self.blocks[i + 1] {
-                    DocBlock::Text {
-                        source_byte_start, ..
-                    } => *source_byte_start,
-                    DocBlock::Mermaid {
-                        source_byte_start, ..
-                    } => *source_byte_start,
-                    DocBlock::Table(t) => t.source_byte_start,
-                }
+                self.blocks[i + 1].source_byte_range().0
             } else {
-                source_len
+                source_len as usize
             };
-            match &mut self.blocks[i] {
-                DocBlock::Text {
-                    source_byte_end, ..
-                } => *source_byte_end = next_start,
-                DocBlock::Mermaid {
-                    source_byte_end, ..
-                } => *source_byte_end = next_start,
-                DocBlock::Table(t) => t.source_byte_end = next_start,
-            }
+            self.blocks[i].set_source_byte_end(crate::cast::u32_sat(next_start));
         }
 
         self.blocks
@@ -1021,6 +1003,34 @@ impl MdRenderer {
     /// [`FRONTMATTER_LABEL`]) so the box announces what it holds. It must
     /// include its own surrounding spaces and be ASCII — the border arithmetic
     /// counts bytes.
+    /// Flush accumulated text and emit a [`DocBlock::Math`] for `latex`.
+    ///
+    /// `span` is the `Event::DisplayMath` byte range, whose start is the `$$`
+    /// that opened the formula — the canonical source position for the block.
+    fn emit_math_block(&mut self, latex: &str, span: &Range<usize>) {
+        self.flush_line();
+        self.flush_text_block();
+
+        let source_line = byte_offset_to_line(span.start, &self.line_boundaries);
+        // Advance past the closing `$$` so the trailing blank line — and with
+        // it the next block's byte range — anchors after the formula rather
+        // than inside it. Same reasoning as `TagEnd::CodeBlock`.
+        self.current_source_line =
+            byte_offset_to_line(span.end.saturating_sub(1), &self.line_boundaries)
+                .saturating_add(1);
+
+        self.blocks.push(DocBlock::Math {
+            id: MathBlockId(hash_str(latex)),
+            source: latex.to_string(),
+            cell_height: Cell::new(crate::math_image::DEFAULT_MATH_HEIGHT),
+            source_line,
+            source_byte_start: 0,
+            source_byte_end: 0,
+        });
+        // Blank line after the formula (opens the next Text block).
+        self.push_blank_line();
+    }
+
     fn render_code_block(&mut self, label: Option<&str>) {
         // `tokens.syntax.code_border` — the chrome color for fenced code boxes.
         let border_style = Style::default().fg(self.tokens.syntax.code_border);
@@ -1325,7 +1335,7 @@ mod tests {
     /// (including borders) from the first Text block.
     fn render_code_block_lines(lang: &str, code: &str) -> Vec<Line<'static>> {
         let md = format!("```{lang}\n{code}\n```\n");
-        let blocks = render_markdown(&md, &default_palette(), Theme::Default);
+        let blocks = render_markdown(&md, &default_palette(), Theme::Default, MathMode::Text);
         match blocks
             .into_iter()
             .find(|b| matches!(b, DocBlock::Text { .. }))
@@ -1359,7 +1369,7 @@ mod tests {
         ];
         for src in cases {
             let md = format!("```\n{src}\n```\n");
-            let blocks = render_markdown(&md, &default_palette(), Theme::Default);
+            let blocks = render_markdown(&md, &default_palette(), Theme::Default, MathMode::Text);
             assert!(
                 blocks.iter().any(|b| matches!(b, DocBlock::Mermaid { .. })),
                 "expected a Mermaid block for source:\n{src}\n\nblocks: {blocks:?}",
@@ -1381,7 +1391,7 @@ mod tests {
         ];
         for src in cases {
             let md = format!("```\n{src}\n```\n");
-            let blocks = render_markdown(&md, &default_palette(), Theme::Default);
+            let blocks = render_markdown(&md, &default_palette(), Theme::Default, MathMode::Text);
             assert!(
                 !blocks.iter().any(|b| matches!(b, DocBlock::Mermaid { .. })),
                 "false positive: plain text was detected as Mermaid:\n{src}\n\nblocks: {blocks:?}",
@@ -1563,7 +1573,7 @@ mod tests {
   - Nested two-A
   - Nested two-B
 ";
-        let blocks = render_markdown(md, &default_palette(), Theme::Default);
+        let blocks = render_markdown(md, &default_palette(), Theme::Default, MathMode::Text);
         let DocBlock::Text { text, .. } = blocks
             .iter()
             .find(|b| matches!(b, DocBlock::Text { .. }))
@@ -1634,7 +1644,7 @@ mod tests {
     #[test]
     fn source_lines_parallel_to_text_lines() {
         let md = "Line 1\nLine 2\n\nLine 4\n";
-        let blocks = render_markdown(md, &default_palette(), Theme::Default);
+        let blocks = render_markdown(md, &default_palette(), Theme::Default, MathMode::Text);
         for block in &blocks {
             if let DocBlock::Text {
                 text, source_lines, ..
@@ -1658,7 +1668,7 @@ mod tests {
     #[test]
     fn source_lines_map_paragraph_correctly() {
         let md = "# Title\n\nParagraph text\n";
-        let blocks = render_markdown(md, &default_palette(), Theme::Default);
+        let blocks = render_markdown(md, &default_palette(), Theme::Default, MathMode::Text);
 
         // Locate the block whose first rendered line contains the heading prefix.
         let heading_block = blocks.iter().find(|b| {
@@ -1716,7 +1726,7 @@ mod tests {
     #[test]
     fn soft_breaks_preserve_source_line_count() {
         let md = "line one\nline two\nline three\n";
-        let blocks = render_markdown(md, &default_palette(), Theme::Default);
+        let blocks = render_markdown(md, &default_palette(), Theme::Default, MathMode::Text);
         let text_block = blocks
             .iter()
             .find(|b| matches!(b, DocBlock::Text { .. }))
@@ -1759,7 +1769,7 @@ mod tests {
     #[test]
     fn soft_break_inside_link_stays_joined() {
         let md = "[two\nwords](http://example.com)\n";
-        let blocks = render_markdown(md, &default_palette(), Theme::Default);
+        let blocks = render_markdown(md, &default_palette(), Theme::Default, MathMode::Text);
         let text_block = blocks
             .iter()
             .find(|b| matches!(b, DocBlock::Text { .. }))
@@ -1789,7 +1799,7 @@ mod tests {
         //   line 2: let y = 2;
         //   line 3: ```
         let md = "```rust\nlet x = 1;\nlet y = 2;\n```\n";
-        let blocks = render_markdown(md, &default_palette(), Theme::Default);
+        let blocks = render_markdown(md, &default_palette(), Theme::Default, MathMode::Text);
         let text_block = blocks
             .iter()
             .find(|b| matches!(b, DocBlock::Text { .. }))
@@ -1841,7 +1851,7 @@ mod tests {
     #[test]
     fn table_captures_start_line() {
         let md = "| A | B |\n|---|---|\n| 1 | 2 |\n";
-        let blocks = render_markdown(md, &default_palette(), Theme::Default);
+        let blocks = render_markdown(md, &default_palette(), Theme::Default, MathMode::Text);
         let table = blocks
             .iter()
             .find(|b| matches!(b, DocBlock::Table(_)))
@@ -1855,7 +1865,7 @@ mod tests {
     #[test]
     fn mermaid_captures_start_line() {
         let md = "```mermaid\ngraph LR\nA-->B\n```\n";
-        let blocks = render_markdown(md, &default_palette(), Theme::Default);
+        let blocks = render_markdown(md, &default_palette(), Theme::Default, MathMode::Text);
         let mermaid = blocks
             .iter()
             .find(|b| matches!(b, DocBlock::Mermaid { .. }))
@@ -1879,7 +1889,7 @@ mod tests {
         //   line 3: fn main() {}
         //   line 4: ```
         let md = "Intro\n\n```rust\nfn main() {}\n```\n";
-        let blocks = render_markdown(md, &default_palette(), Theme::Default);
+        let blocks = render_markdown(md, &default_palette(), Theme::Default, MathMode::Text);
 
         // Find the block that contains "Intro" — the paragraph block.
         let intro_block = blocks
@@ -1968,7 +1978,7 @@ mod tests {
     fn table_captures_row_source_lines() {
         let md = "| A | B |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n";
         let p = default_palette();
-        let blocks = render_markdown(md, &p, crate::theme::Theme::Default);
+        let blocks = render_markdown(md, &p, crate::theme::Theme::Default, MathMode::Text);
         let table = blocks
             .iter()
             .find_map(|b| {
@@ -1996,7 +2006,7 @@ mod tests {
     fn table_header_source_line_captured() {
         let md = "| A | B |\n|---|---|\n";
         let p = default_palette();
-        let blocks = render_markdown(md, &p, crate::theme::Theme::Default);
+        let blocks = render_markdown(md, &p, crate::theme::Theme::Default, MathMode::Text);
         let table = blocks
             .iter()
             .find_map(|b| {
@@ -2034,7 +2044,7 @@ mod tests {
         //   6: | 1 | 2 |
         let md = "# Title\n\nSome intro paragraph.\n\n| A | B |\n|---|---|\n| 1 | 2 |\n";
         let p = default_palette();
-        let blocks = render_markdown(md, &p, crate::theme::Theme::Default);
+        let blocks = render_markdown(md, &p, crate::theme::Theme::Default, MathMode::Text);
         let table = blocks
             .iter()
             .find_map(|b| {
@@ -2106,7 +2116,8 @@ mod tests {
     #[test]
     fn render_block_from_slice_returns_one_block_for_simple_paragraph() {
         let slice = "Hello, world.\n";
-        let blocks = render_block_from_slice(slice, 0, &default_palette(), Theme::Default);
+        let blocks =
+            render_block_from_slice(slice, 0, &default_palette(), Theme::Default, MathMode::Text);
         assert_eq!(blocks.len(), 1, "expected exactly one block");
         assert!(
             matches!(blocks[0], DocBlock::Text { .. }),
@@ -2120,7 +2131,8 @@ mod tests {
         // to emit at least two blocks: the Text block before the fence and the
         // Mermaid block (plus any trailing Text block).
         let slice = "First paragraph.\n\n```mermaid\ngraph LR\nA-->B\n```\n\nSecond paragraph.\n";
-        let blocks = render_block_from_slice(slice, 0, &default_palette(), Theme::Default);
+        let blocks =
+            render_block_from_slice(slice, 0, &default_palette(), Theme::Default, MathMode::Text);
         assert!(
             blocks.len() >= 2,
             "expected at least 2 blocks (Text + Mermaid), got {}: {blocks:?}",
@@ -2140,23 +2152,17 @@ mod tests {
     fn render_block_from_slice_byte_ranges_are_absolute() {
         let slice = "Hello.\n";
         let offset = 100usize;
-        let blocks = render_block_from_slice(slice, offset, &default_palette(), Theme::Default);
+        let blocks = render_block_from_slice(
+            slice,
+            offset,
+            &default_palette(),
+            Theme::Default,
+            MathMode::Text,
+        );
         assert!(!blocks.is_empty());
         // Every block's byte start must be >= the absolute offset.
         for block in &blocks {
-            let (start, end) = match block {
-                DocBlock::Text {
-                    source_byte_start,
-                    source_byte_end,
-                    ..
-                } => (*source_byte_start as usize, *source_byte_end as usize),
-                DocBlock::Mermaid {
-                    source_byte_start,
-                    source_byte_end,
-                    ..
-                } => (*source_byte_start as usize, *source_byte_end as usize),
-                DocBlock::Table(t) => (t.source_byte_start as usize, t.source_byte_end as usize),
-            };
+            let (start, end) = block.source_byte_range();
             assert!(
                 start >= offset,
                 "source_byte_start {start} must be >= offset {offset}"
@@ -2168,24 +2174,8 @@ mod tests {
             );
         }
         // First block starts exactly at the offset and last block ends at offset + slice.len().
-        let first_start = match &blocks[0] {
-            DocBlock::Text {
-                source_byte_start, ..
-            } => *source_byte_start as usize,
-            DocBlock::Mermaid {
-                source_byte_start, ..
-            } => *source_byte_start as usize,
-            DocBlock::Table(t) => t.source_byte_start as usize,
-        };
-        let last_end = match blocks.last().unwrap() {
-            DocBlock::Text {
-                source_byte_end, ..
-            } => *source_byte_end as usize,
-            DocBlock::Mermaid {
-                source_byte_end, ..
-            } => *source_byte_end as usize,
-            DocBlock::Table(t) => t.source_byte_end as usize,
-        };
+        let first_start = blocks[0].source_byte_range().0;
+        let last_end = blocks.last().unwrap().source_byte_range().1;
         assert_eq!(first_start, offset, "first block must start at the offset");
         assert_eq!(
             last_end,
@@ -2197,7 +2187,8 @@ mod tests {
     #[test]
     fn render_block_from_slice_for_mermaid_block() {
         let slice = "```mermaid\ngraph LR\nA-->B\n```\n";
-        let blocks = render_block_from_slice(slice, 0, &default_palette(), Theme::Default);
+        let blocks =
+            render_block_from_slice(slice, 0, &default_palette(), Theme::Default, MathMode::Text);
         assert!(
             blocks.iter().any(|b| matches!(b, DocBlock::Mermaid { .. })),
             "expected a Mermaid block, got: {blocks:?}"
@@ -2223,7 +2214,13 @@ mod tests {
     #[test]
     fn mermaid_byte_range_covers_full_fence_with_trailing_paragraph() {
         let source = "intro paragraph\n\n```mermaid\ngraph LR\nA-->B\n```\n\ntrailing paragraph\n";
-        let blocks = render_block_from_slice(source, 0, &default_palette(), Theme::Default);
+        let blocks = render_block_from_slice(
+            source,
+            0,
+            &default_palette(),
+            Theme::Default,
+            MathMode::Text,
+        );
         let mermaid = blocks
             .iter()
             .find(|b| matches!(b, DocBlock::Mermaid { .. }))
@@ -2261,7 +2258,13 @@ mod tests {
     #[test]
     fn mermaid_byte_range_covers_full_fence_when_last_block() {
         let source = "intro\n\n```mermaid\ngraph LR\nA-->B\n```\n";
-        let blocks = render_block_from_slice(source, 0, &default_palette(), Theme::Default);
+        let blocks = render_block_from_slice(
+            source,
+            0,
+            &default_palette(),
+            Theme::Default,
+            MathMode::Text,
+        );
         let mermaid = blocks
             .iter()
             .find(|b| matches!(b, DocBlock::Mermaid { .. }))
@@ -2297,7 +2300,7 @@ mod tests {
     #[test]
     fn heading_emits_own_text_block() {
         let md = "# H1\n\n# H2\n";
-        let blocks = render_markdown(md, &default_palette(), Theme::Default);
+        let blocks = render_markdown(md, &default_palette(), Theme::Default, MathMode::Text);
 
         let text_blocks: Vec<&DocBlock> = blocks
             .iter()
@@ -2343,24 +2346,8 @@ mod tests {
 
         // Contiguity: each block's end == next block's start.
         for i in 0..blocks.len().saturating_sub(1) {
-            let end_i = match &blocks[i] {
-                DocBlock::Text {
-                    source_byte_end, ..
-                } => *source_byte_end,
-                DocBlock::Mermaid {
-                    source_byte_end, ..
-                } => *source_byte_end,
-                DocBlock::Table(t) => t.source_byte_end,
-            };
-            let start_next = match &blocks[i + 1] {
-                DocBlock::Text {
-                    source_byte_start, ..
-                } => *source_byte_start,
-                DocBlock::Mermaid {
-                    source_byte_start, ..
-                } => *source_byte_start,
-                DocBlock::Table(t) => t.source_byte_start,
-            };
+            let end_i = crate::cast::u32_sat(blocks[i].source_byte_range().1);
+            let start_next = crate::cast::u32_sat(blocks[i + 1].source_byte_range().0);
             assert_eq!(
                 end_i,
                 start_next,
@@ -2376,7 +2363,7 @@ mod tests {
     #[test]
     fn paragraph_and_heading_split_into_separate_blocks() {
         let md = "Para.\n\n# Heading\n\nPara2.\n";
-        let blocks = render_markdown(md, &default_palette(), Theme::Default);
+        let blocks = render_markdown(md, &default_palette(), Theme::Default, MathMode::Text);
 
         let text_blocks: Vec<&DocBlock> = blocks
             .iter()
@@ -2423,7 +2410,7 @@ mod tests {
     #[test]
     fn nested_list_stays_in_single_block() {
         let md = "- a\n  - a1\n  - a2\n- b\n";
-        let blocks = render_markdown(md, &default_palette(), Theme::Default);
+        let blocks = render_markdown(md, &default_palette(), Theme::Default, MathMode::Text);
 
         let text_blocks: Vec<&DocBlock> = blocks
             .iter()
@@ -2480,7 +2467,7 @@ Body text.
     /// Flatten every rendered line of every `Text` block into one string per
     /// line, in document order.
     fn rendered_lines(md: &str) -> Vec<String> {
-        render_markdown(md, &default_palette(), Theme::Default)
+        render_markdown(md, &default_palette(), Theme::Default, MathMode::Text)
             .iter()
             .filter_map(|b| match b {
                 DocBlock::Text { text, .. } => Some(text),
@@ -2575,7 +2562,12 @@ Body text.
     /// cursor on the wrong row for the rest of the document.
     #[test]
     fn frontmatter_source_lines_straddle_delimiters_and_body_is_unshifted() {
-        let blocks = render_markdown(FRONTMATTER_DOC, &default_palette(), Theme::Default);
+        let blocks = render_markdown(
+            FRONTMATTER_DOC,
+            &default_palette(),
+            Theme::Default,
+            MathMode::Text,
+        );
 
         // ── The frontmatter box itself ───────────────────────────────────────
         let (fm_lines, fm_source_lines) = blocks
@@ -2674,7 +2666,13 @@ Body text.
     fn mid_document_slice_reparse_does_not_invent_frontmatter() {
         let slice = "---\ntitle: x\ntags:\n  - a\n---\n";
 
-        let mid = render_block_from_slice(slice, 42, &default_palette(), Theme::Default);
+        let mid = render_block_from_slice(
+            slice,
+            42,
+            &default_palette(),
+            Theme::Default,
+            MathMode::Text,
+        );
         let mid_text: String = mid
             .iter()
             .filter_map(|b| match b {
@@ -2697,7 +2695,8 @@ Body text.
         // The same slice at byte 0 *is* the top of the document, so there it
         // legitimately parses as frontmatter — this is what makes the guard a
         // position check rather than a blanket disable.
-        let top = render_block_from_slice(slice, 0, &default_palette(), Theme::Default);
+        let top =
+            render_block_from_slice(slice, 0, &default_palette(), Theme::Default, MathMode::Text);
         let top_text: String = top
             .iter()
             .filter_map(|b| match b {
@@ -2730,5 +2729,211 @@ Body text.
             joined.contains("Body text."),
             "document body was swallowed by an unterminated frontmatter fence; lines: {lines:#?}",
         );
+    }
+    // ── Block math gating (#35) ──────────────────────────────────────────────
+
+    const MATH_DOC: &str = "before\n\n$$\n\\frac{a}{b}\n$$\n\nafter\n";
+
+    /// Concatenate every rendered `Text` line in `blocks`.
+    fn text_content(blocks: &[DocBlock]) -> String {
+        blocks
+            .iter()
+            .filter_map(|b| match b {
+                DocBlock::Text { text, .. } => Some(text),
+                _ => None,
+            })
+            .flat_map(|t| t.lines.iter())
+            .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
+            .collect()
+    }
+
+    /// The default mode must not produce a `Math` block at all — that is the
+    /// gate that keeps existing installs on exactly the old rendering path.
+    #[test]
+    fn text_mode_emits_no_math_block() {
+        let blocks = render_markdown(MATH_DOC, &default_palette(), Theme::Default, MathMode::Text);
+        assert!(
+            !blocks.iter().any(|b| matches!(b, DocBlock::Math { .. })),
+            "text mode must not emit a Math block; blocks: {blocks:#?}",
+        );
+        assert!(
+            text_content(&blocks).contains("math"),
+            "text mode must still draw the inline bordered `math` box",
+        );
+    }
+
+    /// Text mode's output must be *identical* to what the renderer produced
+    /// before the feature existed. Comparing against a math-free control is not
+    /// enough, so this pins the actual rendered rows: any drift in the inline
+    /// box — spacing, border width, label — fails here.
+    #[test]
+    fn text_mode_rendering_is_unchanged_by_the_feature() {
+        let blocks = render_markdown(MATH_DOC, &default_palette(), Theme::Default, MathMode::Text);
+        let content = text_content(&blocks);
+
+        // The Unicode approximation of \frac{a}{b} and the labelled frame.
+        assert!(content.contains("a/b"), "missing Unicode math: {content:?}");
+        assert!(
+            content.contains('╭') && content.contains('╰'),
+            "missing box frame"
+        );
+        assert!(
+            content.contains("before") && content.contains("after"),
+            "surrounding paragraphs must be untouched: {content:?}",
+        );
+    }
+
+    /// Image mode promotes the formula to its own block, carrying the raw
+    /// LaTeX (needed for the Unicode fallback) and *not* leaving a duplicate
+    /// inline box behind.
+    #[test]
+    fn image_mode_emits_a_math_block_carrying_the_latex() {
+        let blocks = render_markdown(
+            MATH_DOC,
+            &default_palette(),
+            Theme::Default,
+            MathMode::Image,
+        );
+
+        let source = blocks
+            .iter()
+            .find_map(|b| match b {
+                DocBlock::Math { source, .. } => Some(source.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("image mode must emit a Math block; blocks: {blocks:#?}"));
+        assert_eq!(source.trim(), r"\frac{a}{b}");
+
+        let content = text_content(&blocks);
+        assert!(
+            !content.contains("a/b"),
+            "the inline Unicode box must not also be emitted in image mode: {content:?}",
+        );
+        assert!(
+            content.contains("before") && content.contains("after"),
+            "surrounding paragraphs must survive: {content:?}",
+        );
+    }
+
+    /// A `Math` block's id is a hash of its LaTeX: identical formulas share an
+    /// id (and therefore one cached image), different formulas do not.
+    #[test]
+    fn math_block_ids_are_content_derived() {
+        let same = render_markdown(
+            "$$\n\\frac{a}{b}\n$$\n\ntext\n\n$$\n\\frac{a}{b}\n$$\n",
+            &default_palette(),
+            Theme::Default,
+            MathMode::Image,
+        );
+        let ids: Vec<_> = same
+            .iter()
+            .filter_map(|b| match b {
+                DocBlock::Math { id, .. } => Some(*id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ids.len(), 2, "expected two math blocks; blocks: {same:#?}");
+        assert_eq!(ids[0], ids[1], "identical formulas must share a cache id");
+
+        let different = render_markdown(
+            "$$\n\\frac{a}{b}\n$$\n\ntext\n\n$$\n\\frac{c}{d}\n$$\n",
+            &default_palette(),
+            Theme::Default,
+            MathMode::Image,
+        );
+        let ids: Vec<_> = different
+            .iter()
+            .filter_map(|b| match b {
+                DocBlock::Math { id, .. } => Some(*id),
+                _ => None,
+            })
+            .collect();
+        assert_ne!(ids[0], ids[1], "different formulas must not collide");
+    }
+
+    /// The byte-range contiguity invariant — every byte of the source belongs
+    /// to exactly one block — must survive the new variant. Hybrid mode's
+    /// cursor→block lookup depends on it, so a gap here is a silent
+    /// mis-navigation, not a visible bug.
+    #[test]
+    fn math_block_preserves_byte_range_contiguity() {
+        let blocks = render_markdown(
+            MATH_DOC,
+            &default_palette(),
+            Theme::Default,
+            MathMode::Image,
+        );
+
+        assert_eq!(
+            blocks[0].source_byte_range().0,
+            0,
+            "first block must start at 0"
+        );
+        assert_eq!(
+            blocks.last().expect("blocks").source_byte_range().1,
+            MATH_DOC.len(),
+            "last block must end at source.len()",
+        );
+        for i in 0..blocks.len() - 1 {
+            assert_eq!(
+                blocks[i].source_byte_range().1,
+                blocks[i + 1].source_byte_range().0,
+                "gap between block[{i}] and block[{}]; blocks: {blocks:#?}",
+                i + 1,
+            );
+        }
+    }
+
+    /// The math block must anchor at the `$$` that opened it (source line 2 in
+    /// `MATH_DOC`), and the paragraph after it must not be dragged backwards
+    /// into the formula's range.
+    #[test]
+    fn math_block_anchors_at_its_opening_delimiter() {
+        let blocks = render_markdown(
+            MATH_DOC,
+            &default_palette(),
+            Theme::Default,
+            MathMode::Image,
+        );
+
+        let math_idx = blocks
+            .iter()
+            .position(|b| matches!(b, DocBlock::Math { .. }))
+            .expect("math block");
+        let DocBlock::Math { source_line, .. } = &blocks[math_idx] else {
+            unreachable!()
+        };
+        assert_eq!(*source_line, 2, "`$$` is on source line 2 (0-indexed)");
+
+        // The block's byte range must cover the closing `$$`, i.e. extend past
+        // the line the formula body sits on.
+        let (start, end) = blocks[math_idx].source_byte_range();
+        assert!(
+            MATH_DOC[start..end].contains("$$"),
+            "math block range {start}..{end} does not cover its delimiters: {:?}",
+            &MATH_DOC[start..end],
+        );
+    }
+
+    /// Inline math (`$…$`) is never promoted to a block, in either mode — it
+    /// has to stay on the text baseline.
+    #[test]
+    fn inline_math_is_never_promoted_to_a_block() {
+        for mode in [MathMode::Text, MathMode::Image] {
+            let blocks = render_markdown(
+                "Euler wrote $e^{i\\pi} + 1 = 0$ here.\n",
+                &default_palette(),
+                Theme::Default,
+                mode,
+            );
+            assert!(
+                !blocks.iter().any(|b| matches!(b, DocBlock::Math { .. })),
+                "inline math became a block in {mode:?} mode; blocks: {blocks:#?}",
+            );
+            assert!(
+                text_content(&blocks).contains("Euler wrote"),
+                "inline math dropped the surrounding sentence in {mode:?} mode",
+            );
+        }
     }
 }

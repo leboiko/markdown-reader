@@ -2,11 +2,14 @@ use super::gutter::render_text_with_gutter;
 use super::highlight::{
     apply_block_highlight, apply_visual_or_cursor_highlight, highlight_matches,
 };
+use super::math_draw::{MathDrawParams, draw_math_block};
 use super::mermaid_draw::{MermaidDrawParams, draw_mermaid_block};
 use super::state::VisualRange;
 use crate::action::Action;
 use crate::app::{App, Focus};
-use crate::markdown::{DocBlock, MermaidBlockId, update_mermaid_heights, update_text_layouts};
+use crate::markdown::{
+    DocBlock, MermaidBlockId, update_math_heights, update_mermaid_heights, update_text_layouts,
+};
 use crate::mermaid::MermaidRenderConfig;
 use crate::ui::table_render::layout_table;
 use ratatui::{
@@ -62,6 +65,24 @@ struct MermaidDraw {
     /// the top.
     clip_start: u32,
     /// Visual selection at the time of the draw instruction capture.
+    visual_mode: Option<VisualRange>,
+}
+
+/// Deferred math-block render instruction.
+///
+/// Smaller than [`MermaidDraw`]: a formula has no scroll-within-block concept
+/// (the image or its fallback box is drawn whole), so there is no `clip_start`.
+struct MathDraw {
+    y: u16,
+    height: u16,
+    fully_visible: bool,
+    id: crate::markdown::MathBlockId,
+    source: String,
+    /// Absolute logical-line index where this block starts in the document.
+    block_start: u32,
+    /// Total height of this block in logical lines.
+    block_height: u32,
+    /// Visual selection at the time the instruction was captured.
     visual_mode: Option<VisualRange>,
 }
 
@@ -186,6 +207,8 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                 &app.mermaid_cache,
                 app.mermaid_max_height,
             );
+            let math_changed =
+                update_math_heights(&tab.view.rendered, &app.math_cache, app.math_max_height);
             // Populate text layout cache for any Text blocks not yet wrapped
             // (e.g. first draw). Returns true when any height changed.
             let text_changed = update_text_layouts(
@@ -193,7 +216,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                 &mut tab.view.text_layouts,
                 effective_width,
             );
-            if layout_changed || mermaid_changed || text_changed {
+            if layout_changed || mermaid_changed || math_changed || text_changed {
                 tab.view.total_lines = tab
                     .view
                     .rendered
@@ -235,6 +258,11 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                 &app.mermaid_cache,
                 app.mermaid_max_height,
             );
+            // Math images are NOT cleared on a width change: unlike the
+            // fixed-width `AsciiDiagram` entries, a rasterised formula is
+            // resolution-independent and `Resize::Fit` re-fits it to the new
+            // rect, so re-typesetting would burn CPU for an identical result.
+            update_math_heights(&tab.view.rendered, &app.math_cache, app.math_max_height);
             // Re-wrap each Text block at the new width so `block.height()` and
             // the layout cache are accurate for all downstream callers.
             update_text_layouts(
@@ -317,6 +345,8 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
     let mut text_draws: Vec<TextDraw> = Vec::new();
     let mut mermaid_draws: Vec<MermaidDraw> = Vec::new();
     let mut mermaid_to_queue: Vec<(MermaidBlockId, String)> = Vec::new();
+    let mut math_draws: Vec<MathDraw> = Vec::new();
+    let mut math_to_queue: Vec<(crate::markdown::MathBlockId, String)> = Vec::new();
 
     {
         // Safety: same guard — active tab is guaranteed by `has_content`.
@@ -375,6 +405,15 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                 && block_start < lookahead_end
             {
                 mermaid_to_queue.push((MermaidBlockId(id.0), source.clone()));
+            }
+
+            // Queue math blocks on the same lookahead window, so a formula is
+            // typeset just before it scrolls into view rather than on arrival.
+            if let DocBlock::Math { id, source, .. } = doc_block
+                && block_end > lookahead_start
+                && block_start < lookahead_end
+            {
+                math_to_queue.push((*id, source.clone()));
             }
 
             if block_end > scroll_offset && block_start < viewport_end {
@@ -564,6 +603,25 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
                                     visual_mode,
                                 });
                             }
+                            DocBlock::Math { id, source, .. } => {
+                                // Same visibility rule as mermaid: only draw the
+                                // image once the block is as visible as it can
+                                // get, so the widget does not re-fit to a
+                                // shrinking rect and jitter at the viewport edge.
+                                let max_renderable = block_height.min(u32::from(inner.height));
+                                let fully_visible = visible_lines >= max_renderable
+                                    && u32::from(draw_height) >= max_renderable;
+                                math_draws.push(MathDraw {
+                                    y: rect_y,
+                                    height: draw_height,
+                                    fully_visible,
+                                    id: *id,
+                                    source: source.clone(),
+                                    block_start,
+                                    block_height,
+                                    visual_mode,
+                                });
+                            }
                             DocBlock::Table(table) => {
                                 // Slice visible lines from the cached rendered text.
                                 if let Some(cached) = tab.view.table_layouts.get(&table.id) {
@@ -651,6 +709,26 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
         for (id, source) in mermaid_to_queue {
             app.mermaid_cache.ensure_queued(id, &source, &render_cfg);
         }
+
+        // Same lazy contract for math: the only site that queues a typeset.
+        // Note the colour source differs from mermaid's — a mermaid diagram is
+        // an SVG whose *background* is recoloured to match the theme, whereas a
+        // formula is drawn on transparency and takes the theme's *foreground*.
+        let fg_rgb = match p.foreground {
+            Color::Rgb(r, g, b) => (r, g, b),
+            _ => (0xE0, 0xE0, 0xE0),
+        };
+        let math_cfg = crate::math_image::MathRenderConfig {
+            picker: app.picker.as_ref(),
+            action_tx: &tx,
+            in_tmux,
+            fg_rgb,
+            mode: app.math_mode,
+            max_height: app.math_max_height,
+        };
+        for (id, source) in math_to_queue {
+            app.math_cache.ensure_queued(id, &source, &math_cfg);
+        }
     }
 
     let total_doc_lines = app.tabs.active_tab().map_or(0, |t| t.view.total_lines);
@@ -705,6 +783,27 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
             visual_mode: md.visual_mode,
         };
         draw_mermaid_block(f, app, rect, &p, &params);
+    }
+
+    // Render math blocks.
+    for md in math_draws {
+        let rect = Rect {
+            x: inner.x,
+            y: md.y,
+            width: inner.width,
+            height: md.height,
+        };
+        let params = MathDrawParams {
+            fully_visible: md.fully_visible,
+            id: md.id,
+            source: &md.source,
+            focused,
+            cursor_line,
+            block_start: md.block_start,
+            block_end: md.block_start + md.block_height,
+            visual_mode: md.visual_mode,
+        };
+        draw_math_block(f, app, rect, &p, &params);
     }
 
     // ── Hybrid-mode cursor placement ─────────────────────────────────────────

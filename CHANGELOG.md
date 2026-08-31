@@ -5,6 +5,56 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.35.0] — 2026-08-31
+
+### Added — high-fidelity typeset math via RaTeX (#35)
+
+Block math (`$$…$$`) can now be typeset properly and drawn inline as a real
+image, instead of being flattened onto a single text baseline. Requested by
+@Greatz08 (#35).
+
+`latex_to_unicode` is a 1-D renderer: it has one line to work with, so a
+nested fraction collapses to `((a)/(b))/(c)`, a matrix loses its rows, and
+limits stop sitting under their `∑`. Unicode also only has super/subscript
+glyphs for digits and a handful of letters, so anything outside that set
+silently drops to inline characters.
+
+Setting `math_mode = "image"` routes block math through
+[RaTeX](https://github.com/erweixin/RaTeX) — a pure-Rust, KaTeX-compatible
+engine — which lays the formula out properly and rasterises it to a PNG.
+`ratatui-image` then draws it with whatever graphics protocol the terminal
+speaks. KaTeX fonts are compiled in via `embed-fonts`, so there is nothing
+to install and no runtime font lookup. Glyphs are drawn in the active
+theme's foreground colour on a transparent background, so a formula
+composites onto the document rather than punching an opaque rectangle
+into it.
+
+**This is opt-in and off by default.** `math_mode` defaults to `text`, and
+in that mode the renderer emits exactly the bytes it did before — the
+existing inline Unicode box, unchanged. Switch it in `config.toml` or under
+the new **Math** section of the `c` settings popup.
+
+Every failure path degrades to the Unicode box rather than to something
+worse, with the reason shown in the block's footer alongside the raw LaTeX:
+
+- terminal has no graphics protocol, or we are inside tmux
+- the formula does not parse (the footer names the offending command)
+- the formula lays out to nothing
+- the natural raster would exceed the safe pixel budget
+
+Inline math (`$…$`) stays Unicode in both modes — it has to sit on a text
+baseline inside a wrapped paragraph, where a terminal image cannot be
+placed. HTML export is unchanged for the same reason.
+
+Also configurable: `math_max_height` (default 20) bounds how many display
+lines an image-rendered formula may occupy.
+
+New dependencies: `ratex-parser`, `ratex-layout`, `ratex-types`, and
+`ratex-render` (with `embed-fonts`), all MIT. The integration uses RaTeX
+0.1.14's parser/layout depth guards, bounds raster allocations before PNG
+creation, and tags background requests so an older theme render cannot replace
+a newer result for the same formula.
+
 ## [1.34.77] — 2026-08-31
 
 ### Fixed — YAML / TOML frontmatter is no longer parsed as markdown (#36)
@@ -58,7 +108,6 @@ by @jserv in #42.
 
 Also updates the lockfile-only dev-test dependency `h2` to the patched 0.4.19
 release for RUSTSEC-2026-0258.
-
 ## [1.34.75] — 2026-07-21
 
 ### Changed — bundle mermaid-text 0.57.0

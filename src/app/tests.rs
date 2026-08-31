@@ -2,7 +2,10 @@
 ///
 /// Kept in a dedicated file to keep `mod.rs` focused on production code.
 use super::*;
-use crate::markdown::{CellSpans, MermaidBlockId, TableBlock, TableBlockId, TextBlockId};
+use crate::markdown::{
+    CellSpans, MathBlockId, MermaidBlockId, TableBlock, TableBlockId, TextBlockId,
+};
+use crate::math_image::MathEntry;
 use crate::mermaid::{DEFAULT_MERMAID_HEIGHT, MermaidEntry};
 use crate::theme::{Palette, Theme};
 use crate::ui::editor::{CommandOutcome, dispatch_command};
@@ -15,6 +18,126 @@ use std::time::Instant;
 use crossterm::event::MouseEvent;
 use ratatui::text::{Line, Span, Text};
 use std::cell::Cell;
+
+/// A completion from a render queued before a cache refresh must not win over
+/// the newer render of the same formula. The exact final reason makes this
+/// resistant to a no-op handler: ignoring both completions would leave the
+/// entry `Pending`, which also fails.
+#[test]
+fn stale_math_completion_cannot_overwrite_newer_request_for_same_id() {
+    let mut app = App::new(PathBuf::from("."), None, None);
+    let id = MathBlockId(41);
+
+    let stale_request = app.math_cache.begin_request(id);
+    app.math_cache.clear();
+    let current_request = app.math_cache.begin_request(id);
+
+    app.handle_action(Action::MathReady(
+        id,
+        stale_request,
+        Box::new(MathEntry::Unicode {
+            text: "old".to_string(),
+            reason: "old theme".to_string(),
+        }),
+    ));
+    app.handle_action(Action::MathReady(
+        id,
+        current_request,
+        Box::new(MathEntry::Unicode {
+            text: "new".to_string(),
+            reason: "new theme".to_string(),
+        }),
+    ));
+
+    let Some(MathEntry::Unicode { text, reason }) = app.math_cache.get(id) else {
+        panic!("the current completion must replace the pending entry");
+    };
+    assert_eq!(text, "new", "a stale render replaced the current result");
+    assert_eq!(reason, "new theme", "a stale theme result won the race");
+}
+
+/// Switching the block representation must keep the viewer on the same source
+/// line even when the text and image variants have different rendered heights.
+/// Pinning source line 6 makes a no-op mode switch fail too: the assertion also
+/// requires that image mode actually produced a `Math` block.
+#[tokio::test]
+async fn switching_to_image_math_preserves_cursor_source_line() {
+    crate::config::use_isolated_test_config();
+    let mut app = App::new(PathBuf::from("."), None, None);
+    let path = PathBuf::from("/fake/math-position.md");
+    let content = "intro\n\n$$\n\\frac{\\frac{a}{b}}{c}\n$$\n\nafter\n\ntail\n";
+    let palette = Palette::from_theme(Theme::Default);
+
+    app.tabs.open_or_focus(&path, true);
+    let tab = app.tabs.active_tab_mut().expect("tab");
+    tab.view.load(
+        path,
+        "math-position.md".to_string(),
+        content.to_string(),
+        &palette,
+        Theme::Default,
+        crate::config::MathMode::Text,
+    );
+    tab.view.cursor_line =
+        crate::markdown::logical_line_at_source(&tab.view.rendered, 6, &tab.view.text_layouts)
+            .expect("the paragraph after math must be rendered");
+
+    let math_start = Theme::ALL.len() + 1 + 3 + 2 + 6;
+    app.apply_config_selection(math_start + 1);
+
+    let tab = app.tabs.active_tab().expect("tab");
+    assert!(
+        tab.view
+            .rendered
+            .iter()
+            .any(|block| matches!(block, DocBlock::Math { .. })),
+        "the mode switch was a no-op",
+    );
+    assert_eq!(
+        crate::markdown::source_line_at(
+            &tab.view.rendered,
+            tab.view.cursor_line,
+            &tab.view.text_layouts,
+            &tab.view.table_layouts,
+        ),
+        6,
+        "cursor moved away from the paragraph after the formula",
+    );
+
+    let math_row =
+        crate::markdown::logical_line_at_source(&tab.view.rendered, 2, &tab.view.text_layouts)
+            .expect("math opening must be rendered");
+    let math_height = tab
+        .view
+        .rendered
+        .iter()
+        .find(|block| matches!(block, DocBlock::Math { .. }))
+        .map(DocBlock::height)
+        .expect("math block");
+    let tab = app.tabs.active_tab_mut().expect("tab");
+    tab.view.cursor_line = math_row + math_height.saturating_sub(1);
+
+    app.apply_config_selection(math_start);
+
+    let tab = app.tabs.active_tab().expect("tab");
+    assert!(
+        !tab.view
+            .rendered
+            .iter()
+            .any(|block| matches!(block, DocBlock::Math { .. })),
+        "switching back to text mode was a no-op",
+    );
+    assert_eq!(
+        crate::markdown::source_line_at(
+            &tab.view.rendered,
+            tab.view.cursor_line,
+            &tab.view.text_layouts,
+            &tab.view.table_layouts,
+        ),
+        2,
+        "cursor moved away from the formula when switching back to text mode",
+    );
+}
 
 fn make_text_block(lines: &[&str]) -> DocBlock {
     let text_lines: Vec<Line<'static>> = lines
@@ -622,6 +745,7 @@ fn enter_edit_mode_uses_cursor_for_source_line() {
         content,
         &palette,
         crate::theme::Theme::Default,
+        crate::config::MathMode::Text,
     );
 
     // Replace the rendered blocks with a hand-crafted Text block whose
@@ -842,6 +966,7 @@ fn d_key_moves_cursor_with_real_loaded_content() {
             content,
             &palette,
             Theme::Default,
+            crate::config::MathMode::Text,
         );
     }
     app.focus = Focus::Viewer;
@@ -1019,6 +1144,7 @@ fn reload_with_unchanged_content_preserves_cursor() {
             content.clone(),
             &palette,
             Theme::Default,
+            crate::config::MathMode::Text,
         );
         tab.view.cursor_line = 10;
         tab.view.scroll_offset = 5;
@@ -1064,6 +1190,7 @@ fn reload_with_changed_content_restores_cursor_when_in_range() {
             content_v1,
             &palette,
             Theme::Default,
+            crate::config::MathMode::Text,
         );
         tab.view.cursor_line = 10;
         tab.view.scroll_offset = 5;
@@ -1138,6 +1265,7 @@ fn make_rendered_app(content: &str) -> (App, PathBuf) {
             content.to_string(),
             &palette,
             Theme::Default,
+            crate::config::MathMode::Text,
         );
     }
     app.focus = Focus::Viewer;
@@ -1473,7 +1601,7 @@ fn open_link_picker_real_doc_repro() {
         return;
     };
     let palette = Palette::from_theme(Theme::Default);
-    let blocks = render_markdown(&src, &palette, Theme::Default);
+    let blocks = render_markdown(&src, &palette, Theme::Default, MathMode::Text);
 
     let mut app = App::new(PathBuf::from("."), None, None);
     app.tabs
@@ -1558,7 +1686,7 @@ See [BadFirst](#real) and [GoodSecond](#real).
 .
 ";
     let palette = Palette::from_theme(Theme::Default);
-    let blocks = render_markdown(src, &palette, Theme::Default);
+    let blocks = render_markdown(src, &palette, Theme::Default, MathMode::Text);
 
     let mut app = App::new(PathBuf::from("."), None, None);
     app.tabs
@@ -1612,7 +1740,7 @@ Final prose link: [Fig](#fig).
 .
 ";
     let palette = Palette::from_theme(Theme::Default);
-    let blocks = render_markdown(src, &palette, Theme::Default);
+    let blocks = render_markdown(src, &palette, Theme::Default, MathMode::Text);
 
     let mut app = App::new(PathBuf::from("."), None, None);
     app.tabs
@@ -1658,7 +1786,7 @@ Skim [System overview](#system-overview) first. End-of-doc has [appendix](#appen
 .
 ";
     let palette = Palette::from_theme(Theme::Default);
-    let blocks = render_markdown(src, &palette, Theme::Default);
+    let blocks = render_markdown(src, &palette, Theme::Default, MathMode::Text);
 
     let mut app = App::new(PathBuf::from("."), None, None);
     app.tabs
@@ -1717,7 +1845,7 @@ Finally [Cherry](#cherry).
 .
 ";
     let palette = Palette::from_theme(Theme::Default);
-    let blocks = render_markdown(src, &palette, Theme::Default);
+    let blocks = render_markdown(src, &palette, Theme::Default, MathMode::Text);
 
     let mut app = App::new(PathBuf::from("."), None, None);
     app.tabs
@@ -1979,6 +2107,7 @@ fn make_app_with_rendered_tab(source: &str) -> (App, PathBuf) {
             source.to_string(),
             &p,
             Theme::Default,
+            crate::config::MathMode::Text,
         );
         // Populate text layout cache at a 80-column width so byte_to_visual and
         // visual_to_byte can resolve positions in Text blocks.
@@ -2170,7 +2299,7 @@ fn hybrid_mode_does_not_alter_rendered_blocks() {
 
     // Render once without hybrid.
     let blocks_without_hybrid =
-        crate::markdown::renderer::render_markdown(source, &p, Theme::Default);
+        crate::markdown::renderer::render_markdown(source, &p, Theme::Default, MathMode::Text);
 
     // Render with hybrid entry (which must not re-render the blocks).
     let (mut app, _path) = make_app_with_rendered_tab(source);
@@ -2193,31 +2322,13 @@ fn hybrid_mode_does_not_alter_rendered_blocks() {
         .zip(blocks_without_hybrid.iter())
         .enumerate()
     {
-        let (hs, he) = match with_hybrid {
-            crate::markdown::DocBlock::Text {
-                source_byte_start,
-                source_byte_end,
-                ..
-            } => (*source_byte_start, *source_byte_end),
-            crate::markdown::DocBlock::Mermaid {
-                source_byte_start,
-                source_byte_end,
-                ..
-            } => (*source_byte_start, *source_byte_end),
-            crate::markdown::DocBlock::Table(t) => (t.source_byte_start, t.source_byte_end),
+        let (hs, he) = {
+            let (s, e) = with_hybrid.source_byte_range();
+            (s as u32, e as u32)
         };
-        let (ws, we) = match without_hybrid {
-            crate::markdown::DocBlock::Text {
-                source_byte_start,
-                source_byte_end,
-                ..
-            } => (*source_byte_start, *source_byte_end),
-            crate::markdown::DocBlock::Mermaid {
-                source_byte_start,
-                source_byte_end,
-                ..
-            } => (*source_byte_start, *source_byte_end),
-            crate::markdown::DocBlock::Table(t) => (t.source_byte_start, t.source_byte_end),
+        let (ws, we) = {
+            let (s, e) = without_hybrid.source_byte_range();
+            (s as u32, e as u32)
         };
         assert_eq!(
             (hs, he),
@@ -2238,7 +2349,7 @@ fn pressing_o_opens_outline_picker() {
 
     let src = "# First Heading\n\nSome text.\n\n## Second Heading\n\nMore text.\n";
     let palette = Palette::from_theme(Theme::Default);
-    let blocks = render_markdown(src, &palette, Theme::Default);
+    let blocks = render_markdown(src, &palette, Theme::Default, MathMode::Text);
 
     let mut app = App::new(PathBuf::from("."), None, None);
     app.tabs
@@ -2299,6 +2410,7 @@ async fn applying_theme_preserves_position_with_mermaid_blocks() {
             content.to_string(),
             &palette,
             Theme::Default,
+            crate::config::MathMode::Text,
         );
     }
     // Pretend the mermaid block had previously rendered to a 30-cell-tall
@@ -2435,6 +2547,7 @@ async fn applying_theme_preserves_position_across_draw_cycle() {
             content,
             &palette,
             Theme::Default,
+            crate::config::MathMode::Text,
         );
         update_text_layouts(&tab.view.rendered, &mut tab.view.text_layouts, layout_width);
         tab.view.layout_width = layout_width;
@@ -2513,6 +2626,7 @@ async fn applying_theme_preserves_viewer_cursor_and_scroll() {
             content,
             &palette,
             Theme::Default,
+            crate::config::MathMode::Text,
         );
         tab.view.cursor_line = 50;
         tab.view.scroll_offset = 35;

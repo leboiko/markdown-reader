@@ -132,6 +132,36 @@ pub enum MermaidTextBackend {
     Native,
 }
 
+/// Default value for [`Config::math_max_height`].
+///
+/// 20 lines is generous for a single formula — even a tall matrix or a stacked
+/// fraction rasterises well under it — while bounding the damage a pathological
+/// expression can do to the viewport.
+fn default_math_max_height() -> u32 {
+    20
+}
+
+/// Controls how block-level LaTeX math (`$$…$$`) is rendered in the viewer.
+///
+/// Inline math (`$…$`) is always Unicode: it has to sit on a text baseline
+/// inside a wrapped paragraph, where a terminal image cannot be placed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MathMode {
+    /// Convert to a Unicode approximation and draw it in a bordered `math`
+    /// block. The default, and the only behaviour before 1.35.0 — works in
+    /// every terminal, inside tmux, and costs nothing.
+    #[default]
+    Text,
+    /// Typeset the formula with RaTeX and draw it as a real image when the
+    /// terminal supports a graphics protocol; fall back to `Text` when it does
+    /// not (including inside tmux) or when the formula fails to parse.
+    ///
+    /// This is what makes nested fractions, matrices, and stacked limits keep
+    /// their two-dimensional structure instead of flattening to `((a)/(b))/(c)`.
+    Image,
+}
+
 /// How to render the inline preview for a content-search result.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -180,6 +210,18 @@ pub struct Config {
     /// and state diagrams.  See [`MermaidTextBackend`] for the trade-offs.
     #[serde(default)]
     pub mermaid_text_backend: MermaidTextBackend,
+    /// How block-level LaTeX math (`$$…$$`) is rendered. See [`MathMode`].
+    ///
+    /// Defaults to `Text` (Unicode approximation), so upgrading changes
+    /// nothing until you opt in with `math_mode = "image"`.
+    #[serde(default)]
+    pub math_mode: MathMode,
+    /// Maximum height of an image-rendered math block in display lines.
+    ///
+    /// Only consulted when `math_mode = "image"`. There is no UI widget for
+    /// this field — edit `config.toml` directly.
+    #[serde(default = "default_math_max_height")]
+    pub math_max_height: u32,
     /// When `true` (the default), `i` opens hybrid live-preview mode and `I`
     /// opens the legacy fullscreen edtui.  Set to `false` to restore the
     /// pre-1.33.0 behaviour (`i` → fullscreen, `I` → hybrid) as an opt-out
@@ -204,6 +246,8 @@ impl Default for Config {
             mermaid_mode: MermaidMode::default(),
             mermaid_max_height: default_mermaid_max_height(),
             mermaid_text_backend: MermaidTextBackend::default(),
+            math_mode: MathMode::default(),
+            math_max_height: default_math_max_height(),
             use_hybrid_by_default: default_use_hybrid_by_default(),
             updates: UpdatesConfig::default(),
         }
@@ -258,6 +302,14 @@ impl Config {
             MermaidMode::Auto => "Auto",
             MermaidMode::Text => "Text only",
             MermaidMode::Image => "Image only",
+        }
+    }
+
+    /// Return a [`MathMode`] label suitable for display (e.g. in the UI).
+    pub fn math_mode_label(mode: MathMode) -> &'static str {
+        match mode {
+            MathMode::Text => "Unicode text (default)",
+            MathMode::Image => "Typeset image (RaTeX)",
         }
     }
 
@@ -513,6 +565,55 @@ mermaid_text_backend = "auto"
         let toml_str = r#"theme = "default""#;
         let config: Config = toml::from_str(toml_str).expect("deserialization failed");
         assert!(config.updates.check_for_updates);
+    }
+
+    /// The default must be `Text`, so an upgrade does not silently switch a
+    /// user's documents to the image pipeline.
+    #[test]
+    fn math_mode_missing_field_defaults_to_text() {
+        let toml_str = r#"theme = "default""#;
+        let config: Config = toml::from_str(toml_str).expect("deserialization failed");
+        assert_eq!(config.math_mode, MathMode::Text);
+    }
+
+    /// An explicit opt-in must be honoured and must survive a round-trip —
+    /// the usual place a new enum variant breaks down silently.
+    #[test]
+    fn math_mode_explicit_image_is_honoured_and_round_trips() {
+        let toml_str = "theme = \"default\"\nmath_mode = \"image\"\n";
+        let config: Config = toml::from_str(toml_str).expect("deserialization failed");
+        assert_eq!(config.math_mode, MathMode::Image);
+
+        let serialized = toml::to_string_pretty(&config).expect("serialization failed");
+        let deserialized: Config = toml::from_str(&serialized).expect("deserialization failed");
+        assert_eq!(deserialized.math_mode, MathMode::Image);
+    }
+
+    /// `math_max_height` must default to 20 and survive a custom value.
+    #[test]
+    fn math_max_height_defaults_and_round_trips() {
+        let toml_str = r#"theme = "default""#;
+        let config: Config = toml::from_str(toml_str).expect("deserialization failed");
+        assert_eq!(config.math_max_height, 20);
+
+        let custom = Config {
+            math_max_height: 12,
+            ..Config::default()
+        };
+        let serialized = toml::to_string_pretty(&custom).expect("serialization failed");
+        let deserialized: Config = toml::from_str(&serialized).expect("deserialization failed");
+        assert_eq!(deserialized.math_max_height, 12);
+    }
+
+    /// Both variants need a distinct, non-empty label or the settings popup
+    /// renders an unusable choice. The compiler cannot catch a missing arm
+    /// here because the return type is `&'static str`.
+    #[test]
+    fn math_mode_label_covers_all_variants() {
+        let text = Config::math_mode_label(MathMode::Text);
+        let image = Config::math_mode_label(MathMode::Image);
+        assert!(!text.is_empty() && !image.is_empty());
+        assert_ne!(text, image);
     }
 
     /// An explicit `[updates] check_for_updates = false` must be honoured.
