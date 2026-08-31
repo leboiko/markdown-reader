@@ -40,7 +40,8 @@ document is read the same way everywhere:
   *value* is no longer reported as a broken link, and a `#`-prefixed line
   inside frontmatter no longer supplies a phantom heading anchor.
 - **`--section`** — a `#` comment inside frontmatter is no longer matched
-  as an H1.
+  as an H1. It uses the shared parser's exact metadata boundaries, including
+  YAML's `...` closing delimiter and malformed-block fallback.
 
 Source-line mapping is preserved across the block, so hybrid edit mode and
 the outline picker still land on the right rows in a document with

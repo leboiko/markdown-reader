@@ -4,6 +4,10 @@
 //! (heading line + body until the next same-or-higher-level heading) to
 //! stdout without launching the TUI.
 
+use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+
+use crate::markdown::markdown_options;
+
 /// Parse the ATX heading level of a line (e.g. `## Foo` → `Some(2)`).
 ///
 /// Returns `None` when the line is not a heading.
@@ -45,21 +49,21 @@ fn heading_text(line: &str) -> &str {
 /// would otherwise be matched by `--section` as an H1 (#36). The rule mirrors
 /// pulldown-cmark's metadata-block parsing: the delimiter must be the very
 /// first line, and an unterminated block is not frontmatter at all.
-fn frontmatter_end(lines: &[&str]) -> usize {
-    let Some(&first) = lines.first() else {
+fn frontmatter_end(source: &str) -> usize {
+    let mut events = Parser::new_ext(source, markdown_options()).into_offset_iter();
+    if !matches!(
+        events.next(),
+        Some((Event::Start(Tag::MetadataBlock(_)), _))
+    ) {
         return 0;
-    };
-    let delimiter = match first.trim_end() {
-        "---" => "---",
-        "+++" => "+++",
-        _ => return 0,
-    };
-    lines[1..]
-        .iter()
-        .position(|line| line.trim_end() == delimiter)
-        // `position` is relative to `lines[1..]`; +1 to re-base, +1 to land on
-        // the line after the closing delimiter.
-        .map_or(0, |rel| rel + 2)
+    }
+
+    events
+        .find_map(|(event, range)| match event {
+            Event::End(TagEnd::MetadataBlock(_)) => Some(source[..range.end].lines().count()),
+            _ => None,
+        })
+        .unwrap_or(0)
 }
 
 /// Find the first heading whose text contains `name` (case-insensitive
@@ -104,7 +108,7 @@ pub fn extract_section(source: &str, name: &str) -> Option<String> {
     let mut start_idx: Option<usize> = None;
     let mut section_level: usize = 0;
 
-    let body_start = frontmatter_end(&lines);
+    let body_start = frontmatter_end(source);
     for (i, &line) in lines.iter().enumerate().skip(body_start) {
         if let Some(level) = heading_level(line) {
             let text_lower = heading_text(line).to_lowercase();
@@ -249,6 +253,26 @@ mod tests {
         let doc = "---\n# Notes about the draft\ntitle: My Note\n---\n\n# Notes\n\nreal body\n";
         let result = extract_section(doc, "Notes").expect("should find the real `# Notes`");
         assert_eq!(result, "# Notes\n\nreal body\n");
+    }
+
+    /// YAML permits `...` as the closing metadata delimiter. The section
+    /// scanner must follow the parser's rule so a comment inside that block
+    /// cannot shadow the real heading below it.
+    #[test]
+    fn yaml_ellipsis_closed_frontmatter_is_skipped() {
+        let doc = "---\n# Notes in metadata\ntitle: My Note\n...\n\n# Notes\n\nreal body\n";
+        let result = extract_section(doc, "Notes").expect("should find the body heading");
+        assert_eq!(result, "# Notes\n\nreal body\n");
+    }
+
+    /// pulldown-cmark rejects a metadata block whose first body line is blank.
+    /// In that case the first heading is ordinary markdown and must remain
+    /// visible instead of being skipped by a looser handwritten detector.
+    #[test]
+    fn blank_first_line_does_not_open_frontmatter() {
+        let doc = "---\n\n# Notes\n\nfirst body\n---\n\n# Notes\n\nsecond body\n";
+        let result = extract_section(doc, "Notes").expect("should find the first heading");
+        assert_eq!(result, "# Notes\n\nfirst body\n---\n\n");
     }
 
     /// The same for TOML `+++` frontmatter, where `#` is also the comment
