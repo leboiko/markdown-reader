@@ -50,6 +50,7 @@ pub enum Theme {
     GruvboxDark,
     GruvboxLight,
     GithubLight,
+    GaiaAether,
 }
 
 impl Theme {
@@ -63,6 +64,7 @@ impl Theme {
         Theme::GruvboxDark,
         Theme::GruvboxLight,
         Theme::GithubLight,
+        Theme::GaiaAether,
     ];
 
     /// Human-readable display name for the theme.
@@ -76,6 +78,7 @@ impl Theme {
             Theme::GruvboxDark => "Gruvbox Dark",
             Theme::GruvboxLight => "Gruvbox Light",
             Theme::GithubLight => "GitHub Light",
+            Theme::GaiaAether => "Gaia Aether",
         }
     }
 
@@ -95,6 +98,7 @@ impl Theme {
             Theme::Default | Theme::SolarizedDark | Theme::Nord => "base16-ocean.dark",
             Theme::Dracula | Theme::GruvboxDark => "base16-eighties.dark",
             Theme::SolarizedLight | Theme::GruvboxLight | Theme::GithubLight => "InspiredGitHub",
+            Theme::GaiaAether => "base16-eighties.dark",
         }
     }
 }

@@ -76,7 +76,7 @@ a 500-file cap with a truncation footer.
 
 ![Global search modal](https://raw.githubusercontent.com/leboiko/markdown-reader/master/docs/screenshots/global-search.png)
 
-Eight themes ship built-in, including light variants. Settings modal
+Nine themes ship built-in, including light variants. Settings modal
 reached via `c`.
 
 ![GitHub Light theme with settings open](https://raw.githubusercontent.com/leboiko/markdown-reader/master/docs/screenshots/settings-github-light.png)
@@ -166,8 +166,9 @@ drawn on the left of the viewer content when enabled.
   The modal supports column-boundary panning (`h`/`l` snap to the next
   column, `H`/`L` half-page pan), mouse scroll wheel (plain for rows,
   `Shift`+wheel for columns), and click-outside-to-close.
-- **Themes** — eight built-in palettes (Default, Dracula, Solarized Dark,
-  Solarized Light, Nord, Gruvbox Dark, Gruvbox Light, GitHub Light).
+- **Themes** — nine built-in palettes (Default, Dracula, Solarized Dark,
+  Solarized Light, Nord, Gruvbox Dark, Gruvbox Light, GitHub Light,
+  Gaia Aether).
   Switch live from the settings modal; every open document re-renders
   with the new colors.
 - **Session resume** — per-project: the last open tabs, active tab, and
@@ -710,7 +711,7 @@ it past the viewport and press `Enter` again for the next.
 
 ## Themes
 
-Eight built-in themes (five dark, three light), switchable live from
+Nine built-in themes (six dark, three light), switchable live from
 the settings modal (`c`):
 
 - **Default** — balanced palette that works on dark terminals.
@@ -721,6 +722,8 @@ the settings modal (`c`):
 - **Gruvbox Dark** — warm retro groove.
 - **Gruvbox Light** — warm retro light variant.
 - **GitHub Light** — bright palette for light terminals.
+- **Gaia Aether** — Gruvbox warmth (cream text, moss and amber hues) on a
+  blue-grey surface, with a dusty-mauve accent.
 
 Theme changes re-render every open tab immediately, so switching feels
 instantaneous. The choice is persisted and restored on next launch.
@@ -740,7 +743,7 @@ app starts with defaults rather than refusing to launch.
 Fields:
 
 ```toml
-theme = "dracula"          # default | dracula | solarized_dark | solarized_light | nord | gruvbox_dark | gruvbox_light | github_light
+theme = "dracula"          # default | dracula | solarized_dark | solarized_light | nord | gruvbox_dark | gruvbox_light | github_light | gaia_aether
 show_line_numbers = true
 show_file_tree = true      # true | false; false starts hidden (H still toggles)
 tree_position = "left"     # left | right

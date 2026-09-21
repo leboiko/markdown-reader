@@ -5,6 +5,31 @@ All notable changes to `markdown-tui-explorer` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added — Gaia Aether theme
+
+A ninth built-in palette: Gruvbox warmth (cream `#f2e5bc` text, moss and
+amber hues) on a blue-grey `#181c22` surface, with a dusty-mauve accent.
+Select it in the settings modal under **Theme** or with
+`theme = "gaia_aether"` in `config.toml`.
+
+Three slots deliberately depart from the source palette, because its literal
+values fail the contrast audit in `src/theme/mod.rs::tests`:
+
+- `accent.primary` uses the source magenta `#c98fa0` rather than the source
+  accent `#a0607a`. No foreground colour reaches WCAG AA (4.5:1) on
+  `#a0607a` — its ceiling is 3.76:1 — so it cannot carry the `on_accent`
+  text drawn by the status bar and tab bar. `#a0607a` remains available as
+  `accent.alt`.
+- `state.selection_bg` is a lightened `#503a4a`. The source selection
+  `#261a28` sits 0.16 luminance units from the background surface, below the
+  `MIN_SELECTION_DELTA` of 3.0, so a selection highlight would be invisible.
+- `state.focus` is the magenta accent, 6.45:1 against the base surface.
+
+The existing audit tests cover the new variant automatically, so the palette
+is pinned to the same AA floor as every other theme.
+
 ## [1.35.1] — 2026-08-31
 
 ### Fixed — Mermaid quoted and delimiter-containing labels (#40)

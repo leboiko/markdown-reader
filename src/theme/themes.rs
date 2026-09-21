@@ -635,3 +635,102 @@ pub(super) fn github_light() -> Tokens {
         },
     }
 }
+
+/// Gaia Aether — the dark Gruvbox/terracotta palette used across the author's
+/// desktop theme ("AETHER / G.A.I.A v2": Gruvbox, terracotta, and dusty mauve).
+///
+/// Slots carry the source-palette names from that theme's `colors.toml`:
+/// `background` `#181c22`, `lighter_background` `#1e2228`, `foreground`
+/// `#f2e5bc`, `dark_foreground` `#8a7e70`, `accent` `#a0607a`, `selection`
+/// `#261a28`, plus the Gruvbox-derived hue slots.
+///
+/// Three slots deviate from the source palette because its literal values
+/// fail this crate's own contrast audit:
+///
+/// * `accent.primary` is the theme's dusty-mauve/tan `magenta` `#c98fa0`
+///   rather than `accent` `#a0607a`. No foreground reaches WCAG AA (4.5:1)
+///   on `#a0607a` — its ceiling is 3.76:1 — so it cannot carry the
+///   `on_accent` text drawn by the status bar and tab bar. `#a0607a` stays
+///   in the palette as `accent.alt`.
+/// * `state.selection_bg` `#503a4a` is a lightened `selection` — the
+///   source `#261a28` sits only 0.16 luminance units from `background`,
+///   below the `MIN_SELECTION_DELTA` of 3.0, and would render invisible.
+/// * `state.focus` is the magenta accent, 6.45:1 on `background`.
+pub(super) fn gaia_aether() -> Tokens {
+    // AETHER / G.A.I.A v2 base surfaces and reading text.
+    let bg = Color::Rgb(24, 28, 34); // background        #181c22
+    let raised = Color::Rgb(30, 34, 40); // lighter_background #1e2228
+    let brown = Color::Rgb(60, 56, 54); // brown             #3c3836
+    let fg = Color::Rgb(242, 229, 188); // foreground        #f2e5bc
+    let gray = Color::Rgb(168, 153, 132); // gruvbox fg4       #a89984
+    let dark_fg = Color::Rgb(138, 126, 112); // dark_foreground   #8a7e70
+    // Hue slots, Gruvbox-derived in the source theme.
+    let orange = Color::Rgb(208, 128, 80); // orange            #d08050
+    let yellow = Color::Rgb(184, 151, 90); // yellow            #b8975a
+    let bright_yellow = Color::Rgb(212, 176, 122); // bright_yellow     #d4b07a
+    let green = Color::Rgb(122, 158, 126); // green             #7a9e7e
+    let cyan = Color::Rgb(131, 165, 152); // cyan              #83a598
+    let mauve = Color::Rgb(201, 143, 160); // magenta           #c98fa0
+    let deep_mauve = Color::Rgb(160, 96, 122); // accent            #a0607a
+    let selection = Color::Rgb(80, 58, 74); // selection, lightened #261a28
+    Tokens {
+        surface: Surface {
+            base: bg,
+            raised,
+            border: brown,
+        },
+        text: Text {
+            primary: fg,
+            muted: gray,
+            // Dark base on the bright mauve accent: 6.45:1.
+            on_accent: bg,
+            title: fg,
+        },
+        state: State {
+            selection_bg: selection,
+            selection_fg: fg,
+            focus: mauve,
+            search_bg: bright_yellow,
+            current_match_bg: orange,
+            // Dark base reads 8.38:1 on bright_yellow and 5.61:1 on orange.
+            match_fg: bg,
+        },
+        accent: Accent {
+            primary: mauve,
+            alt: deep_mauve,
+            link: cyan,
+        },
+        syntax: Syntax {
+            inline_code: green,
+            code_fg: fg,
+            code_border: brown,
+        },
+        heading: Heading {
+            h1: green,
+            h2: cyan,
+            h3: mauve,
+            other: fg,
+        },
+        status: Status {
+            // Darker than `raised`: the source theme's `dark_background`.
+            bg: Color::Rgb(22, 26, 31), // #161a1f
+            fg: gray,
+            help_bg: bg,
+            gutter: dark_fg,
+        },
+        list: List {
+            marker: bright_yellow,
+            task_marker: green,
+            block_quote_fg: gray,
+            block_quote_border: dark_fg,
+        },
+        table: Table {
+            header: cyan,
+            border: brown,
+        },
+        git: Git {
+            new: green,
+            modified: yellow,
+        },
+    }
+}
