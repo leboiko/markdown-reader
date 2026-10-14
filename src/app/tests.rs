@@ -3145,3 +3145,47 @@ fn focus_actions_respect_hidden_tree() {
         );
     }
 }
+
+/// Opening a *different* file from the tree must replace the active tab's
+/// content — the path taken by Enter/`l`/click on a tree row.
+///
+/// `Tabs::open_or_focus` answers [`OpenOutcome::Replaced`] here and hands back
+/// the active tab *without* rewriting its `current_path`, so the path-keyed
+/// lookup in `apply_file_loaded` misses the tab that is meant to receive the
+/// content.  Without a fallback to the active tab the read completes and the
+/// content is silently dropped: the viewer keeps showing the previous file
+/// while the tree cursor moves, which reads as "the file tree stopped
+/// switching files".
+#[test]
+fn opening_other_file_replaces_active_tab_content() {
+    let (mut app, first) = make_app_with_tab("# File A");
+    let second = PathBuf::from("/fake/other.md");
+
+    // Exactly what `open_selected_file(false)` does, followed by the load
+    // completing on the background reader task.
+    app.open_or_focus(second.clone(), false, None);
+    app.handle_action(Action::FileLoaded {
+        path: second.clone(),
+        content: "# File B".to_string(),
+        new_tab: false,
+        display_name: None,
+    });
+
+    assert_eq!(app.tabs.len(), 1, "a replacement must not add a second tab");
+    let tab = app.tabs.active_tab().expect("tab must exist");
+    assert_eq!(
+        tab.view.current_path,
+        Some(second.clone()),
+        "the active tab must now point at the file that was opened"
+    );
+    assert_eq!(
+        tab.view.content, "# File B",
+        "the loaded content must land in the active tab, not be dropped"
+    );
+    assert_eq!(tab.view.file_name, "other.md", "tab label follows the file");
+    assert_ne!(
+        tab.view.current_path,
+        Some(first),
+        "the previously open file must no longer be the tab's path"
+    );
+}

@@ -213,7 +213,7 @@ impl App {
         &mut self,
         path: PathBuf,
         content: String,
-        _new_tab: bool,
+        new_tab: bool,
         display_name: Option<String>,
     ) {
         // Use the caller-supplied display name when present (e.g. `<stdin>`);
@@ -231,6 +231,7 @@ impl App {
         // current_path set but no content yet) and load the file into it.
         let palette = self.palette;
         let math_mode = self.math_mode;
+        let theme = self.theme;
         let loaded = self
             .tabs
             .find_tab_by_path_mut(&path)
@@ -243,7 +244,15 @@ impl App {
                 .tabs
                 .find_tab_by_path_mut(&path)
                 .expect("tab must exist after is_some() guard");
-            let theme = self.theme;
+            tab.view
+                .load(path.clone(), name, content, &palette, theme, math_mode);
+        } else if !new_tab && let Some(tab) = self.tabs.active_tab_mut() {
+            // `open_or_focus` answered `Replaced` for this load: it hands back
+            // the active tab *without* rewriting its `current_path`, so the
+            // lookup above — which matches on path — misses the tab that is
+            // meant to receive the content, and opening a file from the tree
+            // (Enter or click) would silently do nothing.  For a replacement
+            // the active tab *is* the target.
             tab.view
                 .load(path.clone(), name, content, &palette, theme, math_mode);
         }

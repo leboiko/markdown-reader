@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Opening a file from the tree (Enter, `l` or a mouse click) replaces the
+  active tab's contents. `open_or_focus` answers `Replaced` without rewriting
+  the tab's `current_path`, so the loaded content was dropped and the viewer
+  kept showing the previous document.
 - Mermaid CJK/fullwidth labels keep their terminal-cell width and aligned
   borders across grid, sequence, class/ER tables and quadrant charts (#52).
   Combining marks stay attached to their labels. Reported by @worldnine.
