@@ -156,6 +156,10 @@ pub struct Activation {
     pub participant: String,
     /// Index of the message at which the activation begins.
     pub start_message: usize,
+    /// Number of notes parsed before an explicit `activate` directive.
+    /// Notes at `start_message` from this index onward are inside the span.
+    /// `None` starts at the message itself (inline `+` or constructed diagrams).
+    pub start_note: Option<usize>,
     /// Index of the message at which the activation ends. For an
     /// unmatched `activate` (no later `deactivate`), this is set to
     /// the last message index at parse-time finalisation so the bar

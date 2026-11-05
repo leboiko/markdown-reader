@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Flowchart nodes labelled `[/]` or `[\]` render as literal rectangles instead
+  of panicking when their slanted delimiters overlap (#55).
+- Explicit sequence activations span the spacer and note rows after `activate`,
+  including nested activations and multiline notes. Notes before the directive
+  and inline activations retain their original timing (#54).
+
 - Mermaid CJK/fullwidth labels keep their terminal-cell width and aligned
   borders across grid, sequence, class/ER tables and quadrant charts (#52).
   Combining marks stay attached to their labels. Reported by @worldnine.
@@ -29,7 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   successful terminal query, including `TERM_PROGRAM` detection in WSL.
   Unicode math fallback renders `\tag{1}` as `(1)` (#48). The equation raster
   and protocol routing are tested; the reported WezTerm/WSL display still
-  requires verification in that terminal. No release has been published.
+  requires verification in that terminal; issue #48 remains open.
 
 ## [1.35.1] — 2026-08-31
 
