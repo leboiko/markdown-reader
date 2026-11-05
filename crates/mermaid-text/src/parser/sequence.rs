@@ -34,8 +34,15 @@ use std::collections::HashMap;
 /// up by `finalize_activations` at end-of-parse, so partial parse
 /// errors still surface a useful stack-state error message.
 enum ActEvent {
-    Open { participant: String, at: usize },
-    Close { participant: String, at: usize },
+    Open {
+        participant: String,
+        at: usize,
+        note: Option<usize>,
+    },
+    Close {
+        participant: String,
+        at: usize,
+    },
 }
 
 /// In-flight block-stack frame used during parsing. Each opener pushes
@@ -200,6 +207,7 @@ pub fn parse(src: &str) -> Result<SequenceDiagram, Error> {
             act_events.push(ActEvent::Open {
                 participant: participant.to_string(),
                 at: diag.messages.len(),
+                note: Some(diag.notes.len()),
             });
             continue;
         }
@@ -394,6 +402,7 @@ pub fn parse(src: &str) -> Result<SequenceDiagram, Error> {
                 Some(true) => act_events.push(ActEvent::Open {
                     participant: to,
                     at: msg_idx,
+                    note: None,
                 }),
                 Some(false) => act_events.push(ActEvent::Close {
                     participant: from,
@@ -431,14 +440,21 @@ pub fn parse(src: &str) -> Result<SequenceDiagram, Error> {
 /// unclosed open auto-closes at the last message — matches Mermaid's
 /// lenient behaviour and the doc-comment on `Activation::end_message`.
 fn finalize_activations(events: &[ActEvent], diag: &mut SequenceDiagram) -> Result<(), Error> {
-    let mut stacks: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut stacks: HashMap<String, Vec<(usize, Option<usize>)>> = HashMap::new();
     for ev in events {
         match ev {
-            ActEvent::Open { participant, at } => {
-                stacks.entry(participant.clone()).or_default().push(*at);
+            ActEvent::Open {
+                participant,
+                at,
+                note,
+            } => {
+                stacks
+                    .entry(participant.clone())
+                    .or_default()
+                    .push((*at, *note));
             }
             ActEvent::Close { participant, at } => {
-                let start = stacks
+                let (start, start_note) = stacks
                     .get_mut(participant)
                     .and_then(|s| s.pop())
                     .ok_or_else(|| {
@@ -449,6 +465,7 @@ fn finalize_activations(events: &[ActEvent], diag: &mut SequenceDiagram) -> Resu
                 diag.activations.push(Activation {
                     participant: participant.clone(),
                     start_message: start,
+                    start_note,
                     end_message: *at,
                 });
             }
@@ -456,10 +473,11 @@ fn finalize_activations(events: &[ActEvent], diag: &mut SequenceDiagram) -> Resu
     }
     let last = diag.messages.len().saturating_sub(1);
     for (participant, mut stack) in stacks {
-        while let Some(start) = stack.pop() {
+        while let Some((start, start_note)) = stack.pop() {
             diag.activations.push(Activation {
                 participant: participant.clone(),
                 start_message: start,
+                start_note,
                 end_message: last,
             });
         }

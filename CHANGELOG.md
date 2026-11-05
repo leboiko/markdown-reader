@@ -7,7 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.35.4] — 2026-11-05
+
 ### Fixed
+
+- Flowchart nodes labelled `[/]` or `[\]` render as literal rectangles instead
+  of panicking when their slanted delimiters overlap (#55).
+- Explicit sequence activations span the spacer and note rows after `activate`,
+  including nested activations and multiline notes. Notes before the directive
+  and inline activations retain their original timing (#54).
 
 - Mermaid CJK/fullwidth labels keep their terminal-cell width and aligned
   borders across grid, sequence, class/ER tables and quadrant charts (#52).
@@ -23,13 +31,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Update Rustls to 0.23.45 and rustls-webpki to 0.103.15 in the lockfile,
   resolving RUSTSEC-2026-0285 found by the local advisory gate.
 
+### Security
+
+- Build on Dependabot's #45 update commit, preserving its authorship, and refresh
+  pulldown-cmark to 0.13.6, Rustls to 0.23.46, rustls-webpki to 0.103.16,
+  webpki-roots to 1.0.11 and Tokio to 1.54.1 to clear current advisory failures.
+
 ### Changed
+
+- Bundle `mermaid-text` 0.58.0. Its public `Activation` model adds `start_note`;
+  applications constructing spans can set it to `None` for message-based timing.
 
 - Recognized WezTerm sessions prefer the iTerm2 image protocol after a
   successful terminal query, including `TERM_PROGRAM` detection in WSL.
   Unicode math fallback renders `\tag{1}` as `(1)` (#48). The equation raster
   and protocol routing are tested; the reported WezTerm/WSL display still
-  requires verification in that terminal. No release has been published.
+  requires verification in that terminal; issue #48 remains open.
 
 ## [1.35.1] — 2026-08-31
 
