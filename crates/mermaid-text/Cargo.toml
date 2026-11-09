@@ -18,7 +18,7 @@ path = "src/bin/mermaid_text.rs"
 
 [dependencies]
 unicode-width = "0.2"
-ascii-dag = "0.9.1"
+ascii-dag = "0.11.0"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 
 [dev-dependencies]
