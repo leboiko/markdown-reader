@@ -36,7 +36,7 @@ dirs = "6.0.0"
 mermaid-rs-renderer = "0.2.2"
 ratatui-image = { version = "11.0.5", default-features = false, features = ["crossterm"] }
 image = { version = "0.25", default-features = false }
-resvg = "0.47"
+resvg = "0.49"
 unicode-width = "0.2"
 base64 = "0.22"
 syntect = { version = "5.3.0", default-features = false, features = ["default-fancy"] }
