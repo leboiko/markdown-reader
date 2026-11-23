@@ -179,10 +179,14 @@ fn redirect_stdin_to_tty() -> Result<()> {
     Ok(())
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<std::process::ExitCode> {
+    // Parse help/version before starting worker threads. Return an exit code
+    // so the runtime and its workers are dropped on every CLI path.
     let cli = Cli::parse();
+    tokio::runtime::Runtime::new()?.block_on(run(cli))
+}
 
+async fn run(cli: Cli) -> Result<std::process::ExitCode> {
     // ── HTML export mode ─────────────────────────────────────────────
     // When `--export-html` is supplied, render to HTML and exit without
     // touching the TUI at all. This keeps the happy path fully isolated
@@ -213,7 +217,7 @@ async fn main() -> Result<()> {
                 .write_all(html.as_bytes())
                 .context("failed to write HTML to stdout")?;
         }
-        return Ok(());
+        return Ok(std::process::ExitCode::SUCCESS);
     }
 
     // ── Link validation mode ─────────────────────────────────────────────────
@@ -229,8 +233,11 @@ async fn main() -> Result<()> {
         };
         let report = checklinks::check_dir(&root, &opts);
         report.print(&root);
-        let exit_code = if report.is_clean() { 0 } else { 1 };
-        std::process::exit(exit_code);
+        return Ok(if report.is_clean() {
+            std::process::ExitCode::SUCCESS
+        } else {
+            std::process::ExitCode::FAILURE
+        });
     }
 
     // ── Section extraction mode ──────────────────────────────────────────────
@@ -262,7 +269,7 @@ async fn main() -> Result<()> {
         } else {
             // Neither a file argument nor piped stdin: nothing to extract from.
             eprintln!("error: --section requires a FILE argument or piped input");
-            std::process::exit(1);
+            return Ok(std::process::ExitCode::FAILURE);
         };
 
         match section_extract::extract_section(&source, name) {
@@ -270,11 +277,11 @@ async fn main() -> Result<()> {
                 // `print!` rather than `println!` because `extract_section`
                 // already preserves the trailing newline from the source.
                 print!("{text}");
-                std::process::exit(0);
+                return Ok(std::process::ExitCode::SUCCESS);
             }
             None => {
                 eprintln!("no heading matching '{name}' found");
-                std::process::exit(1);
+                return Ok(std::process::ExitCode::FAILURE);
             }
         }
     }
@@ -377,7 +384,7 @@ async fn main() -> Result<()> {
         version_check_enabled,
     );
 
-    result
+    result.map(|()| std::process::ExitCode::SUCCESS)
 }
 
 #[cfg(test)]

@@ -26,6 +26,12 @@ rendering and needs no eviction. Math already prunes height metadata correctly.
 Per-view layout caches reset on load. No broad cache eviction on every frame:
 the live-block scan occurs only on document lifecycle changes.
 
+Leak-enabled CLI integration tests also reproduced 2,048 bytes of thread-local
+cleanup allocations because --check-links/--section used process::exit while
+Tokio workers were alive. Return ExitCode normally so runtime destruction joins
+workers, and parse help/version before runtime construction. Existing CLI
+integration tests pin output and success/failure exit codes.
+
 ## Repeatable checks
 
 - `scripts/verify-release.sh`: formatting, Clippy (all targets/features), full
@@ -36,7 +42,8 @@ the live-block scan occurs only on document lifecycle changes.
   RSS sampled every 100 document iterations; after warmup, spread must be at most
   16 MiB. Then repeat all three workloads under native macOS `leaks --atExit`.
 - `scripts/check-memory-asan.sh`: nightly with instrumented standard library,
-  full workspace address checks, then isolated soaks with leak detection enabled.
+  full workspace address checks, full workspace leak checks excluding only the
+  reproduced detached-DNS test, then isolated soaks with leak detection enabled.
   Install nightly and rust-src first. Tests do not modify real user configuration.
 
 ## Results and limits
@@ -47,14 +54,18 @@ spread was 160 KiB and the last nine checkpoints were 13,632 KiB. Native leaks
 reported **0 leaks / 0 leaked bytes** across all three workloads.
 
 The unsuppressed full-suite LeakSanitizer pass reports 3,353 bytes in 32
-allocations through Apple's Network framework and a detached DNS resolver.
+allocations: 3,327 bytes through Apple's Network framework and a detached DNS
+resolver, plus 26 bytes deliberately leaked by an existing renderer test.
+Removing Box::leak from that test preserves its assertions and frees the three
+strings. A repository-wide search found no other explicit leaks/forget calls.
 A separate application-free reproducer using std::net::ToSocketAddrs in a
 thread, sending its result over a channel and exiting without joining, reports
 3,327 bytes in 29 allocations; joining that worker produces no report. A tiny
 ureq-only reproducer also reports 3,327 bytes. This is a process-shutdown/DNS
 worker limitation, not evidence of growing document caches. No blanket leak
 suppression is installed: the full suite checks address errors with leak
-checking disabled, and the isolated document/raster tests keep leak checking on.
+checking disabled, a second full-suite pass excludes only the DNS test, and
+the isolated document/raster tests keep leak checking on.
 The release is not claimed to be universally leak-free. Tests cover synthetic
 inputs and this host; native third-party/system libraries are not fully
 instrumented, and terminal-specific graphics protocols are not soaked.
@@ -76,3 +87,11 @@ or shell-interpolated user input. Performance: two linear live-block scans per
 lifecycle change, no new per-frame scan. Tests: observed failures before fix,
 negative shared-owner/late-completion cases, full suite plus memory workloads.
 No schema, network protocol or public API changes.
+
+The optimized release binary passed version, HTML export, section extraction,
+valid-link and broken-link smoke checks. `cargo package --locked` built the
+registry-ready crate successfully. Stable and MSRV each passed 1,682 tests.
+Full-workspace AddressSanitizer address checks passed. After the test-allocation
+and CLI teardown repairs, full-workspace leak checks also passed with only
+`checklinks::tests::external_link_dns_failure_reported` excluded; that test is
+still included in the address-only and ordinary stable/MSRV runs.

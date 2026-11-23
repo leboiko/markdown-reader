@@ -11,4 +11,7 @@ target=$(rustc +nightly -vV | sed -n 's/^host: //p')
 # detached-thread reproducer (see docs/release-1.36.0.md). Keep address
 # checking across the entire suite; enable leak checking for isolated soaks.
 ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 cargo +nightly test -Zbuild-std --target "$target" --workspace
+# All other tests retain leak checking; only the independently reproduced
+# detached DNS shutdown case is excluded from this second full-suite pass.
+cargo +nightly test -Zbuild-std --target "$target" --workspace -- --skip checklinks::tests::external_link_dns_failure_reported
 cargo +nightly test -Zbuild-std --target "$target" --bin markdown-reader memory_soak -- --ignored --test-threads=1

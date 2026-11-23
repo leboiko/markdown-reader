@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Let CLI commands shut down their worker runtime cleanly instead of bypassing
+  destructors with process exit.
 - Release obsolete diagram/formula allocations when replacing, saving or closing
   documents, and remove stale diagram height metadata. Preserve entries still
   referenced by other tabs. Add lifecycle regressions and repeatable memory soaks.
