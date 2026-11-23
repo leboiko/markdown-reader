@@ -11,6 +11,13 @@
 
 [advisories]
 ignore = [
+    # Existing public Gantt types expose chrono::NaiveDate. All chrono versions
+    # are unmaintained (not a vulnerability); replacement changes the library
+    # API and exceeds the scope of PRs #49/#56. Revisit at the next Gantt API
+    # revision; no patched version exists as of 2026-11-23.
+    # https://rustsec.org/advisories/RUSTSEC-2026-0543
+    "RUSTSEC-2026-0543", # chrono: retain existing API, maintenance notice only
+
     # --- Unmaintained (warnings; kept in sync with deny.toml) -----------------
     "RUSTSEC-2025-0141", # bincode 1.3.3 unmaintained (via syntect)
     "RUSTSEC-2024-0320", # yaml-rust 0.4.5 unmaintained (via syntect)

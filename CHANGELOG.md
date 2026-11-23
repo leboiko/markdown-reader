@@ -15,6 +15,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and regression by @Moler1995 in #56; maintainer review adds request ownership
   and delayed-read regressions.
 
+### Security
+
+- Refresh `url` and `cookie` lockfile versions to address RUSTSEC-2026-0592
+  and RUSTSEC-2026-0594 found during PR review. Document the maintenance-only
+  chrono advisory exception: its date type is part of the public Gantt API.
+
+### Added — Gaia Aether theme
+
+Contributed by @ykzird in #49. A ninth built-in palette: Gruvbox warmth (cream `#f2e5bc` text, moss and
+amber hues) on a blue-grey `#181c22` surface, with a dusty-mauve accent.
+Select it in the settings modal under **Theme** or with
+`theme = "gaia_aether"` in `config.toml`.
+
+Three slots deliberately depart from the source palette, because its literal
+values fail the contrast audit in `src/theme/mod.rs::tests`:
+
+- `accent.primary` uses the source magenta `#c98fa0` rather than the source
+  accent `#a0607a`. The chosen dark foreground `#181c22` reaches only
+  3.62:1 on `#a0607a`, below WCAG AA (4.5:1) for the `on_accent`
+  text drawn by the status bar and tab bar. `#a0607a` remains available as
+  `accent.alt`.
+- `state.selection_bg` is a lightened `#503a4a`. The source selection
+  `#261a28` sits 0.16 luminance units from the background surface, below the
+  `MIN_SELECTION_DELTA` of 3.0, so a selection highlight would be invisible.
+- `state.focus` is the magenta accent, 6.45:1 against the base surface.
+
+The existing audit tests cover the new variant automatically, so the palette
+is pinned to the same AA floor as every other theme.
+
 ## [1.35.4] — 2026-11-05
 
 ### Fixed

@@ -22,6 +22,13 @@ unmaintained = "all"
 # revisit when it moves. Re-audit quarterly: drop anything whose
 # upstream has shipped a fix.
 ignore = [
+    # Existing public Gantt types expose chrono::NaiveDate. All chrono versions
+    # are unmaintained (not a vulnerability); replacement changes the library
+    # API and exceeds the scope of PRs #49/#56. Revisit at the next Gantt API
+    # revision; no patched version exists as of 2026-11-23.
+    # https://rustsec.org/advisories/RUSTSEC-2026-0543
+    "RUSTSEC-2026-0543", # chrono: retain existing API, maintenance notice only
+
     # syntect's transitive deps. Both are flagged unmaintained but
     # there's no safe upgrade — syntect 5.x still depends on the
     # old majors. Replacing syntect would be a multi-day refactor
