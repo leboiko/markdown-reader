@@ -844,9 +844,10 @@ mod tests {
             }
         }
 
-        // CI must have at least 2 of 4 succeed to pass.
-        assert!(
-            ready_count >= 2,
+        // Every supported fixture must survive renderer/rasterizer upgrades.
+        assert_eq!(
+            ready_count,
+            diagrams.len(),
             "only {ready_count}/4 diagrams rendered successfully; failures: {failed:?}"
         );
     }

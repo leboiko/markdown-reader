@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Merge reviewed Dependabot updates #46, #47, #60, #61, #63, #64, #65 and #67:
   Nix actions, base64, Mermaid SVG renderer, directories, SVG rasterizer,
   HTTP test tooling and the patch/minor group. Preserve the existing security
-  lockfile fixes. The ascii-dag #62 upgrade remains blocked by layout regressions.
+  lockfile fixes and require every SVG renderer smoke fixture to succeed. The ascii-dag #62 upgrade remains blocked by layout regressions.
 
 ### Fixed
 
