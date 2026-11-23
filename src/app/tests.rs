@@ -3145,3 +3145,127 @@ fn focus_actions_respect_hidden_tree() {
         );
     }
 }
+
+/// Opening a different tree file replaces the original tab after its read completes.
+#[test]
+fn opening_other_file_replaces_active_tab_content() {
+    let (mut app, first) = make_app_with_tab("# File A");
+    let second = PathBuf::from("/fake/other.md");
+
+    // Exactly what `open_selected_file(false)` does, followed by the load
+    // completing on the background reader task.
+    app.open_or_focus(second.clone(), false, None);
+    app.handle_action(Action::FileLoaded {
+        path: second.clone(),
+        content: "# File B".to_string(),
+        new_tab: false,
+        display_name: None,
+    });
+
+    assert_eq!(app.tabs.len(), 1, "a replacement must not add a second tab");
+    let tab = app.tabs.active_tab().expect("tab must exist");
+    assert_eq!(
+        tab.view.current_path,
+        Some(second.clone()),
+        "the active tab must now point at the file that was opened"
+    );
+    assert_eq!(
+        tab.view.content, "# File B",
+        "the loaded content must land in the active tab, not be dropped"
+    );
+    assert_eq!(tab.view.file_name, "other.md", "tab label follows the file");
+    assert_ne!(
+        tab.view.current_path,
+        Some(first),
+        "the previously open file must no longer be the tab's path"
+    );
+}
+
+#[test]
+fn replacement_load_does_not_overwrite_another_tab() {
+    let (mut app, _) = make_app_with_tab("# File A");
+    let second = PathBuf::from("/fake/other.md");
+    app.open_or_focus(second.clone(), false, None);
+    let third = PathBuf::from("/fake/third.md");
+    app.tabs.open_or_focus(&third, true);
+    app.tabs.active_tab_mut().unwrap().view.content = "# File C".to_string();
+    app.focus = Focus::Tree;
+    app.handle_action(Action::FileLoaded {
+        path: second.clone(),
+        content: "# File B".to_string(),
+        new_tab: false,
+        display_name: None,
+    });
+    assert_eq!(
+        app.focus,
+        Focus::Tree,
+        "background completion must not steal focus"
+    );
+    let active = app.tabs.active_tab().unwrap();
+    assert_eq!(active.view.current_path, Some(third));
+    assert_eq!(active.view.content, "# File C");
+    let target = app
+        .tabs
+        .find_tab_by_path_mut(&second)
+        .expect("replacement target");
+    assert_eq!(target.view.content, "# File B");
+}
+
+#[test]
+fn replacement_load_latest_request_wins_and_closed_target_is_ignored() {
+    for close_target in [false, true] {
+        let (mut app, _) = make_app_with_tab("# Original");
+        let old = PathBuf::from("/fake/old.md");
+        let latest = PathBuf::from("/fake/latest.md");
+        app.open_or_focus(old.clone(), false, None);
+        app.open_or_focus(latest.clone(), false, None);
+        if close_target {
+            app.tabs.close(app.tabs.active.unwrap());
+            app.tabs
+                .open_or_focus(&PathBuf::from("/fake/survivor.md"), true);
+            app.tabs.active_tab_mut().unwrap().view.content = "# Survivor".into();
+        }
+        for (path, content) in [(latest.clone(), "# Latest"), (old, "# Old")] {
+            app.handle_action(Action::FileLoaded {
+                path,
+                content: content.into(),
+                new_tab: false,
+                display_name: None,
+            });
+        }
+        let tab = app.tabs.active_tab().unwrap();
+        if close_target {
+            assert_eq!(
+                tab.view.current_path,
+                Some(PathBuf::from("/fake/survivor.md"))
+            );
+            assert_eq!(tab.view.content, "# Survivor");
+        } else {
+            assert_eq!(tab.view.current_path, Some(latest));
+            assert_eq!(tab.view.content, "# Latest");
+        }
+    }
+}
+
+#[test]
+fn replacement_load_failure_keeps_original_and_allows_retry() {
+    let (mut app, first) = make_app_with_tab("# Original");
+    let second = PathBuf::from("/fake/retry.md");
+    app.open_or_focus(second.clone(), false, None);
+    app.handle_action(Action::FileLoadFailed {
+        path: second.clone(),
+    });
+    let tab = app.tabs.active_tab().unwrap();
+    assert_eq!(tab.view.current_path, Some(first));
+    assert_eq!(tab.view.content, "# Original");
+    app.open_or_focus(second.clone(), false, None);
+    app.handle_action(Action::FileLoaded {
+        path: second.clone(),
+        content: String::new(),
+        new_tab: false,
+        display_name: None,
+    });
+    let tab = app.tabs.active_tab().unwrap();
+    assert_eq!(tab.view.current_path, Some(second));
+    assert_eq!(tab.view.content, "");
+}

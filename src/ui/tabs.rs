@@ -19,6 +19,8 @@ pub struct TabId(pub u32);
 pub struct Tab {
     pub id: TabId,
     pub view: MarkdownViewState,
+    /// Latest replacement requested for this tab; retain the old view until success.
+    pub pending_path: Option<PathBuf>,
     /// In-document find state is document-specific and travels with the tab.
     pub doc_search: DocSearchState,
     /// Vim-style editor state.  `Some` while the tab is in edit mode, `None`
@@ -111,7 +113,7 @@ impl Tabs {
         if let Some(existing) = self
             .tabs
             .iter()
-            .find(|t| t.view.current_path.as_ref() == Some(path))
+            .find(|t| t.pending_path.as_ref().or(t.view.current_path.as_ref()) == Some(path))
         {
             let id = existing.id;
             self.set_active(id);
@@ -119,8 +121,9 @@ impl Tabs {
         }
 
         // Replace active tab when requested (no new tab).
-        if !new_tab && let Some(id) = self.active {
-            return (id, OpenOutcome::Replaced);
+        if !new_tab && let Some(tab) = self.active_tab_mut() {
+            tab.pending_path = Some(path.clone());
+            return (tab.id, OpenOutcome::Replaced);
         }
 
         // Enforce cap.
@@ -134,6 +137,7 @@ impl Tabs {
         let id = self.alloc_id();
         self.tabs.push(Tab {
             id,
+            pending_path: None,
             view: MarkdownViewState {
                 current_path: Some(path.clone()),
                 ..MarkdownViewState::default()

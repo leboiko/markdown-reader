@@ -227,25 +227,27 @@ impl App {
                 .to_string()
         });
 
-        // Find the placeholder tab that open_or_focus reserved (it has
-        // current_path set but no content yet) and load the file into it.
-        let palette = self.palette;
-        let math_mode = self.math_mode;
-        let loaded = self
-            .tabs
-            .find_tab_by_path_mut(&path)
-            .filter(|t| t.view.content.is_empty())
-            .is_some();
-
-        if loaded {
-            // SAFETY: the `is_some()` guard above guarantees a tab exists.
-            let tab = self
-                .tabs
-                .find_tab_by_path_mut(&path)
-                .expect("tab must exist after is_some() guard");
-            let theme = self.theme;
-            tab.view
-                .load(path.clone(), name, content, &palette, theme, math_mode);
+        // Route completion to the tab that requested it, never whichever tab
+        // happens to be active now. A newer replacement supersedes an older one.
+        let Some(tab) = self.tabs.tabs.iter_mut().find(|tab| {
+            if let Some(pending) = &tab.pending_path {
+                pending == &path
+            } else {
+                tab.view.current_path.as_ref() == Some(&path)
+            }
+        }) else {
+            return;
+        };
+        let target = tab.id;
+        if tab.pending_path.take().is_some() || tab.view.content.is_empty() {
+            tab.view.load(
+                path.clone(),
+                name,
+                content,
+                &self.palette,
+                self.theme,
+                self.math_mode,
+            );
         }
 
         // Apply a pending jump-to-source-line if one was registered for this path.
@@ -272,8 +274,10 @@ impl App {
             }
         }
 
-        self.focus = Focus::Viewer;
-        self.expand_and_select(&path);
+        if self.tabs.active == Some(target) {
+            self.focus = Focus::Viewer;
+            self.expand_and_select(&path);
+        }
     }
 
     /// Open the currently selected tree file in a new or active tab.

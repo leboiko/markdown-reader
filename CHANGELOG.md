@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Opening a file from the tree (Enter, `l` or a mouse click) replaces the
+  requesting tab. Delayed reads cannot overwrite another tab or supersede a
+  newer selection; failed reads preserve the original document. Original fix
+  and regression by @Moler1995 in #56; maintainer review adds request ownership
+  and delayed-read regressions.
+
 ### Security
 
 - Refresh `url` and `cookie` lockfile versions to address RUSTSEC-2026-0592
