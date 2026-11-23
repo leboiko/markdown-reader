@@ -29,7 +29,7 @@ graph LR; A[Build] --> B[Test] --> C[Deploy]
 
 ```toml
 [dependencies]
-mermaid-text = "0.1"
+mermaid-text = "0.58"
 ```
 
 or:
@@ -590,3 +590,11 @@ Rendering techniques — including the direction-bit canvas, barycenter
 heuristic constants, and subgraph border padding — were adapted from
 [termaid](https://github.com/fasouto/termaid), a Python prior art library
 for rendering Mermaid diagrams as terminal text.
+
+## Upgrading to 0.58
+
+`sequence::Activation` now retains explicit activation ordering relative to
+notes with `start_note: Option<usize>`. If you construct activations directly,
+add `start_note: None` to keep message-based timing. The parser sets `Some(n)`
+for explicit `activate` directives, where `n` is the first note index inside the
+activation at its starting message boundary.

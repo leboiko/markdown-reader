@@ -954,7 +954,7 @@ pub(crate) fn parse_node_definition(token: &str) -> Option<Node> {
             (id, inner, NodeShape::Subroutine)
         }
         // Parallelogram (lean-right): A[/text/]
-        else if rest.starts_with("[/") && rest.ends_with("/]") {
+        else if rest.len() >= 4 && rest.starts_with("[/") && rest.ends_with("/]") {
             let inner = rest[2..rest.len() - 2].trim().to_string();
             (id, inner, NodeShape::Parallelogram)
         }
@@ -964,7 +964,7 @@ pub(crate) fn parse_node_definition(token: &str) -> Option<Node> {
             (id, inner, NodeShape::Trapezoid)
         }
         // Parallelogram (lean-left / backslash): A[\text\]
-        else if rest.starts_with("[\\") && rest.ends_with("\\]") {
+        else if rest.len() >= 4 && rest.starts_with("[\\") && rest.ends_with("\\]") {
             let inner = rest[2..rest.len() - 2].trim().to_string();
             (id, inner, NodeShape::ParallelogramBackslash)
         }

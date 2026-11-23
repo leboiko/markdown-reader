@@ -1017,15 +1017,18 @@ pub fn render(diag: &SequenceDiagram) -> String {
     // `at`, advancing `arrow_row` by each note's height. Uses the
     // pre-computed wrapped text so drawing and height accounting agree.
     let mut note_placements = Vec::new();
+    let mut note_start_rows = vec![None; diag.notes.len()];
     let mut render_notes_at = |canvas: &mut Canvas, arrow_row: &mut usize, at: usize| {
-        for (note, wrapped) in diag
+        for (note_index, (note, wrapped)) in diag
             .notes
             .iter()
             .zip(note_wrapped.iter())
-            .filter(|(n, _)| n.after_message == at)
+            .enumerate()
+            .filter(|(_, (n, _))| n.after_message == at)
         {
             let text_w = max_line_width(wrapped);
             if let Some((l, r)) = note_columns(&note.anchor, &layouts, diag, text_w, &lane_widths) {
+                note_start_rows[note_index] = Some(*arrow_row);
                 note_placements.push((l, r, *arrow_row, wrapped.as_str()));
                 draw_note_box(canvas, l, r, *arrow_row, wrapped);
                 *arrow_row += wrapped.lines().count().max(1) + 3;
@@ -1135,7 +1138,22 @@ pub fn render(diag: &SequenceDiagram) -> String {
         } else {
             0
         };
-        let lo = start.saturating_sub(1).max(lifeline_start);
+        // Explicit activation may precede notes at the next message boundary.
+        // Inline activation still begins at its message, after earlier notes.
+        let first_note_row = act.start_note.and_then(|first| {
+            diag.notes
+                .iter()
+                .enumerate()
+                .skip(first)
+                .filter(|(_, note)| note.after_message == act.start_message)
+                .filter_map(|(i, _)| note_start_rows[i])
+                .min()
+        });
+        let lo = first_note_row
+            .unwrap_or(start)
+            .min(start)
+            .saturating_sub(1)
+            .max(lifeline_start);
         let hi = (end + self_tail).min(lifeline_end);
         let col = layouts[pi].center + depths[index] * (ACTIVATION_BAR_WIDTH + 1);
         for row in lo..=hi {

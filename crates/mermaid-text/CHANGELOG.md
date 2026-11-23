@@ -3,6 +3,27 @@
 All notable changes to `mermaid-text` are documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 0.58.0 — 2026-11-05 — Parser safety and activation notes
+
+### Fixed
+
+- Single `/` and `\` flowchart bracket labels no longer panic on overlapping
+  slanted delimiters; they remain literal rectangle labels (#55).
+- Explicit activation bars start before following notes instead of at the next
+  message. Nested lanes remain continuous through multiline/consecutive notes;
+  notes before activation and inline activation timing are preserved (#54).
+
+### Changed
+
+- **Public model change:** `Activation` now includes `start_note: Option<usize>`
+  to retain explicit directive ordering among notes at a message boundary.
+  Callers constructing `Activation` literals should add `start_note: None` to
+  preserve message-based placement, or `Some(n)` for the first note inside the
+  activation. This field addition is released as 0.58.0 for 0.x compatibility.
+
+Reported by @jserv. Regression tests check exact ASTs, edge connectivity,
+bar cells and event ordering in Unicode and ASCII.
+
 ## 0.57.4 — 2026-10-12 — Wide text and relationship geometry
 
 ### Fixed

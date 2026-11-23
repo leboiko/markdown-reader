@@ -193,3 +193,45 @@ fn pipe_rich_label_parses_within_a_linear_time_budget() {
         "64 KiB pipe-rich label took {elapsed:?}; expected a linear scan"
     );
 }
+
+#[test]
+fn single_slash_bracket_labels_remain_literal_rectangles() {
+    for (token, label) in [("A[/]", "/"), (r"A[\]", r"\")] {
+        for header in ["flowchart LR", "graph TD"] {
+            let source = format!("{header}\n{token} --> B[end]");
+            let graph = parser::parse(&source).unwrap();
+            assert_eq!(graph.nodes.len(), 2);
+            let node = graph.node("A").unwrap();
+            assert_eq!(node.label, label);
+            assert_eq!(node.shape, mermaid_text::NodeShape::Rectangle);
+            assert_eq!(graph.edges.len(), 1);
+            assert_eq!((&*graph.edges[0].from, &*graph.edges[0].to), ("A", "B"));
+            for output in [render(&source).unwrap(), render_ascii(&source).unwrap()] {
+                assert_eq!(output.matches(label).count(), 1, "{output}");
+                assert_eq!(output.matches("end").count(), 1, "{output}");
+            }
+        }
+    }
+}
+
+#[test]
+fn nonoverlapping_slanted_delimiters_keep_their_shapes() {
+    use mermaid_text::NodeShape;
+    for (open, close, shape) in [
+        ("[/", "/]", NodeShape::Parallelogram),
+        (r"[\", r"\]", NodeShape::ParallelogramBackslash),
+        ("[/", r"\]", NodeShape::Trapezoid),
+        (r"[\", "/]", NodeShape::TrapezoidInverted),
+    ] {
+        for label in ["", "x", "界"] {
+            let source = format!("flowchart LR\nA{open}{label}{close}");
+            let graph = parser::parse(&source).unwrap();
+            assert_eq!(graph.nodes.len(), 1);
+            let node = graph.node("A").unwrap();
+            assert_eq!(node.shape, shape);
+            assert_eq!(node.label, label);
+            render(&source).unwrap();
+            render_ascii(&source).unwrap();
+        }
+    }
+}
