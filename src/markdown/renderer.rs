@@ -1738,18 +1738,11 @@ mod tests {
             panic!("expected Text block");
         };
         // Three source lines + one trailing blank from TagEnd::Paragraph.
-        let content_lines: Vec<&str> = text
+        let content_lines: Vec<String> = text
             .lines
             .iter()
             .filter(|l| l.spans.iter().any(|s| !s.content.trim().is_empty()))
-            .map(|l| {
-                let s = l
-                    .spans
-                    .iter()
-                    .map(|sp| sp.content.as_ref())
-                    .collect::<String>();
-                Box::leak(s.into_boxed_str()) as &str
-            })
+            .map(|l| l.spans.iter().map(|sp| sp.content.as_ref()).collect())
             .collect();
         assert_eq!(content_lines, vec!["line one", "line two", "line three"]);
         // Each rendered content line should map back to its own source line.

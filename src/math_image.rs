@@ -462,6 +462,17 @@ fn compute_cell_height(img: &DynamicImage, picker: &Picker, max_height: u32) -> 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    #[ignore = "release memory soak"]
+    fn memory_soak_math_raster() {
+        for i in 0..500 {
+            let png = super::render_png(&format!("x^{{{i}}}"), (220, 220, 220)).unwrap();
+            let image = image::load_from_memory(&png).unwrap();
+            assert!(image.width() > 0 && image.height() > 0);
+            assert!(image.to_rgba8().pixels().any(|p| p.0[3] != 0));
+        }
+    }
+
     use super::*;
 
     const FG: (u8, u8, u8) = (0xE2, 0xE8, 0xF0);

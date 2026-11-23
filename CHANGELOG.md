@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.36.0] - 2026-11-23
+
 ### Dependencies
 
 - Merge reviewed Dependabot updates #46, #47, #60, #61, #63, #64, #65 and #67:
@@ -15,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lockfile fixes and require every SVG renderer smoke fixture to succeed. The ascii-dag #62 upgrade remains blocked by layout regressions.
 
 ### Fixed
+
+- Let CLI commands shut down their worker runtime cleanly instead of bypassing
+  destructors with process exit.
+- Release obsolete diagram/formula allocations when replacing, saving or closing
+  documents, and remove stale diagram height metadata. Preserve entries still
+  referenced by other tabs. Add lifecycle regressions and repeatable memory soaks.
 
 - Opening a file from the tree (Enter, `l` or a mouse click) replaces the
   requesting tab. Delayed reads cannot overwrite another tab or supersede a

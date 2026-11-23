@@ -111,6 +111,39 @@ impl App {
         self.tabs.prev();
     }
 
+    /// Keep cached allocations and height hints only while an open tab references them.
+    pub(super) fn prune_render_caches(&mut self) {
+        // Drop cache entries for mermaid blocks that no longer exist in any
+        // open tab. Fresh DocBlock::Mermaid values get new ids from their content
+        // hash, making old cache entries permanently stale.
+        let alive: std::collections::HashSet<crate::markdown::MermaidBlockId> = self
+            .tabs
+            .tabs
+            .iter()
+            .flat_map(|t| t.view.rendered.iter())
+            .filter_map(|b| match b {
+                crate::markdown::DocBlock::Mermaid { id, .. } => Some(*id),
+                _ => None,
+            })
+            .collect();
+        self.mermaid_cache.retain(&alive);
+
+        // Same eviction for math: ids are content hashes, so a formula that
+        // remains referenced unchanged keeps its already-typeset image, and
+        // only genuinely removed formulas drop out of the cache.
+        let alive_math: std::collections::HashSet<crate::markdown::MathBlockId> = self
+            .tabs
+            .tabs
+            .iter()
+            .flat_map(|t| t.view.rendered.iter())
+            .filter_map(|b| match b {
+                crate::markdown::DocBlock::Math { id, .. } => Some(*id),
+                _ => None,
+            })
+            .collect();
+        self.math_cache.retain(&alive_math);
+    }
+
     // ── File opening ──────────────────────────────────────────────────────────
 
     /// Open the selected tree item in the active tab (replacing its content).
@@ -250,6 +283,8 @@ impl App {
             );
         }
 
+        self.prune_render_caches();
+
         // Apply a pending jump-to-source-line if one was registered for this path.
         // `take()` atomically clears the field; we restore it if the path doesn't
         // match so a later load of the correct file still picks it up.
@@ -382,35 +417,7 @@ impl App {
             tab.view.scroll_offset = old_scroll.min(last_line);
         }
 
-        // Drop cache entries for mermaid blocks that no longer exist after the
-        // reload. Fresh DocBlock::Mermaid values get new ids from their content
-        // hash, making old cache entries permanently stale.
-        let alive: std::collections::HashSet<crate::markdown::MermaidBlockId> = self
-            .tabs
-            .tabs
-            .iter()
-            .flat_map(|t| t.view.rendered.iter())
-            .filter_map(|b| match b {
-                crate::markdown::DocBlock::Mermaid { id, .. } => Some(*id),
-                _ => None,
-            })
-            .collect();
-        self.mermaid_cache.retain(&alive);
-
-        // Same eviction for math: ids are content hashes, so a formula that
-        // survived the reload unchanged keeps its already-typeset image, and
-        // only genuinely removed formulas drop out of the cache.
-        let alive_math: std::collections::HashSet<crate::markdown::MathBlockId> = self
-            .tabs
-            .tabs
-            .iter()
-            .flat_map(|t| t.view.rendered.iter())
-            .filter_map(|b| match b {
-                crate::markdown::DocBlock::Math { id, .. } => Some(*id),
-                _ => None,
-            })
-            .collect();
-        self.math_cache.retain(&alive_math);
+        self.prune_render_caches();
 
         // Close any open block-level modal if it was on the reloaded tab —
         // its cached state (table rows, mermaid block_id) is stale once the
@@ -846,6 +853,7 @@ impl App {
             break;
         }
 
+        self.prune_render_caches();
         if should_exit {
             self.exit_hybrid_mode();
         }

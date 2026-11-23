@@ -158,6 +158,7 @@ impl App {
         self.math_cache.clear();
         let palette = self.palette;
         self.tabs.rerender_all(&palette, self.theme, mode);
+        self.prune_render_caches();
         self.persist_config();
     }
 
@@ -392,6 +393,7 @@ impl App {
             KeyCode::Char('x') => {
                 if let Some(id) = self.tabs.active {
                     self.tabs.close(id);
+                    self.prune_render_caches();
                     if self.tabs.is_empty() {
                         self.focus_tree_or_viewer();
                     }

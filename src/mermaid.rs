@@ -391,6 +391,7 @@ impl MermaidCache {
     /// accumulate in the cache indefinitely.
     pub fn retain(&mut self, alive: &std::collections::HashSet<MermaidBlockId>) {
         self.entries.retain(|id, _| alive.contains(id));
+        self.last_known_heights.retain(|id, _| alive.contains(id));
     }
 }
 
@@ -819,6 +820,14 @@ mod tests {
     end
     PG_W --> PG[(PostgreSQL)]
     style PG fill:#336,stroke:#fff,color:#fff";
+
+    #[test]
+    #[ignore = "release memory soak"]
+    fn memory_soak_svg_raster() {
+        for _ in 0..100 {
+            render_four_target_diagrams();
+        }
+    }
 
     #[test]
     fn render_four_target_diagrams() {
