@@ -3269,3 +3269,5 @@ fn replacement_load_failure_keeps_original_and_allows_retry() {
     assert_eq!(tab.view.current_path, Some(second));
     assert_eq!(tab.view.content, "");
 }
+
+mod memory_soak;

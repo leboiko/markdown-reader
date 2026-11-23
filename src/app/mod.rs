@@ -845,6 +845,7 @@ impl App {
         // Math images bake the theme's *foreground* colour into their glyphs,
         // so they are equally theme-dependent and must be re-typeset.
         self.math_cache.clear();
+        self.prune_render_caches();
     }
 
     // ── Event loop ───────────────────────────────────────────────────────────
@@ -1194,6 +1195,7 @@ impl App {
 
                 if let Some(id) = close_hit {
                     self.tabs.close(id);
+                    self.prune_render_caches();
                     if self.tabs.is_empty() {
                         self.focus_tree_or_viewer();
                     }
