@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Refresh `url` and `cookie` lockfile versions to address RUSTSEC-2026-0592
+  and RUSTSEC-2026-0594 found during PR review. Document the maintenance-only
+  chrono advisory exception: its date type is part of the public Gantt API.
+
 ### Added — Gaia Aether theme
 
 Contributed by @ykzird in #49. A ninth built-in palette: Gruvbox warmth (cream `#f2e5bc` text, moss and
