@@ -233,21 +233,22 @@ impl App {
             if let Some(pending) = &tab.pending_path {
                 pending == &path
             } else {
-                tab.view.current_path.as_ref() == Some(&path) && tab.view.content.is_empty()
+                tab.view.current_path.as_ref() == Some(&path)
             }
         }) else {
             return;
         };
-        tab.pending_path = None;
         let target = tab.id;
-        tab.view.load(
-            path.clone(),
-            name,
-            content,
-            &self.palette,
-            self.theme,
-            self.math_mode,
-        );
+        if tab.pending_path.take().is_some() || tab.view.content.is_empty() {
+            tab.view.load(
+                path.clone(),
+                name,
+                content,
+                &self.palette,
+                self.theme,
+                self.math_mode,
+            );
+        }
 
         // Apply a pending jump-to-source-line if one was registered for this path.
         // `take()` atomically clears the field; we restore it if the path doesn't
