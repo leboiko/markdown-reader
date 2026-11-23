@@ -213,7 +213,7 @@ impl App {
         &mut self,
         path: PathBuf,
         content: String,
-        new_tab: bool,
+        _new_tab: bool,
         display_name: Option<String>,
     ) {
         // Use the caller-supplied display name when present (e.g. `<stdin>`);
@@ -227,35 +227,27 @@ impl App {
                 .to_string()
         });
 
-        // Find the placeholder tab that open_or_focus reserved (it has
-        // current_path set but no content yet) and load the file into it.
-        let palette = self.palette;
-        let math_mode = self.math_mode;
-        let theme = self.theme;
-        let loaded = self
-            .tabs
-            .find_tab_by_path_mut(&path)
-            .filter(|t| t.view.content.is_empty())
-            .is_some();
-
-        if loaded {
-            // SAFETY: the `is_some()` guard above guarantees a tab exists.
-            let tab = self
-                .tabs
-                .find_tab_by_path_mut(&path)
-                .expect("tab must exist after is_some() guard");
-            tab.view
-                .load(path.clone(), name, content, &palette, theme, math_mode);
-        } else if !new_tab && let Some(tab) = self.tabs.active_tab_mut() {
-            // `open_or_focus` answered `Replaced` for this load: it hands back
-            // the active tab *without* rewriting its `current_path`, so the
-            // lookup above — which matches on path — misses the tab that is
-            // meant to receive the content, and opening a file from the tree
-            // (Enter or click) would silently do nothing.  For a replacement
-            // the active tab *is* the target.
-            tab.view
-                .load(path.clone(), name, content, &palette, theme, math_mode);
-        }
+        // Route completion to the tab that requested it, never whichever tab
+        // happens to be active now. A newer replacement supersedes an older one.
+        let Some(tab) = self.tabs.tabs.iter_mut().find(|tab| {
+            if let Some(pending) = &tab.pending_path {
+                pending == &path
+            } else {
+                tab.view.current_path.as_ref() == Some(&path) && tab.view.content.is_empty()
+            }
+        }) else {
+            return;
+        };
+        tab.pending_path = None;
+        let target = tab.id;
+        tab.view.load(
+            path.clone(),
+            name,
+            content,
+            &self.palette,
+            self.theme,
+            self.math_mode,
+        );
 
         // Apply a pending jump-to-source-line if one was registered for this path.
         // `take()` atomically clears the field; we restore it if the path doesn't
@@ -281,8 +273,10 @@ impl App {
             }
         }
 
-        self.focus = Focus::Viewer;
-        self.expand_and_select(&path);
+        if self.tabs.active == Some(target) {
+            self.focus = Focus::Viewer;
+            self.expand_and_select(&path);
+        }
     }
 
     /// Open the currently selected tree file in a new or active tab.

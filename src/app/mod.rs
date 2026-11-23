@@ -1108,6 +1108,11 @@ impl App {
                 }
             }
             Action::FileLoadFailed { path } => {
+                for tab in &mut self.tabs.tabs {
+                    if tab.pending_path.as_ref() == Some(&path) {
+                        tab.pending_path = None;
+                    }
+                }
                 // Clear a pending_jump that can never be satisfied because the
                 // file read failed.  Only clear when the path matches so we
                 // don't clobber a pending jump registered for a different file.
