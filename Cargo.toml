@@ -53,4 +53,4 @@ ratex-render = { version = "0.1.14", features = ["embed-fonts"] }
 
 [dev-dependencies]
 insta = "1"
-httpmock = "0.8"
+httpmock = "0.9"
