@@ -1,0 +1,42 @@
+diff --git a/crates/mermaid-text/src/layout/sugiyama.rs b/crates/mermaid-text/src/layout/sugiyama.rs
+index 341f3c8..a44ff63 100644
+--- a/crates/mermaid-text/src/layout/sugiyama.rs
++++ b/crates/mermaid-text/src/layout/sugiyama.rs
+@@ -737,7 +737,16 @@ pub fn sugiyama_layout(graph: &Graph, _config: &LayoutConfig) -> LayoutResult {
+         } else {
+             (our_w, our_h)
+         };
+-        adag.add_node_with_size(aid, &node.id, adag_w, adag_h);
++        adag.add_node(
++            aid,
++            ascii_dag::CustomNode {
++                label: &node.id,
++                width: adag_w,
++                height: adag_h,
++                painter: None,
++                payload: "",
++            },
++        );
+     }
+ 
+     // Register subgraph clusters before edges — ascii-dag's layer-assignment
+@@ -785,8 +794,8 @@ pub fn sugiyama_layout(graph: &Graph, _config: &LayoutConfig) -> LayoutResult {
+     //    `+3` regardless). We pass our config values for
+     //    forward-compat but apply our own spacing in step 4.5 below.
+     let mut cfg = ALayoutConfig::standard();
+-    cfg.level_spacing = _config.layer_gap;
+-    cfg.node_spacing = _config.node_gap;
++    cfg.level_spacing = 3;
++    cfg.node_spacing = 3;
+     // Dummy nodes carry the `level` field used in step 4.5 to compute
+     // per-layer spacing offsets. Real nodes' `level` values are sufficient
+     // for this but enabling dummies gives ascii-dag the full IR it needs
+@@ -806,7 +815,7 @@ pub fn sugiyama_layout(graph: &Graph, _config: &LayoutConfig) -> LayoutResult {
+     for n in ir.nodes() {
+         // Skip dummy nodes — they don't correspond to real graph
+         // nodes and we don't render them.
+-        if matches!(n.kind, ascii_dag::NodeKind::Dummy) {
++        if matches!(n.kind, ascii_dag::ir::NodeKind::Dummy) {
+             continue;
+         }
+         let Some(real_id) = usize_to_id.get(&n.id) else {
